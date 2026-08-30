@@ -1,0 +1,29 @@
+# Environment / secrets
+.env
+
+# Java / Maven
+core-engine/target/
+*.class
+
+# SQLite data files (generated at runtime, not source)
+core-engine/data/
+*.db
+*.db-journal
+
+# Node / frontend (once it exists)
+frontend/node_modules/
+frontend/dist/
+
+# Python (once analytics-service exists)
+analytics-service/.venv/
+analytics-service/__pycache__/
+**/__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store

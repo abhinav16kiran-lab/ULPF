@@ -1,0 +1,6 @@
+# Development Profile Configuration
+logging:
+  level:
+    root: INFO
+    com.ulpf: DEBUG
+    org.springframework.jdbc: DEBUG

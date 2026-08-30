@@ -1,0 +1,11 @@
+spring:
+  profiles:
+    active: dev
+  application:
+    name: core-engine
+  datasource:
+    url: jdbc:sqlite:${SQLITE_DB_PATH:./data/control-plane.db}?foreign_keys=on
+    driver-class-name: org.sqlite.JDBC
+
+server:
+  port: ${CORE_ENGINE_PORT:8080}
