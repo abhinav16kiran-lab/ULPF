@@ -1,4 +1,8 @@
-CREATE TABLE IF NOT EXISTS raw_events
+CREATE DATABASE IF NOT EXISTS ulpf_raw;
+
+CREATE DATABASE IF NOT EXISTS ulpf_events;
+
+CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
 (
     event_id         String,
     vendor_id        String,
@@ -8,4 +12,4 @@ CREATE TABLE IF NOT EXISTS raw_events
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(received_at)
-ORDER BY (vendor_id, received_at, event_id)
+ORDER BY (vendor_id, received_at, event_id);
