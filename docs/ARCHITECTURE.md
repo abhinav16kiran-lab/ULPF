@@ -99,7 +99,7 @@ The data-plane runtime path processes events sent to the single `POST /v1/events
 
 ## 5. Control-Plane Data Model (SQLite)
 
-The control-plane database schema consists of 7 relational tables defined in [infra/sqlite-init/schema.sql](file:///home/abhinav/Desktop/ULPF/infra/sqlite-init/schema.sql):
+The control-plane database schema consists of 7 relational tables defined in [core-engine/sqlite-init/schema.sql](file:///home/abhinav/Desktop/ULPF/core-engine/sqlite-init/schema.sql):
 
 ```text
    +-------------------+

@@ -24,7 +24,7 @@
 - **DataSource Validation**: End-to-end connection and configuration confirmed via temporary `CommandLineRunner` bean (`SELECT 1` = 1, `PRAGMA foreign_keys` = 1).
 
 ## Control-Plane Database (SQLite)
-- **Schema Specification ([schema.sql](file:///home/abhinav/Desktop/ULPF/infra/sqlite-init/schema.sql))**: Created 7 core control-plane tables:
+- **Schema Specification ([schema.sql](file:///home/abhinav/Desktop/ULPF/core-engine/sqlite-init/schema.sql))**: Created 7 core control-plane tables:
   1. `users`
   2. `vendors`
   3. `sources`

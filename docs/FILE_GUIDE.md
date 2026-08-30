@@ -25,7 +25,7 @@ A plain description of every file and folder in the project. No jargon, just wha
 | `ULPF_Dev_Environment_Setup.md` | Step-by-step instructions for installing every tool needed (Java, Node, Python, Podman, etc.) on Linux or Windows. |
 | `ARCHITECTURE.md` | Technical deep-dive: control plane vs data plane, diagrams of both flows, the database's entity relationships, how vendor fields map to canonical fields, the mapping version lifecycle. |
 | `API_SPECIFICATION.md` | Placeholder for documenting each API endpoint in detail (request/response shapes). Empty for now — gets filled in as the endpoints are actually built. |
-| `DATABASE_SCHEMA.md` | Placeholder for a human-readable writeup of the database schema. Empty for now — the real schema lives in `infra/sqlite-init/schema.sql`. |
+| `DATABASE_SCHEMA.md` | Placeholder for a human-readable writeup of the database schema. Empty for now — the real schema lives in `core-engine/sqlite-init/schema.sql`. |
 | `EVERYTHING_DONE_BEFORE_FIRST_PUSH.md` | A snapshot of everything that was built and verified before the first git push — what's working, what's still just planned. |
 
 ---
@@ -35,8 +35,6 @@ A plain description of every file and folder in the project. No jargon, just wha
 | File | What it does |
 |---|---|
 | `compose.yaml` | The Podman Compose file — defines how ClickHouse (and eventually Vector) run as containers, so `podman compose up` starts them with one command. |
-| `sqlite-init/schema.sql` | The actual database schema for the control-plane database — creates all 7 tables (users, vendors, sources, credentials, mapping_versions, onboarding_requests, notifications) with their relationships and rules. |
-| `vector/vector.yaml` | Configuration for Vector, the tool that will sit in front of the log ingestion pipeline to receive, buffer, and route incoming logs. Empty for now — not built yet. |
 
 ---
 
@@ -47,6 +45,7 @@ A plain description of every file and folder in the project. No jargon, just wha
 | `Containerfile` | Instructions for building the core engine into a container image. |
 | `.dockerignore` | Tells the container build to skip files it doesn't need (like `target/`), so the image stays small. |
 | `pom.xml` | The Maven project file — lists every Java library the project depends on (Spring Boot, the SQLite driver, etc.) and how to build it. |
+| `sqlite-init/schema.sql` | The actual database schema for the control-plane database — creates all 7 tables (users, vendors, sources, credentials, mapping_versions, onboarding_requests, notifications) with their relationships and rules. |
 | `src/main/java/com/ulpf/UlpfApplication.java` | The entry point of the whole backend. Running this starts the Spring Boot application. |
 | `src/main/java/com/ulpf/controlplane/model/Role.java` | Defines the three account types a user can have: ADMIN, VENDOR, or USER. |
 | `src/main/java/com/ulpf/controlplane/model/User.java` | Defines what a "user" looks like in code (their ID, username, password hash, role, when they were created) — mirrors the `users` table. |

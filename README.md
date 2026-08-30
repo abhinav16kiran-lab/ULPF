@@ -76,11 +76,7 @@ Below is the current repository layout. Components currently scaffolded as empty
 │
 ├── infra/
 │   ├── compose.yaml                      # Podman Compose service definitions (ClickHouse)
-│   ├── clickhouse-init/                  # ClickHouse initialization scripts (*.sql)
-│   ├── sqlite-init/
-│   │   └── schema.sql                    # Control-plane SQLite database DDL
-│   └── vector/
-│       └── vector.yaml                   # Vector pipeline configuration
+│   └── clickhouse-init/                  # ClickHouse initialization scripts (*.sql)
 │
 ├── docs/
 │   ├── EVERYTHING_DONE_BEFORE_FIRST_PUSH.md
@@ -95,6 +91,8 @@ Below is the current repository layout. Components currently scaffolded as empty
 │   ├── pom.xml                           # Spring Boot Maven POM configuration
 │   ├── data/
 │   │   └── control-plane.db              # SQLite embedded database file
+│   ├── sqlite-init/
+│   │   └── schema.sql                    # Control-plane SQLite database DDL
 │   ├── src/main/java/com/ulpf/
 │   │   ├── UlpfApplication.java
 │   │   ├── common/                       # [Empty package] Common utilities & helpers
@@ -161,7 +159,7 @@ For full cross-platform setup details, see [docs/ULPF_Dev_Environment_Setup.md](
 2. **Initialize SQLite Database**:
    ```bash
    mkdir -p core-engine/data
-   sqlite3 core-engine/data/control-plane.db < infra/sqlite-init/schema.sql
+   sqlite3 core-engine/data/control-plane.db < core-engine/sqlite-init/schema.sql
    ```
 
 3. **Run Core Engine**:
