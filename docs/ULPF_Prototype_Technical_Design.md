@@ -9,7 +9,7 @@ Purpose: define the smallest technically sound architecture needed to demonstrat
 
 The prototype demonstrates the complete flow from **bringing a new vendor into the system to actually ingesting and storing their logs**.
 
-![][image1]
+![On boarding and logging](Onboarding%20and%logging.png)
 
 There are two main flows:
 
