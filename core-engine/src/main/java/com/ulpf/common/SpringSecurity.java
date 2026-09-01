@@ -25,7 +25,7 @@ public class SpringSecurity {
             .cors(Customizer.withDefaults())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/v1/login").permitAll()
+                .requestMatchers("/v1/login", "/v1/signup").permitAll()
                 .anyRequest().authenticated()
             );
 

@@ -1,38 +1,34 @@
 package com.ulpf.controlplane.service;
 
-import java.util.Map;
-import java.util.UUID;
-
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import com.ulpf.common.JwtUtil;
+import com.ulpf.controlplane.model.User;
+import com.ulpf.controlplane.repository.UserRepository;
 
 @Service
 public class AuthService {
 
-    // temporary fake DB — replace with real UserRepository later
-    private static final Map<String, String> fake_db = Map.of(
-        "username", "password",
-        "username2", "password2"
-    );
-
+    private final UserRepository userRepository;
+    private final BCryptPasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
-    AuthService(JwtUtil jwtUtil) {
+    AuthService(UserRepository userRepository, BCryptPasswordEncoder passwordEncoder, JwtUtil jwtUtil) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
         this.jwtUtil = jwtUtil;
     }
 
     public String login(String username, String password) {
-        String storedPassword = fake_db.get(username);
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new BadCredentialsException("invalid credentials"));
 
-        if (storedPassword == null || !storedPassword.equals(password)) {
+        if (!passwordEncoder.matches(password, user.passwordHash())) {
             throw new BadCredentialsException("invalid credentials");
         }
 
-        // fake DB has no real userId, so just generate one per login for now
-        String userId = UUID.randomUUID().toString();
-
-        return jwtUtil.generateToken(userId, username);
+        return jwtUtil.generateToken(user.userId(), user.username());
     }
 }
