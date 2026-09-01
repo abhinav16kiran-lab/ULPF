@@ -4,3 +4,5 @@ logging:
     root: INFO
     com.ulpf: DEBUG
     org.springframework.jdbc: DEBUG
+jwt:
+    secret: ${JWT_SECRET}
