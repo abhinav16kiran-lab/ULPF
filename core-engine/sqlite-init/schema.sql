@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS notifications (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
+-- 8. To store Embedding
+CREATE TABLE IF NOT EXISTS mapping_embeddings (
+    embedding_id    TEXT PRIMARY KEY,
+    canonical_field TEXT NOT NULL,
+    model_name      TEXT NOT NULL,
+    model_version   TEXT NOT NULL,
+    embedding       BLOB NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (canonical_field, model_name, model_version)
+);
+
 -- Index for fast credential key hash lookup on /v1/events ingestion requests
 CREATE INDEX IF NOT EXISTS idx_credentials_key_hash ON credentials(key_hash);
 
