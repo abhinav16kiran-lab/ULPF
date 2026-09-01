@@ -4,8 +4,8 @@ CREATE DATABASE IF NOT EXISTS ulpf_events;
 
 CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
 (
-    event_id         String,
-    linega_id       STRING,
+    event_id         STRING,
+    lineage_id       STRING,
     vendor_id        String,
     source_id       STRING,
     mapping_version  Nullable(UInt32),

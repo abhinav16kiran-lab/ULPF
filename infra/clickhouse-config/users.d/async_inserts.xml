@@ -1,0 +1,18 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- Enable asynchronous inserts: batches small insert statements in memory before flushing -->
+            <async_insert>1</async_insert>
+
+            <!-- 1 = caller waits for batch flush to disk before returning 200 OK (ensures data durability and error reporting); 
+                 0 = caller receives immediate 200 OK while batch flushes asynchronously in background -->
+            <wait_for_async_insert>1</wait_for_async_insert>
+
+            <!-- Maximum byte size of data to accumulate in memory before flushing a batch to disk (1 MB) -->
+            <async_insert_max_data_size>1048576</async_insert_max_data_size>
+
+            <!-- Maximum time in milliseconds to wait before flushing an active batch to disk -->
+            <async_insert_busy_timeout_ms>200</async_insert_busy_timeout_ms>
+        </default>
+    </profiles>
+</clickhouse>
