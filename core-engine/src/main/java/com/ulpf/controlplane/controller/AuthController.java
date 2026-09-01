@@ -43,6 +43,21 @@ public class AuthController {
         }
     }
 
+    @PostMapping("/signup")
+    public ResponseEntity<?> signUp(@RequestBody SignUpRequest request) {
+        if (request.username() == null || request.password() == null
+                || request.username().isBlank() || request.password().isBlank()) {
+            return new ResponseEntity<>("Username and password must not be empty", HttpStatus.BAD_REQUEST);
+        }
+
+        try {
+            authService.signUp(request.username(), request.password());
+            return ResponseEntity.ok("User registered successfully");
+        } catch (IllegalArgumentException e) {
+            return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);
+        }
+    }
+
     @GetMapping("/test")
     public String getMethodName() {
         return new String("Hello, this is a test endpoint to verify that the authentication is working correctly.");
@@ -51,3 +66,4 @@ public class AuthController {
 }
 
 record LoginRequest(String username, String password) {}
+record SignUpRequest(String username, String password) {}
