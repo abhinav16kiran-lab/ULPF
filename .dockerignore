@@ -1,0 +1,19 @@
+# Build artifacts
+**/target/
+**/dist/
+**/node_modules/
+
+# Local databases & runtime data
+**/data/
+*.db
+*.db-journal
+
+# Git & IDEs
+.git/
+.idea/
+.vscode/
+*.iml
+
+# OS & Environment secrets
+.env
+.DS_Store
