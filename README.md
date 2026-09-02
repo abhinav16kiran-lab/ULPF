@@ -2,7 +2,7 @@
 
 Universal Log Framework (ULPF) is a plug-and-play log ingestion platform designed to eliminate manual schema integration friction for multi-vendor environments. Vendors register and submit sample log payloads, after which an AI mapping engine analyzes the data to propose semantic mappings into a canonical log schema. A human administrator reviews, edits, and approves the proposal before an ingestion API key is granted. Once onboarded, vendors send logs through a single runtime endpoint where incoming raw logs are preserved losslessly, normalized against the active mapping version, and stored in high-performance analytical storage.
 
-For detailed system design and architectural specifications, see [docs/ARCHITECTURE.md](file:///home/abhinav/Desktop/ULPF/docs/ARCHITECTURE.md) and [docs/ULPF_Prototype_Technical_Design.md](file:///home/abhinav/Desktop/ULPF/docs/ULPF_Prototype_Technical_Design.md).
+For detailed system design and architectural specifications, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/PROTOTYPE_TECHNICAL_DESIGN.md](docs/PROTOTYPE_TECHNICAL_DESIGN.md).
 
 ---
 
@@ -35,11 +35,9 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 | **Core Engine** | Java 21 LTS + Spring Boot 4.1.0 (Maven 3.9.x) |
 | **Control-Plane DB** | SQLite (via `sqlite-jdbc` 3.49.1.0) |
 | **Event Storage** | ClickHouse 26.3 LTS (Podman container) |
-| **Ingestion / Buffer** | Vector 0.55.0 |
-| **AI Mapping Engine** | `llama.cpp` HTTP sidecar + Qwen2.5-3B-Instruct / Phi-3.5-mini GGUF |
-| **Analytics Service** | Python 3.13 + FastAPI (`uv`, `clickhouse-connect`) |
-| **Frontend** | React 19 + Node.js 24 LTS |
-| **Containerization** | Podman |
+| **AI Mapping Engine** | Deterministic Matcher + Local Embedding Model (`all-MiniLM-L6-v2`) |
+| **Frontend** | React + Node.js |
+| **Containerization** | Podman / Podman-Compose |
 
 ---
 
@@ -64,109 +62,91 @@ ULPF uses a strict separation between the **Control Plane** (infrequent manageme
 
 ## Project Structure
 
-Below is the current repository layout. Components currently scaffolded as empty directory structures or initial placeholders are marked accordingly.
-
 ```text
 .
 ├── .env.example
 ├── .gitignore
 ├── .gitattributes
 ├── README.md
-├── ARCHITECTURE.md (in docs/)
+├── compose.yaml                          # Root Podman/Docker Compose orchestrator (clickhouse + core-engine)
 │
-├── infra/
-│   ├── compose.yaml                      # Podman Compose service definitions (ClickHouse)
-│   └── clickhouse-init/                  # ClickHouse initialization scripts (*.sql)
+├── infra/                                # Infrastructure & ClickHouse container files
+│   ├── Containerfile                     # Standalone ClickHouse container builder
+│   ├── clickhouse-init/
+│   │   └── 01_raw_events.sql             # ClickHouse DB & raw_events table DDL
+│   └── clickhouse-config/
+│       └── users.d/
+│           └── async_inserts.xml         # Async inserts & memory batching configuration
 │
-├── docs/
-│   ├── EVERYTHING_DONE_BEFORE_FIRST_PUSH.md
-│   ├── ULPF_Dev_Environment_Setup.md
-│   ├── ULPF_Prototype_Technical_Design.md
+├── docs/                                 # Project documentation & guides
+│   ├── Your_first/
+│   │   ├── FILE_GUIDE.md                 # Detailed file & folder guide
+│   │   ├── TEAMMATE_ONBOARDING.md        # Teammate onboarding guide
+│   │   └── ULPF_Dev_Environment_Setup.md # Dev environment setup
 │   ├── API_SPECIFICATION.md
-│   └── DATABASE_SCHEMA.md
+│   ├── ARCHITECTURE.md
+│   ├── DATABASE_SCHEMA.md
+│   ├── EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md
+│   └── PROTOTYPE_TECHNICAL_DESIGN.md
 │
 ├── core-engine/                          # Java 21 + Spring Boot 4.1.0 Backend
-│   ├── Containerfile
+│   ├── Containerfile                     # Multi-stage container build file (Maven builder + JRE 21)
 │   ├── .dockerignore
 │   ├── pom.xml                           # Spring Boot Maven POM configuration
-│   ├── data/
-│   │   └── control-plane.db              # SQLite embedded database file
-│   ├── sqlite-init/
-│   │   └── schema.sql                    # Control-plane SQLite database DDL
-│   ├── src/main/java/com/ulpf/
-│   │   ├── UlpfApplication.java
-│   │   ├── common/                       # [Empty package] Common utilities & helpers
-│   │   ├── controlplane/
-│   │   │   ├── controller/               # [Empty package] Control API controllers
-│   │   │   ├── service/                  # [Empty package] Control-plane services
-│   │   │   ├── repository/
-│   │   │   │   └── UserRepository.java   # User data access object
-│   │   │   └── model/
-│   │   │       ├── Role.java             # User role enum (ADMIN, VENDOR, USER)
-│   │   │       └── User.java             # User domain record
-│   │   └── dataplane/
-│   │       ├── controller/               # [Empty package] Runtime ingestion controller
-│   │       ├── service/                  # [Empty package] Log processing & normalization
-│   │       └── model/                    # [Empty package] Event models
-│   └── src/main/resources/
-│       ├── application.yaml              # Core engine configuration
-│       └── application-dev.yaml          # Development profile settings
+│   └── src/main/
+│       ├── java/com/ulpf/
+│       │   ├── UlpfApplication.java      # Main application entrypoint
+│       │   ├── common/                   # Spring Security & JWT auth infrastructure
+│       │   │   ├── JwtUtil.java
+│       │   │   ├── JwtFilter.java
+│       │   │   ├── SpringSecurity.java
+│       │   │   └── UlpfPrincipal.java
+│       │   ├── controlplane/             # Control-plane models, repositories, & controllers
+│       │   ├── dataplane/                # Data-plane ingestion & mapping services
+│       │   ├── mapping/                  # Mapping engine logic
+│       │   └── analytics/                # Analytics query engine
+│       └── resources/
+│           ├── sqlite/
+│           │   └── schema.sql            # Consolidated SQLite control-plane DDL
+│           ├── application.yaml          # Base application configuration
+│           └── application-dev.yaml      # Development profile settings
 │
-├── analytics-service/                    # Python 3.13 + FastAPI Analytics [Not built out]
-│   ├── Containerfile
-│   ├── .dockerignore
-│   ├── pyproject.toml
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── api/
-│   │   ├── clickhouse/
-│   │   ├── config/
-│   │   └── patterns/
-│   └── tests/
+├── dev-tools/                            # Development and seeder utilities
+│   ├── analytics_demo.py
+│   ├── ml_demo.py
+│   └── seed_control_plane.py
 │
-├── frontend/                             # React 19 + Vite Web Application [Not built out]
-│   ├── Containerfile
-│   ├── .dockerignore
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── public/
-│   └── src/
-│       ├── admin/
-│       ├── components/
-│       ├── dashboard/
-│       ├── onboarding/
-│       └── services/
-│
-└── scripts/
-    ├── init_clickhouse.sh                # ClickHouse setup helper script
-    └── seed_control_plane.py             # Control-plane database seeder script
+└── frontend/                             # React Web Application
+    ├── Containerfile
+    ├── package.json
+    └── vite.config.js
 ```
 
 ---
 
 ## Setup / Getting Started
 
-For full cross-platform setup details, see [docs/ULPF_Dev_Environment_Setup.md](file:///home/abhinav/Desktop/ULPF/docs/ULPF_Dev_Environment_Setup.md).
+For full cross-platform setup details, see [docs/Your_first/ULPF_Dev_Environment_Setup.md](docs/Your_first/ULPF_Dev_Environment_Setup.md).
 
-### Quick Start (Linux / WSL2)
+### Quick Start (Podman / Docker)
 
-1. **Start ClickHouse via Podman**:
+1. **Spin up complete environment (ClickHouse + Core Engine)**:
    ```bash
-   podman compose up -d clickhouse
-   curl http://localhost:8123/ping # Should output "Ok."
+   podman-compose up --build
+   ```
+   *(Or `podman compose up --build` / `docker compose up --build`)*
+
+2. **Run ClickHouse only**:
+   ```bash
+   podman-compose up clickhouse
    ```
 
-2. **Initialize SQLite Database**:
-   ```bash
-   mkdir -p core-engine/data
-   sqlite3 core-engine/data/control-plane.db < core-engine/sqlite-init/schema.sql
-   ```
-
-3. **Run Core Engine**:
+3. **Run Spring Boot Core Engine locally (Development Mode)**:
    ```bash
    cd core-engine
    mvn spring-boot:run
    ```
+   *Note: Spring Boot automatically initializes the SQLite schema on startup from `classpath:sqlite/schema.sql`.*
 
 ---
 
@@ -174,12 +154,11 @@ For full cross-platform setup details, see [docs/ULPF_Dev_Environment_Setup.md](
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/login` | Authenticate user and issue session token | Planned |
+| `POST` | `/v1/login` | Authenticate user and issue JWT token | Implemented |
+| `POST` | `/v1/signup` | Register new user account | Planned |
 | `POST` | `/v1/onboard` | Submit new vendor/source onboarding request with sample payload | Planned |
 | `GET` | `/v1/notifications` | Retrieve user notifications and onboarding request status | Planned |
 | `POST` | `/v1/events` | Runtime log ingestion endpoint for onboarded sources | Planned |
-
-*Note: Data access layers are currently being built out. Controllers for the above endpoints will be added in upcoming modules.*
 
 ---
 
@@ -189,10 +168,8 @@ For full cross-platform setup details, see [docs/ULPF_Dev_Environment_Setup.md](
    ```bash
    systemctl --user enable --now podman.socket
    ```
-2. **Podman Compose Environment Loading**: `podman-compose` must be executed from the repository root directory where `.env` resides so container configuration variables resolve.
-3. **Windows Maven JAVA_HOME Detection**: On Windows, Maven may fail to auto-detect JDK 21 unless `JAVA_HOME` is explicitly set in environment variables pointing to JDK 21.
-4. **SQLite CLI vs JDBC Driver**: Installing the `sqlite-jdbc` Maven dependency does not install the native `sqlite3` command-line utility. The `sqlite3` package must be installed separately via system package managers if manual CLI queries are needed.
-5. **SQLite Foreign Keys Enforcement**: SQLite disables foreign key enforcement by default on new connections. The JDBC URL must explicitly include `?foreign_keys=on` (e.g., `jdbc:sqlite:./data/control-plane.db?foreign_keys=on`) to enforce schema foreign key constraints.
+2. **Podman Search Registries**: Specify full container image domains (e.g. `docker.io/clickhouse/clickhouse-server:26.3`) when building with Podman.
+3. **SQLite Foreign Keys Enforcement**: SQLite disables foreign key enforcement by default on new connections. The JDBC URL includes `?foreign_keys=on` (e.g., `jdbc:sqlite:./data/control-plane.db?foreign_keys=on`) to enforce schema foreign key constraints.
 
 ---
 
