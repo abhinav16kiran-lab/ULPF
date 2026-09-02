@@ -27,6 +27,6 @@ public class NotificationService {
     ));
 
     public List<Notification> getNotifications(String username) {
-        return fake_notifications.getOrDefault(username, List.of());
+        return fake_notifications.getOrDefault(username, List.of());//empty list if no notifications for the user
     }
 }

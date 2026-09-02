@@ -6,3 +6,8 @@ logging:
     org.springframework.jdbc: DEBUG
 jwt:
     secret: ${JWT_SECRET}
+spring:
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB

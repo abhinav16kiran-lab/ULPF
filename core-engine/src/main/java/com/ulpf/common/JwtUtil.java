@@ -32,7 +32,7 @@ public class JwtUtil {
                 .claims(claims)
                 .subject(username)
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 )) // 1 minute expiration for testing purposes
+                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 )) // 1 hour expiration for testing purposes
                 .signWith(getSigningKey())
                 .compact();
     }
