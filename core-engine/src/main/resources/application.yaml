@@ -6,6 +6,12 @@ spring:
   datasource:
     url: jdbc:sqlite:${SQLITE_DB_PATH:./data/control-plane.db}?foreign_keys=on
     driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sqlite/schema.sql
 
 server:
   port: ${CORE_ENGINE_PORT:8080}
+
+

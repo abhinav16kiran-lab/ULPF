@@ -1,0 +1,9 @@
+FROM docker.io/clickhouse/clickhouse-server:26.3
+
+# Copy SQL database initialization scripts (executed on first database container boot)
+COPY clickhouse-init/01_raw_events.sql /docker-entrypoint-initdb.d/
+
+# Copy custom ClickHouse server user settings (enables async inserts & batching)
+COPY clickhouse-config/users.d/async_inserts.xml /etc/clickhouse-server/users.d/
+
+EXPOSE 8123 9000

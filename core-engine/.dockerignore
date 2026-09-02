@@ -1,0 +1,7 @@
+target/
+data/
+*.db
+*.db-journal
+.git/
+.idea/
+*.iml

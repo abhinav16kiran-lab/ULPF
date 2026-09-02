@@ -1,0 +1,46 @@
+services:
+  clickhouse:
+    build:
+      context: ./infra
+      dockerfile: Containerfile
+    container_name: ulpf-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ulpf_raw}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ulpf-net
+
+  core-engine:
+    build:
+      context: ./core-engine
+      dockerfile: Containerfile
+    container_name: ulpf-core-engine
+    ports:
+      - "8080:8080"
+    environment:
+      - SQLITE_DB_PATH=/app/data/control-plane.db
+      - CLICKHOUSE_URL=http://clickhouse:8123
+    volumes:
+      - sqlite-data:/app/data
+    depends_on:
+      - clickhouse
+    networks:
+      - ulpf-net
+
+volumes:
+  clickhouse-data:
+  sqlite-data:
+
+networks:
+  ulpf-net:
+    driver: bridge

@@ -8,6 +8,7 @@ The guide describes the current repository structure. Empty folders are planned 
 
 ```text
 ULPF/
+├── compose.yaml
 ├── core-engine/
 ├── dev-tools/
 ├── docs/
@@ -19,11 +20,14 @@ ULPF/
 | File / Folder | Purpose |
 |---|---|
 | `README.md` | Main project entry point. Contains the project overview, setup/use information, and important project references. |
-| `core-engine/` | Main Java + Spring Boot backend containing the control plane, data plane, mapping, analytics, database initialization, and application configuration. |
-| `frontend/` | React frontend that communicates with ULPF through the backend APIs. |
-| `infra/` | Infrastructure configuration, including ClickHouse initialization and container configuration. |
+| `compose.yaml` | Master Docker/Podman Compose orchestration file. Configures `clickhouse` and `core-engine` services, bridge network `ulpf-net`, and persistent volumes. |
+| `core-engine/` | Main Java + Spring Boot backend containing the control plane, data plane, mapping, analytics, and application configuration. |
+| `frontend/` | React frontend that communicates with ULPF through backend APIs. |
+| `infra/` | Infrastructure configuration, including ClickHouse container setup, init scripts, and performance settings. |
 | `dev-tools/` | Development and demonstration utilities. These are not production application services. |
 | `docs/` | Project documentation, diagrams, setup instructions, technical design, API specification, database schema, and prototype checklist. |
+
+---
 
 ## 2. `core-engine/`
 
@@ -31,20 +35,20 @@ The main ULPF backend application.
 
 ```text
 core-engine/
-├── sqlite-init/
 ├── src/
+├── .dockerignore
 ├── Containerfile
 └── pom.xml
 ```
 
 | File / Folder | Purpose |
 |---|---|
-| `Containerfile` | Defines how the Spring Boot backend is packaged into a container image. |
+| `Containerfile` | Multi-stage Docker/Podman build file (Maven builder + OpenJDK 21 JRE runtime) for packaging the backend into a container image. |
+| `.dockerignore` | Build context rules excluding target binaries and local SQLite database files from container builds. |
 | `pom.xml` | Maven project configuration, including dependencies and build configuration. |
-| `sqlite-init/schema.sql` | SQLite control-plane schema, including tables, keys, constraints, and indexes. |
-| `src/` | Java source code and Spring Boot configuration. |
+| `src/` | Java source code, Spring Boot configuration, and SQLite schema DDL (`src/main/resources/sqlite/schema.sql`). |
 
-### `core-engine/sqlite-init/schema.sql`
+### `core-engine/src/main/resources/sqlite/schema.sql`
 
 Contains the ULPF-owned SQLite control-plane schema:
 
@@ -61,6 +65,8 @@ notifications
 
 SQLite stores control-plane information such as users, vendors, sources, credentials, mapping versions, mapping embeddings, onboarding requests, and notifications.
 
+---
+
 ## 3. `core-engine/src/main/java/com/ulpf/`
 
 The main Java package for ULPF.
@@ -73,6 +79,10 @@ com/ulpf/
 │   ├── repository/
 │   └── service/
 ├── common/
+│   ├── JwtFilter.java
+│   ├── JwtUtil.java
+│   ├── SpringSecurity.java
+│   └── UlpfPrincipal.java
 ├── controlplane/
 │   ├── controller/
 │   ├── model/
@@ -90,15 +100,16 @@ com/ulpf/
 ```
 
 ### `UlpfApplication.java`
-
 Main Spring Boot application entry point.
 
 ### `common/`
-
-Shared backend functionality used by more than one module, such as common utilities, exceptions, validation, or other cross-cutting functionality as implementation requires.
+Security and authentication infrastructure using Spring Security & JWT:
+- `JwtUtil.java` — JWT generation, parsing, claim extraction, and validation.
+- `JwtFilter.java` — HTTP filter intercepting `Bearer` tokens and building Spring Security context.
+- `SpringSecurity.java` — Security filter chain configuration, stateless session policies, and endpoint authorization rules.
+- `UlpfPrincipal.java` — Java record data holder representing the authenticated user principal (`id`, `username`).
 
 ### `controlplane/`
-
 Control-plane functionality for users, vendors, sources, credentials, onboarding, mapping versions, mapping embeddings, notifications, and related metadata/configuration.
 
 - `controller/` — HTTP/API controllers for control-plane operations.
@@ -110,94 +121,26 @@ Control-plane functionality for users, vendors, sources, credentials, onboarding
 - `service/` — Control-plane business logic.
 
 ### `dataplane/`
-
 Runtime event ingestion and processing.
-
-The core flow is:
-
-```text
-POST /v1/events
-        ↓
-Spring Boot
-        ↓
-Generate event_id
-        ↓
-Preserve raw event
-        ↓
-ClickHouse raw_events
-        ↓
-Parse / map / normalize
-        ↓
-Canonical event
-        ↓
-ClickHouse normalized event table
-```
 
 - `controller/` — Runtime data-plane HTTP endpoints, including event ingestion.
 - `model/` — Data structures for incoming, raw, and normalized events.
 - `service/` — Event processing, mapping-version resolution, normalization, lineage, sensor handling, and persistence logic as implemented.
 
 ### `mapping/`
-
 Mapping-engine functionality inside the Spring Boot application. It is not a separate microservice.
 
-The current conceptual flow is:
-
-```text
-Incoming field
-      ↓
-Normalize name
-      ↓
-Tokenize
-      ↓
-Alias / custom dictionary lookup
-      ↓
-TF-IDF similarity
-      ↓
-Candidate ranking
-      ↓
-Confidence
-      ↓
-Threshold
-      ↓
-Mapping / unknown-field proposal
-      ↓
-Optional local MiniLM fallback
-      ↓
-Human approval
-```
-
-The mapping engine produces proposals. Human approval remains compulsory for onboarding/schema proposals, and AI does not directly activate production schema changes.
-
 ### `analytics/`
+Analytics functionality inside the Spring Boot application.
 
-Analytics functionality inside the same Spring Boot application rather than a separate analytics microservice.
-
-The current flow is:
-
-```text
-React UI
-    ↓
-Spring Boot
-    ↓
-authorization / validation
-    ↓
-read-only ClickHouse query
-    ↓
-results
-    ↓
-React UI
-```
-
-- `controller/` — Analytics HTTP endpoints such as `GET /v1/analytics`.
-- `model/` — Analytics request/response and result models as implementation develops.
-- `repository/` — ClickHouse access for analytics queries.
-- `service/` — Analytics validation, authorization-related checks, query handling, and result processing.
+---
 
 ## 4. `core-engine/src/main/resources/`
 
 ```text
 resources/
+├── sqlite/
+│   └── schema.sql
 ├── application-dev.yaml
 ├── application-prod.yaml
 └── application.yaml
@@ -205,11 +148,12 @@ resources/
 
 | File | Purpose |
 |---|---|
-| `application.yaml` | Base Spring Boot configuration. |
-| `application-dev.yaml` | Development-specific configuration. |
+| `sqlite/schema.sql` | Consolidated SQLite schema script auto-initialized by Spring Boot on startup (`spring.sql.init.schema-locations=classpath:sqlite/schema.sql`). |
+| `application.yaml` | Base Spring Boot configuration (datasource, port, auto-initialization settings). |
+| `application-dev.yaml` | Development-specific logging options. |
 | `application-prod.yaml` | Production-specific configuration. |
 
-Sensitive credentials should not be hard-coded into configuration files.
+---
 
 ## 5. `frontend/`
 
@@ -222,42 +166,30 @@ frontend/
 
 React frontend.
 
-- `Containerfile` — Builds the frontend container image.
-- `package.json` — Frontend dependencies, scripts, and metadata.
-- `vite.config.js` — Vite configuration.
-
-As implementation progresses, source code can be added under `frontend/src/` and organized into areas such as onboarding, admin, dashboard, components, and API services.
-
-The frontend should communicate with Spring Boot rather than directly accessing SQLite or ClickHouse.
+---
 
 ## 6. `infra/`
 
 ```text
 infra/
+├── clickhouse-config/
+│   └── users.d/
+│       └── async_inserts.xml
 ├── clickhouse-init/
 │   └── 01_raw_events.sql
-└── compose.yaml
+└── Containerfile
 ```
 
-### `compose.yaml`
+### `Containerfile`
+Standalone Docker/Podman build file for packaging the ClickHouse container image (derived from `docker.io/clickhouse/clickhouse-server:26.3`) bundled with initialization scripts and user configuration.
 
-Defines the containerized infrastructure used by the project.
-
-Persistent volumes are used for database persistence so recreating a container does not automatically destroy stored database data.
+### `clickhouse-config/users.d/async_inserts.xml`
+Custom ClickHouse user profile settings enabling asynchronous inserts and memory batching (`async_insert=1`, `wait_for_async_insert=1`, `async_insert_busy_timeout_ms=200`).
 
 ### `clickhouse-init/01_raw_events.sql`
+Initializes ULPF ClickHouse databases (`ulpf_raw` and `ulpf_events`) and table `ulpf_raw.raw_events` for a fresh ClickHouse installation.
 
-Initializes the ULPF-owned ClickHouse structure for a fresh ClickHouse data directory:
-
-```text
-ClickHouse
-├── ulpf_raw
-│   └── raw_events
-└── ulpf_events
-    └── initially empty
-```
-
-`ulpf_raw.raw_events` is the predefined raw-event table. Runtime canonical event tables are created or changed after vendor onboarding and required human approval; they are not predicted and pre-created in this initialization directory.
+---
 
 ## 7. `dev-tools/`
 
@@ -268,15 +200,9 @@ dev-tools/
 └── seed_control_plane.py
 ```
 
-These are development/demo utilities, not production ULPF services.
+Development/demo utilities.
 
-| File | Purpose |
-|---|---|
-| `analytics_demo.py` | Experiment with or demonstrate analytics/data-analysis operations against ClickHouse. |
-| `ml_demo.py` | Experiment with or demonstrate machine-learning/data-science functionality. |
-| `seed_control_plane.py` | Insert starter/test control-plane data for development. |
-
-Python therefore remains available for development and demonstrations without making Python a required production analytics service.
+---
 
 ## 8. `docs/`
 
@@ -285,7 +211,7 @@ Contains project documentation and diagrams.
 ```text
 docs/
 ├── Images/
-├── Your first ??/
+├── Your_first/
 ├── ANYTHING_I_AM_MISSING.md
 ├── API_SPECIFICATION.md
 ├── ARCHITECTURE.md
@@ -294,63 +220,11 @@ docs/
 └── PROTOTYPE_TECHNICAL_DESIGN.md
 ```
 
-### `docs/Images/`
+- `Your_first/FILE_GUIDE.md` — This file; explains the repository structure.
+- `Your_first/TEAMMATE_ONBOARDING.md` — Information for new team members joining the project.
+- `Your_first/ULPF_Dev_Environment_Setup.md` — Development environment setup instructions.
 
-| File | Purpose |
-|---|---|
-| `Control pannel.png` | Control-plane/control-panel flow visualization. |
-| `dataIngestionAndProcessing.png` | Event ingestion and processing flow. |
-| `mapping engine fi.png` | Mapping-engine flow. |
-| `Onboarding and logging.png` | Onboarding and logging workflow. |
-| `versionLife.png` | Mapping/version lifecycle visualization. |
-
-### `docs/Your first ??/`
-
-Contains:
-
-```text
-FILE_GUIDE.md
-TEAMMATE_ONBOARDING.md
-ULPF_Dev_Environment_Setup.md
-```
-
-- `FILE_GUIDE.md` — This file; explains the repository structure.
-- `TEAMMATE_ONBOARDING.md` — Information for new team members joining the project.
-- `ULPF_Dev_Environment_Setup.md` — Development environment setup instructions.
-
-The folder name `Your first ??` is retained because it is the current repository structure. It can be renamed later if the team chooses a clearer name.
-
-### `docs/API_SPECIFICATION.md`
-
-Source of truth for ULPF API contracts. Current core endpoints include:
-
-```text
-POST /v1/events
-POST /v1/onboard
-POST /v1/login
-GET  /v1/notifications
-GET  /v1/analytics
-```
-
-### `docs/ARCHITECTURE.md`
-
-Detailed architecture and component responsibilities, including control plane, data plane, mapping, schema management, lineage, analytics, persistence, and deployment.
-
-### `docs/DATABASE_SCHEMA.md`
-
-Documents the SQLite control-plane schema and ClickHouse data-plane schema, including the predefined raw-events structure and runtime-created canonical event tables.
-
-### `docs/EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md`
-
-Working checklist of implementation, integration, testing, deployment, documentation, and demo work required before prototype submission.
-
-### `docs/PROTOTYPE_TECHNICAL_DESIGN.md`
-
-Broader technical design baseline for the SIH prototype.
-
-### `docs/ANYTHING_I_AM_MISSING.md`
-
-Living list of unresolved gaps and open decisions. Items should be explicitly marked rather than silently assumed to be decided.
+---
 
 ## 9. High-Level Backend Architecture
 
@@ -361,13 +235,17 @@ com/ulpf/
 │
 ├── analytics/
 ├── common/
+│   ├── JwtFilter.java
+│   ├── JwtUtil.java
+│   ├── SpringSecurity.java
+│   └── UlpfPrincipal.java
 ├── controlplane/
 ├── dataplane/
 ├── mapping/
 └── UlpfApplication.java
 ```
 
-The high-level runtime architecture is:
+Runtime architecture:
 
 ```text
                          React
@@ -388,28 +266,9 @@ The high-level runtime architecture is:
            Control Plane          Data Plane
 ```
 
-The project intentionally keeps these responsibilities inside one backend application rather than creating a separate microservice for every function.
+---
 
-## 10. Production vs Development
-
-Production application:
-
-```text
-React + Spring Boot + SQLite + ClickHouse
-```
-
-Development/demo tooling:
-
-```text
-dev-tools/
-├── analytics_demo.py
-└── ml_demo.py
-```
-
-Python demo tooling does not imply that Python must be deployed in the production ULPF runtime.
-
-## 11. Important Rule for This Guide
+## 10. Important Rule for This Guide
 
 This document should describe the repository **as it actually exists**.
-
-When new files or packages are created, update this guide so teammates can understand their purpose. Do not document classes, files, services, or subpackages that have not actually been created yet.
+When new files or packages are created, update this guide so teammates can understand their purpose.

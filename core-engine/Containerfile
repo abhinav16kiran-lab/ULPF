@@ -1,0 +1,31 @@
+# Stage 1: Build stage with Maven and OpenJDK 21
+FROM docker.io/maven:3.9.9-eclipse-temurin-21-alpine AS builder
+
+WORKDIR /build
+
+# Copy Maven POM and pre-fetch dependencies for layer caching
+COPY pom.xml .
+RUN mvn dependency:go-offline -B || true
+
+# Copy application source and resources
+COPY src ./src
+
+# Package application JAR without running unit tests during container image build
+RUN mvn clean package -DskipTests
+
+# Stage 2: Runtime stage with lightweight OpenJDK 21 JRE
+FROM docker.io/eclipse-temurin:21-jre-alpine
+
+WORKDIR /app
+
+# Create volume directory for persistent SQLite database storage
+RUN mkdir -p /app/data
+
+# Copy built Spring Boot fat JAR from builder stage
+COPY --from=builder /build/target/core-engine-0.0.1-SNAPSHOT.jar /app/app.jar
+
+EXPOSE 8080
+
+ENV SQLITE_DB_PATH=/app/data/control-plane.db
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
