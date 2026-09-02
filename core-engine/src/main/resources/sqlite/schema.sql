@@ -94,3 +94,13 @@ CREATE INDEX IF NOT EXISTS idx_credentials_key_hash ON credentials(key_hash);
 
 -- Index for fast active mapping resolution per log source
 CREATE INDEX IF NOT EXISTS idx_mapping_versions_source_status ON mapping_versions(source_id, status);
+
+-- 9. Mapping Aliases table: Dictionary of known field aliases for Layer 1 lookup
+-- Note: This is a proposal not yet merged into docs/DATABASE_SCHEMA.md - needs team sign-off
+CREATE TABLE IF NOT EXISTS mapping_aliases (
+    alias_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_field TEXT NOT NULL,
+    alias_key       TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'seed',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);

@@ -1,0 +1,42 @@
+[
+  {
+    "text": "src_ip",
+    "canonicalField": "src_ip"
+  },
+  {
+    "text": "source_ip",
+    "canonicalField": "src_ip"
+  },
+  {
+    "text": "SrcAddress",
+    "canonicalField": "src_ip"
+  },
+  {
+    "text": "client_addr",
+    "canonicalField": "src_ip"
+  },
+  {
+    "text": "originIP",
+    "canonicalField": "src_ip"
+  },
+  {
+    "text": "dest_ip",
+    "canonicalField": "dest_ip"
+  },
+  {
+    "text": "destination_ip",
+    "canonicalField": "dest_ip"
+  },
+  {
+    "text": "DestAddress",
+    "canonicalField": "dest_ip"
+  },
+  {
+    "text": "target_ip",
+    "canonicalField": "dest_ip"
+  },
+  {
+    "text": "request_url",
+    "canonicalField": "url"
+  }
+]

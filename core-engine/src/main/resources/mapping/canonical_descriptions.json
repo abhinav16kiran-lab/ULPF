@@ -1,0 +1,8 @@
+{
+  "src_ip": "The originating internet protocol address, client IP, sender network endpoint, or source node identifier.",
+  "dest_ip": "The destination internet protocol address, target IP, receiving network endpoint, or destination node identifier.",
+  "url": "The uniform resource locator, web address, or HTTP/HTTPS request path.",
+  "timestamp": "The date and time when the event occurred, event time, or log entry creation time.",
+  "user_id": "The user identifier, username, account name, or authenticated user.",
+  "event_type": "The type of event, action category, log level, or event classification."
+}
