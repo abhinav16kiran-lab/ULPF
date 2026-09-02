@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests k=3 neighbor search and score ordering using placeholder dataset.
  */
 @SpringBootTest
+@org.springframework.test.context.ActiveProfiles("test")
 class TfidfMatchingServiceTest {
     
     @Autowired

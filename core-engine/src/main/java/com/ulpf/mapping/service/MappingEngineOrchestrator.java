@@ -24,6 +24,7 @@ public class MappingEngineOrchestrator {
     private final AliasLookupService aliasLookupService;
     private final TfidfMatchingService tfidfMatchingService;
     private final TypoMatchingService typoMatchingService;
+    private final EmbeddingMatchingService embeddingMatchingService;
     private final ConfidenceEvaluator confidenceEvaluator;
     private final MappingConfig config;
     
@@ -32,12 +33,14 @@ public class MappingEngineOrchestrator {
             AliasLookupService aliasLookupService,
             TfidfMatchingService tfidfMatchingService,
             TypoMatchingService typoMatchingService,
+            EmbeddingMatchingService embeddingMatchingService,
             ConfidenceEvaluator confidenceEvaluator,
             MappingConfig config) {
         this.preprocessor = preprocessor;
         this.aliasLookupService = aliasLookupService;
         this.tfidfMatchingService = tfidfMatchingService;
         this.typoMatchingService = typoMatchingService;
+        this.embeddingMatchingService = embeddingMatchingService;
         this.confidenceEvaluator = confidenceEvaluator;
         this.config = config;
     }
@@ -87,15 +90,21 @@ public class MappingEngineOrchestrator {
             return new MappingProposal(rawFieldName, null, 0.0, "NONE");
         }
         
-        // Step 6: Layer 4 (embedding hybrid) - NOT YET IMPLEMENTED
-        // TODO: Layer 4 (embedding hybrid) not yet implemented — pending Adarsh's
-        // model-lifecycle functions; see plan Phase 7.
-        // For now, return NONE with the best prior score as confidence.
+        // Step 6: Layer 4 - Embedding hybrid matching
         double bestPriorScore = Math.max(
             topScoreOrZero(tfidfResults), 
             topScoreOrZero(typoResults)
         );
-        return new MappingProposal(rawFieldName, null, bestPriorScore, "NONE");
+        
+        MappingCandidate hybrid = safelyRun(() -> {
+            return List.of(embeddingMatchingService.matchWithFallback(rawFieldName, bestPriorScore));
+        }).stream().findFirst().orElse(null);
+        
+        if (hybrid != null && hybrid.getScore() >= config.getHybridAcceptanceThreshold()) {
+            return new MappingProposal(rawFieldName, hybrid.getCanonicalField(), hybrid.getScore(), "L4_HYBRID");
+        }
+        
+        return new MappingProposal(rawFieldName, null, hybrid != null ? hybrid.getScore() : bestPriorScore, "NONE");
     }
     
     /**

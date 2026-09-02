@@ -21,3 +21,6 @@ mapping:
   confidence-threshold: 0.60
   gap-threshold: 0.20
   hybrid-acceptance-threshold: 0.50
+  model:
+    path: models/all-MiniLM-L6-v2/model.onnx
+    idle-timeout-ms: 180000

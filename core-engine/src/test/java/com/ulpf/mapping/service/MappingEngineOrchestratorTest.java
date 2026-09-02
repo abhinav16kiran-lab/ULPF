@@ -28,6 +28,7 @@ class MappingEngineOrchestratorTest {
     private AliasLookupService aliasLookupService;
     private TfidfMatchingService tfidfMatchingService;
     private TypoMatchingService typoMatchingService;
+    private EmbeddingMatchingService embeddingMatchingService;
     private ConfidenceEvaluator confidenceEvaluator;
     private MappingConfig config;
     private AliasRepository aliasRepository;
@@ -45,6 +46,7 @@ class MappingEngineOrchestratorTest {
         aliasLookupService = new AliasLookupService(aliasRepository);
         tfidfMatchingService = mock(TfidfMatchingService.class);
         typoMatchingService = mock(TypoMatchingService.class);
+        embeddingMatchingService = mock(EmbeddingMatchingService.class);
         
         config = mock(MappingConfig.class);
         when(config.getConfidenceThreshold()).thenReturn(0.60);
@@ -58,6 +60,7 @@ class MappingEngineOrchestratorTest {
             aliasLookupService,
             tfidfMatchingService,
             typoMatchingService,
+            embeddingMatchingService,
             confidenceEvaluator,
             config
         );
@@ -185,6 +188,10 @@ class MappingEngineOrchestratorTest {
             new MappingCandidate("dest_ip", 0.35, "TYPO_MATCH")
         ));
         
+        // Mock Layer 4 returning low score
+        when(embeddingMatchingService.matchWithFallback(anyString(), anyDouble()))
+            .thenReturn(new MappingCandidate("url", 0.45, "L4_HYBRID"));
+        
         List<MappingProposal> results = orchestrator.mapFields(
             List.of("meaningful"), 
             false
@@ -193,10 +200,38 @@ class MappingEngineOrchestratorTest {
         assertEquals(1, results.size());
         MappingProposal proposal = results.get(0);
         
-        // Should fall back to NONE with best prior score
+        // Should fall back to NONE since 0.45 < 0.50 threshold
         assertNull(proposal.getCanonicalField());
-        assertEquals(0.40, proposal.getConfidence());  // max(0.40, 0.35)
+        assertEquals(0.45, proposal.getConfidence());
         assertEquals("NONE", proposal.getSource());
+    }
+    
+    @Test
+    void testLayer4AcceptHybrid() {
+        // Neither layer confident, not strict, meaningful token
+        when(tfidfMatchingService.match(any())).thenReturn(List.of(
+            new MappingCandidate("src_ip", 0.40, "TFIDF")
+        ));
+        when(typoMatchingService.match(any())).thenReturn(List.of(
+            new MappingCandidate("dest_ip", 0.35, "TYPO_MATCH")
+        ));
+        
+        // Mock Layer 4 returning high blended score
+        when(embeddingMatchingService.matchWithFallback(anyString(), anyDouble()))
+            .thenReturn(new MappingCandidate("url", 0.75, "L4_HYBRID"));
+        
+        List<MappingProposal> results = orchestrator.mapFields(
+            List.of("requestpath"), 
+            false
+        );
+        
+        assertEquals(1, results.size());
+        MappingProposal proposal = results.get(0);
+        
+        // Should accept Layer 4 result since 0.75 >= 0.50
+        assertEquals("url", proposal.getCanonicalField());
+        assertEquals(0.75, proposal.getConfidence());
+        assertEquals("L4_HYBRID", proposal.getSource());
     }
     
     @Test

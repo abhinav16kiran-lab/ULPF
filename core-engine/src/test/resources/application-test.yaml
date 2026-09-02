@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:sqlite::memory:?foreign_keys=on
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sqlite/schema.sql
+
+# Test JWT secret to avoid missing env var errors
+jwt:
+  secret: test-secret-key-for-unit-tests-only-not-for-production
+  expiration: 3600000
+
+# Mapping engine configuration (same as main)
+mapping:
+  confidence-threshold: 0.60
+  gap-threshold: 0.20
+  hybrid-acceptance-threshold: 0.50
