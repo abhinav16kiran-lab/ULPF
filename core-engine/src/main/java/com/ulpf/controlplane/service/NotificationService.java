@@ -19,7 +19,7 @@ public class NotificationService {
     ) {}
 
     // fake in-memory store, keyed by username
-    private static final Map<String, List<Notification>> fake_notifications = new ConcurrentHashMap<>(Map.of(
+    private static final Map<String, List<Notification>> fakeNotifications = new ConcurrentHashMap<>(Map.of(
         "username", List.of(
             new Notification("n1", "Welcome to ULPF", "Your account was created successfully.", false, LocalDateTime.now()),
             new Notification("n2", "Onboarding approved", "Your vendor account has been approved.", true, LocalDateTime.now())
@@ -27,6 +27,6 @@ public class NotificationService {
     ));
 
     public List<Notification> getNotifications(String username) {
-        return fake_notifications.getOrDefault(username, List.of());//empty list if no notifications for the user
+        return fakeNotifications.getOrDefault(username, List.of());//empty list if no notifications for the user
     }
 }

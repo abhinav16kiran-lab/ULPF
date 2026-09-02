@@ -13,7 +13,7 @@ import com.ulpf.common.JwtUtil;
 public class AuthService {
 
     // temporary fake DB — replace with real UserRepository later
-    private static final Map<String, String> fake_db = new ConcurrentHashMap<>(Map.of(
+    private static final Map<String, String> fakeDb = new ConcurrentHashMap<>(Map.of(
         "username", "password",
         "username2", "password2"
     )); //concurrent map to avoid concurrency issues in case of multiple signups/logins and since Map.of returns an immutable map
@@ -25,7 +25,7 @@ public class AuthService {
     }
 
     public String login(String username, String password) {
-        String storedPassword = fake_db.get(username);
+        String storedPassword = fakeDb.get(username);
 
         if (storedPassword == null || !storedPassword.equals(password)) {
             throw new BadCredentialsException("invalid credentials");
@@ -38,9 +38,9 @@ public class AuthService {
     }
 
     public void signUp(String username, String password) {
-        if (fake_db.containsKey(username)) {
+        if (fakeDb.containsKey(username)) {
             throw new IllegalArgumentException("Username already exists");
         }
-        fake_db.put(username, password); //no hashing passwords for now, just for testing purposes
+        fakeDb.put(username, password); //no hashing passwords for now, just for testing purposes
     }
 }
