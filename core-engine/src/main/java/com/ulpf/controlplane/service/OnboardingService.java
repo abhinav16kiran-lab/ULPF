@@ -2,6 +2,7 @@ package com.ulpf.controlplane.service;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -66,4 +67,30 @@ public class OnboardingService {
             return "error reading file: " + e.getMessage();
         }
     }
+
+    public List<OnboardingRequest> getAllRequests() {
+    return List.copyOf(fake_requests.values());
+}
+
+public OnboardingRequest updateStatus(String requestId, String decision) {
+    OnboardingRequest existing = fake_requests.get(requestId);
+    if (existing == null) {
+        return null;
+    }
+
+    OnboardingRequest updated = new OnboardingRequest(
+            existing.requestId(),
+            existing.submittedBy(),
+            existing.vendorName(),
+            existing.sourceName(),
+            existing.sourceType(),
+            existing.sampleLogsContent(),
+            existing.schemaDocsContent(),
+            decision,
+            existing.createdAt()
+    );
+
+    fake_requests.put(requestId, updated);
+    return updated;
+}
 }
