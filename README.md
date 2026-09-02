@@ -83,6 +83,8 @@ ULPF uses a strict separation between the **Control Plane** (infrequent manageme
 │   │   ├── FILE_GUIDE.md                 # Detailed file & folder guide
 │   │   ├── TEAMMATE_ONBOARDING.md        # Teammate onboarding guide
 │   │   └── ULPF_Dev_Environment_Setup.md # Dev environment setup
+│   ├── db/
+│   │   └── COMMON_DB_GUIDE.md            # Centralized DB package com.ulpf.common.db specification & reference
 │   ├── API_SPECIFICATION.md
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE_SCHEMA.md

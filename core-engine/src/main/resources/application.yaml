@@ -24,3 +24,12 @@ mapping:
   model:
     path: models/all-MiniLM-L6-v2/model.onnx
     idle-timeout-ms: 180000
+
+# ClickHouse storage configuration
+clickhouse:
+  datasource:
+    url: ${CLICKHOUSE_URL:jdbc:clickhouse://localhost:8123/ulpf_raw}
+    driver-class-name: com.clickhouse.jdbc.ClickHouseDriver
+    username: ${CLICKHOUSE_USER:default}
+    password: ${CLICKHOUSE_PASSWORD:}
+

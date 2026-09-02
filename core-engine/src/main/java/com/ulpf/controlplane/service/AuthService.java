@@ -1,46 +1,50 @@
 package com.ulpf.controlplane.service;
 
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-
+import com.ulpf.common.JwtUtil;
+import com.ulpf.common.db.UserRepository;
+import com.ulpf.controlplane.model.Role;
+import com.ulpf.controlplane.model.User;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import com.ulpf.common.JwtUtil;
+import java.util.Optional;
 
 @Service
 public class AuthService {
 
-    // temporary fake DB — replace with real UserRepository later
-    private static final Map<String, String> fakeDb = new ConcurrentHashMap<>(Map.of(
-        "username", "password",
-        "username2", "password2"
-    )); //concurrent map to avoid concurrency issues in case of multiple signups/logins and since Map.of returns an immutable map
-
+    private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
+    private final BCryptPasswordEncoder passwordEncoder;
 
-    AuthService(JwtUtil jwtUtil) {
+    public AuthService(UserRepository userRepository, JwtUtil jwtUtil, BCryptPasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
         this.jwtUtil = jwtUtil;
+        this.passwordEncoder = passwordEncoder;
     }
 
     public String login(String username, String password) {
-        String storedPassword = fakeDb.get(username);
+        Optional<User> userOpt = userRepository.findByUsername(username);
 
-        if (storedPassword == null || !storedPassword.equals(password)) {
+        if (userOpt.isEmpty()) {
             throw new BadCredentialsException("invalid credentials");
         }
 
-        // fake DB has no real userId, so just generate one per login for now
-        String userId = UUID.randomUUID().toString();
+        User user = userOpt.get();
+        if (!passwordEncoder.matches(password, user.passwordHash())) {
+            throw new BadCredentialsException("invalid credentials");
+        }
 
-        return jwtUtil.generateToken(userId, username);
+        return jwtUtil.generateToken(user.userId(), user.username());
     }
 
     public void signUp(String username, String password) {
-        if (fakeDb.containsKey(username)) {
+        if (userRepository.existsByUsername(username)) {
             throw new IllegalArgumentException("Username already exists");
         }
-        fakeDb.put(username, password); //no hashing passwords for now, just for testing purposes
+
+        String hashedPassword = passwordEncoder.encode(password);
+        User newUser = new User(null, username, hashedPassword, Role.USER, null);
+        userRepository.save(newUser);
     }
 }

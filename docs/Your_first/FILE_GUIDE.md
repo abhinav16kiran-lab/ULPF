@@ -224,6 +224,7 @@ docs/
 - `API_SPECIFICATION.md` — API specification.
 - `ARCHITECTURE.md` — Core system architecture.
 - `DATABASE_SCHEMA.md` — SQLite and ClickHouse database schemas.
+- `db/COMMON_DB_GUIDE.md` — Centralized database package com.ulpf.common.db developer specification & reference.
 - `MAPPING_ENGINE.md` — 4-layer AI Mapping Engine architecture, model lifecycle, and layer cascade specification.
 - `EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md` — Submission checklist.
 - `PROTOTYPE_TECHNICAL_DESIGN.md` — Detailed technical design document.

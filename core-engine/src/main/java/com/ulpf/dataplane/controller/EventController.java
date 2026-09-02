@@ -39,7 +39,7 @@ public class EventController {
             return ResponseEntity.badRequest().body(Map.of("error", "request body must be a valid JSON object"));
         }
 
-        var result = eventIngestionService.ingest(vendorId, payload);
+        var result = eventIngestionService.ingest(apiKey, payload);
 
         return ResponseEntity.status(202).body(Map.of(
                 "eventId", result.eventId(),

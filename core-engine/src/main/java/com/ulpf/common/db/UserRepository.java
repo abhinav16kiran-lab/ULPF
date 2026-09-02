@@ -1,4 +1,4 @@
-package com.ulpf.controlplane.repository;
+package com.ulpf.common.db;
 
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
@@ -12,6 +12,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Centralized repository for user authentication and user metadata in SQLite users table.
+ */
 @Repository
 public class UserRepository {
 
