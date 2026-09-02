@@ -35,7 +35,7 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 | **Core Engine** | Java 21 LTS + Spring Boot 4.1.0 (Maven 3.9.x) |
 | **Control-Plane DB** | SQLite (via `sqlite-jdbc` 3.49.1.0) |
 | **Event Storage** | ClickHouse 26.3 LTS (Podman container) |
-| **AI Mapping Engine** | Deterministic Matcher + Local Embedding Model (`all-MiniLM-L6-v2`) |
+| **AI Mapping Engine** | 4-Layer Hybrid Cascade (Dictionary, TF-IDF, Typo Match, Local ONNX `all-MiniLM-L6-v2`) |
 | **Frontend** | React + Node.js |
 | **Containerization** | Podman / Podman-Compose |
 
@@ -43,7 +43,7 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 
 ## Architecture
 
-ULPF uses a strict separation between the **Control Plane** (infrequent management operations, user accounts, schema proposals, mapping state) and the **Data Plane** (high-throughput log processing, raw preservation, normalization, and analytical storage). SQLite manages control-plane metadata for fast embedded execution, while ClickHouse handles event storage.
+ULPF uses a strict separation between the **Control Plane** (infrequent management operations, user accounts, schema proposals, mapping state) and the **Data Plane** (high-throughput log processing, raw preservation, normalization, and analytical storage). SQLite manages control-plane metadata for fast embedded execution, while ClickHouse handles event storage. For full details on the 4-layer AI mapping engine and memory lifecycle, see [docs/MAPPING_ENGINE.md](docs/MAPPING_ENGINE.md).
 
 ```text
 [ Vendor / App ] ---> POST /v1/events ---> [ Core Engine Data Plane ] ---> ( Raw Storage )
@@ -86,6 +86,7 @@ ULPF uses a strict separation between the **Control Plane** (infrequent manageme
 │   ├── API_SPECIFICATION.md
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE_SCHEMA.md
+│   ├── MAPPING_ENGINE.md                 # 4-Layer AI Mapping Engine & ONNX Model Lifecycle specification
 │   ├── EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md
 │   └── PROTOTYPE_TECHNICAL_DESIGN.md
 │

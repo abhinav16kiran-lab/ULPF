@@ -216,10 +216,17 @@ docs/
 ├── API_SPECIFICATION.md
 ├── ARCHITECTURE.md
 ├── DATABASE_SCHEMA.md
+├── MAPPING_ENGINE.md
 ├── EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md
 └── PROTOTYPE_TECHNICAL_DESIGN.md
 ```
 
+- `API_SPECIFICATION.md` — API specification.
+- `ARCHITECTURE.md` — Core system architecture.
+- `DATABASE_SCHEMA.md` — SQLite and ClickHouse database schemas.
+- `MAPPING_ENGINE.md` — 4-layer AI Mapping Engine architecture, model lifecycle, and layer cascade specification.
+- `EVERYTHING_THAT_NEEDS_TO_BE_DONE_BEFORE_PROTOTYPE_SUB.md` — Submission checklist.
+- `PROTOTYPE_TECHNICAL_DESIGN.md` — Detailed technical design document.
 - `Your_first/FILE_GUIDE.md` — This file; explains the repository structure.
 - `Your_first/TEAMMATE_ONBOARDING.md` — Information for new team members joining the project.
 - `Your_first/ULPF_Dev_Environment_Setup.md` — Development environment setup instructions.
