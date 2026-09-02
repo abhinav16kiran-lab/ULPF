@@ -16,7 +16,7 @@ public class AuthService {
     private static final Map<String, String> fake_db = new ConcurrentHashMap<>(Map.of(
         "username", "password",
         "username2", "password2"
-    )); //concurrent map to avoid concurrency issues in case of multiple signups/logins
+    )); //concurrent map to avoid concurrency issues in case of multiple signups/logins and since Map.of returns an immutable map
 
     private final JwtUtil jwtUtil;
 
