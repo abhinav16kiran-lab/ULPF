@@ -25,37 +25,37 @@ public class EmbeddingRepository {
     }
     
     /**
-     * Load all canonical embeddings into memory cache at startup.
-     * This is safe since the table is small (one row per canonical field).
-     */
-    @PostConstruct
-    public void loadEmbeddings() {
-        try {
-            cachedEmbeddings = findAllCanonicalEmbeddings();
-        } catch (Exception e) {
-            // Table might be empty or not exist yet - that's okay
-            cachedEmbeddings = new ArrayList<>();
-        }
-    }
-    
-    /**
-     * Get all canonical field embeddings from cache.
+     * Get all canonical field embeddings, lazy-loading from SQLite into cache on first demand.
      * 
      * @return list of canonical embeddings
      */
-    public List<CanonicalEmbedding> findAllCanonicalEmbeddings() {
+    public synchronized List<CanonicalEmbedding> findAllCanonicalEmbeddings() {
         if (cachedEmbeddings != null) {
             return cachedEmbeddings;
         }
         
-        String sql = "SELECT canonical_field, embedding FROM mapping_embeddings";
-        
-        return jdbcTemplate.query(sql, (rs, rowNum) -> {
-            String canonicalField = rs.getString("canonical_field");
-            byte[] embeddingBytes = rs.getBytes("embedding");
-            double[] embeddingVector = bytesToDoubleArray(embeddingBytes);
-            return new CanonicalEmbedding(canonicalField, embeddingVector);
-        });
+        try {
+            String sql = "SELECT canonical_field, embedding FROM mapping_embeddings";
+            
+            cachedEmbeddings = jdbcTemplate.query(sql, (rs, rowNum) -> {
+                String canonicalField = rs.getString("canonical_field");
+                byte[] embeddingBytes = rs.getBytes("embedding");
+                double[] embeddingVector = bytesToDoubleArray(embeddingBytes);
+                return new CanonicalEmbedding(canonicalField, embeddingVector);
+            });
+        } catch (Exception e) {
+            // Table might be empty or not exist yet
+            cachedEmbeddings = new ArrayList<>();
+        }
+
+        return cachedEmbeddings;
+    }
+
+    /**
+     * Clear the in-memory cache to release RAM when idle.
+     */
+    public synchronized void clearCache() {
+        cachedEmbeddings = null;
     }
     
     /**
@@ -79,11 +79,10 @@ public class EmbeddingRepository {
     }
     
     /**
-     * Refresh the cache by reloading from database.
-     * Call this after embeddings are updated.
+     * Refresh the cache by clearing memory.
+     * The next access will lazy-load fresh embeddings from the database.
      */
-    public void refreshCache() {
+    public synchronized void refreshCache() {
         cachedEmbeddings = null;
-        loadEmbeddings();
     }
 }
