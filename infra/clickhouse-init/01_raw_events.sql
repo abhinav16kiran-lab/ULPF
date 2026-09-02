@@ -14,4 +14,4 @@ CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(received_at)
-ORDER BY (vendor_id, received_at, event_id);
+ORDER BY (vendor_id, source_id, received_at, event_id);
