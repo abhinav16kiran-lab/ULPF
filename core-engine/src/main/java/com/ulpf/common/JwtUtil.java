@@ -22,16 +22,22 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
+    public String generateToken(String userId, String username) {
+        return generateToken(userId, username, null);
+    }
+
     public String generateToken(String userId, String username, String role) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("id", userId);
-        claims.put("role", role);
+        if (role != null) {
+            claims.put("role", role);
+        }
 
         return Jwts.builder()
                 .claims(claims)
                 .subject(username)
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 24)) // 24 hour token expiration
+                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 24))
                 .signWith(getSigningKey())
                 .compact();
     }

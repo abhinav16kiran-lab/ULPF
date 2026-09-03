@@ -31,6 +31,7 @@ public class UserRepository {
         return new User(
             rs.getString("user_id"),
             rs.getString("username"),
+            rs.getString("name"),
             rs.getString("password_hash"),
             Role.valueOf(rs.getString("role")),
             createdAt
@@ -43,23 +44,23 @@ public class UserRepository {
             : UUID.randomUUID().toString();
 
         String sql = """
-            INSERT INTO users (user_id, username, password_hash, role)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (user_id, username, name, password_hash, role)
+            VALUES (?, ?, ?, ?, ?)
             """;
 
-        jdbcTemplate.update(sql, id, user.username(), user.passwordHash(), user.role().name());
+        jdbcTemplate.update(sql, id, user.username(), user.name(), user.passwordHash(), user.role().name());
 
         return findById(id).orElseThrow(() -> new IllegalStateException("Failed to retrieve saved user with id: " + id));
     }
 
     public Optional<User> findById(String userId) {
-        String sql = "SELECT user_id, username, password_hash, role, created_at FROM users WHERE user_id = ?";
+        String sql = "SELECT user_id, username, name, password_hash, role, created_at FROM users WHERE user_id = ?";
         List<User> users = jdbcTemplate.query(sql, ROW_MAPPER, userId);
         return users.stream().findFirst();
     }
 
     public Optional<User> findByUsername(String username) {
-        String sql = "SELECT user_id, username, password_hash, role, created_at FROM users WHERE username = ?";
+        String sql = "SELECT user_id, username, name, password_hash, role, created_at FROM users WHERE username = ?";
         List<User> users = jdbcTemplate.query(sql, ROW_MAPPER, username);
         return users.stream().findFirst();
     }

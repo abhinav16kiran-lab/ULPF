@@ -1,9 +1,9 @@
 package com.ulpf.controlplane.service;
 
 import com.ulpf.common.JwtUtil;
-import com.ulpf.common.db.UserRepository;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
+import com.ulpf.controlplane.repository.UserRepository;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -59,7 +59,7 @@ public class AuthService {
 
         String hashedPassword = passwordEncoder.encode(password);
         // All public signups are automatically assigned Role.USER
-        User newUser = new User(null, username, hashedPassword, Role.USER, null);
+        User newUser = new User(null, username, name, hashedPassword, Role.USER, null);
         userRepository.save(newUser);
     }
 }
