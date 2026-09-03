@@ -23,27 +23,42 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
     }
 
-    public String login(String username, String password) {
+    public record LoginResult(String username, String role, String token) {}
+
+    public LoginResult login(String username, String password, String requestedRole) {
         Optional<User> userOpt = userRepository.findByUsername(username);
 
         if (userOpt.isEmpty()) {
-            throw new BadCredentialsException("invalid credentials");
+            throw new BadCredentialsException("Invalid Credentials");
         }
 
         User user = userOpt.get();
         if (!passwordEncoder.matches(password, user.passwordHash())) {
-            throw new BadCredentialsException("invalid credentials");
+            throw new BadCredentialsException("Invalid Credentials");
         }
 
-        return jwtUtil.generateToken(user.userId(), user.username());
+        // Verify that the requested role matches the user's stored role in SQLite
+        if (requestedRole != null && !user.role().name().equalsIgnoreCase(requestedRole.trim())) {
+            throw new BadCredentialsException("Invalid Credentials");
+        }
+
+        String userRoleStr = user.role().name();
+        String token = jwtUtil.generateToken(user.userId(), user.username(), userRoleStr);
+
+        return new LoginResult(user.username(), userRoleStr, token);
     }
 
-    public void signUp(String username, String password) {
+    public void signUp(String name, String username, String password, String confirmPassword) {
+        if (password == null || confirmPassword == null || !password.equals(confirmPassword)) {
+            throw new IllegalArgumentException("Passwords do not match");
+        }
+
         if (userRepository.existsByUsername(username)) {
             throw new IllegalArgumentException("Username already exists");
         }
 
         String hashedPassword = passwordEncoder.encode(password);
+        // All public signups are automatically assigned Role.USER
         User newUser = new User(null, username, hashedPassword, Role.USER, null);
         userRepository.save(newUser);
     }
