@@ -2,7 +2,7 @@
 
 Universal Log Framework (ULPF) is a plug-and-play log ingestion platform designed to eliminate manual schema integration friction for multi-vendor environments. Vendors register and submit sample log payloads, after which an AI mapping engine analyzes the data to propose semantic mappings into a canonical log schema. A human administrator reviews, edits, and approves the proposal before an ingestion API key is granted. Once onboarded, vendors send logs through a single runtime endpoint where incoming raw logs are preserved losslessly, normalized against the active mapping version, and stored in high-performance analytical storage.
 
-For detailed system design and architectural specifications, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/PROTOTYPE_TECHNICAL_DESIGN.md](docs/PROTOTYPE_TECHNICAL_DESIGN.md).
+For detailed system design and architectural specifications, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROTOTYPE_TECHNICAL_DESIGN.md](docs/PROTOTYPE_TECHNICAL_DESIGN.md), [docs/MAPPING_ENGINE.md](docs/MAPPING_ENGINE.md), and [docs/db/COMMON_DB_GUIDE.md](docs/db/COMMON_DB_GUIDE.md).
 
 ---
 
@@ -11,20 +11,20 @@ For detailed system design and architectural specifications, see [docs/ARCHITECT
 The system operates across two primary workflows: **Control-Plane Onboarding** and **Data-Plane Ingestion**.
 
 ### 1. Vendor Onboarding Workflow
-1. **Registration**: Vendor registers an account (`username`, `password`, `vendor_name`) via the control plane UI.
+1. **Registration**: Vendor registers an account (`name`, `username`, `password`, `confirmPassword`) via `POST /v1/signup` (automatically assigned `USER` role; admin promotes to `VENDOR`/`ADMIN`).
 2. **Sample Upload**: Vendor submits sample log payloads and optional documentation for a new log source.
 3. **Onboarding Request**: System logs an `onboarding_request` in SQLite marked as `SUBMITTED`.
-4. **AI Analysis**: The AI mapping engine analyzes the payload structure and generates a candidate mapping proposal with confidence scores (`AI_ANALYSIS`).
-5. **Human Review**: Request moves to `HUMAN_REVIEW`. An administrator inspects the proposed mapping via the admin dashboard, makes any necessary adjustments, and approves or rejects it.
+4. **AI Analysis**: The AI mapping engine analyzes payload structure and generates candidate mapping proposals with confidence scores (`AI_ANALYSIS`).
+5. **Human Review**: Request moves to `HUMAN_REVIEW`. An administrator inspects proposed mappings via the admin dashboard, makes necessary adjustments, and approves or rejects it.
 6. **Activation & Key Generation**: Upon approval (`APPROVED`), the mapping is saved to `mapping_versions` as `ACTIVE`, and a unique API key credential is created in `credentials`.
 7. **Vendor Notification**: Vendor receives a notification containing their API key and status update.
 
 ### 2. Runtime Log Ingestion Workflow
-1. **Event Receipt**: Vendor sends log payloads using their API key via `POST /v1/events`.
-2. **Raw Preservation**: System immediately writes the exact incoming raw payload to persistent raw storage before parsing or transformation.
-3. **Credential & Mapping Resolution**: System authenticates the API key hash and fetches the corresponding `ACTIVE` mapping version for the source.
-4. **Normalization**: Parser applies the active mapping to transform vendor-specific fields (e.g., `src_ip`, `remote_addr`) into canonical fields (e.g., `source_ip`).
-5. **Analytical Storage**: Normalized event record is inserted into ClickHouse for querying and dashboard analytics.
+1. **Event Receipt**: Vendor sends log payloads using their API key via `POST /v1/events` (`X-API-Key` header).
+2. **Microsecond Credential & Mapping Resolution**: System authenticates the API key hash (`CredentialRepository`) and fetches the `ACTIVE` mapping version (`MappingRepository`) using in-memory lazy caches with 5-minute idle eviction (< 1 microsecond execution).
+3. **Lossless Raw Preservation & Queue Buffering**: Raw logs are enqueued into a thread-safe `ConcurrentLinkedQueue` buffer in `ClickHouseIngestionRepository`.
+4. **Batch & Resilient Flushing**: Events are written to ClickHouse `ulpf_raw.raw_events` on reaching a 500-batch limit, every 1,000 ms via `@Scheduled` timer, or synchronously on container termination via `@PreDestroy` shutdown hook.
+5. **Normalization & Analytical Storage**: Normalized event records are made available in ClickHouse for querying and dashboard analytics.
 
 ---
 
@@ -33,9 +33,10 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 | Layer | Technology |
 | :--- | :--- |
 | **Core Engine** | Java 21 LTS + Spring Boot 4.1.0 (Maven 3.9.x) |
-| **Control-Plane DB** | SQLite (via `sqlite-jdbc` 3.49.1.0) |
-| **Event Storage** | ClickHouse 26.3 LTS (Podman container) |
+| **Control-Plane DB** | SQLite 3 (via `sqlite-jdbc` 3.49.1.0 + HikariCP) |
+| **Event Storage** | ClickHouse 26.3 LTS (via `clickhouse-jdbc` 0.7.2) |
 | **AI Mapping Engine** | 4-Layer Hybrid Cascade (Dictionary, TF-IDF, Typo Match, Local ONNX `all-MiniLM-L6-v2`) |
+| **Centralized DB Layer** | `com.ulpf.common.db` (Dual Datasource, In-Memory Lazy Cache, 5-Min Eviction, Queue Buffering) |
 | **Frontend** | React + Node.js |
 | **Containerization** | Podman / Podman-Compose |
 
@@ -43,18 +44,20 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 
 ## Architecture
 
-ULPF uses a strict separation between the **Control Plane** (infrequent management operations, user accounts, schema proposals, mapping state) and the **Data Plane** (high-throughput log processing, raw preservation, normalization, and analytical storage). SQLite manages control-plane metadata for fast embedded execution, while ClickHouse handles event storage. For full details on the 4-layer AI mapping engine and memory lifecycle, see [docs/MAPPING_ENGINE.md](docs/MAPPING_ENGINE.md).
+ULPF uses a strict separation between the **Control Plane** (infrequent management operations, user accounts, schema proposals, mapping state) and the **Data Plane** (high-throughput log processing, raw preservation, normalization, and analytical storage). SQLite manages control-plane metadata for fast embedded execution, while ClickHouse handles raw log preservation and analytics. 
+
+For full details on the 4-layer AI mapping engine and memory lifecycle, see [docs/MAPPING_ENGINE.md](docs/MAPPING_ENGINE.md). For details on database pooling, lazy-loading, and ClickHouse buffering, see [docs/db/COMMON_DB_GUIDE.md](docs/db/COMMON_DB_GUIDE.md).
 
 ```text
-[ Vendor / App ] ---> POST /v1/events ---> [ Core Engine Data Plane ] ---> ( Raw Storage )
-                                                   |
-                                            (Active Mapping)
-                                                   |
-                                                   v
-                                         [ ClickHouse Event DB ]
+[ Vendor / App ] ---> POST /v1/events ---> [ Core Engine Data Plane ] ---> ( ClickHouse Ingestion Buffer )
+                                                   │                                    │
+                                        (Microsecond RAM Caches)                        │ (500-batch / 1s timer / @PreDestroy)
+                                                   │                                    v
+                                                   v                          [ ClickHouse Event DB ]
+                                        [ SQLite Control Plane DB ]
 
 [ Admin / Vendor ] ---> Control API / UI ---> [ Core Engine Control Plane ] ---> [ SQLite DB ]
-                                                       |
+                                                       │
                                                [ AI Mapping Engine ]
 ```
 
@@ -83,6 +86,8 @@ ULPF uses a strict separation between the **Control Plane** (infrequent manageme
 │   │   ├── FILE_GUIDE.md                 # Detailed file & folder guide
 │   │   ├── TEAMMATE_ONBOARDING.md        # Teammate onboarding guide
 │   │   └── ULPF_Dev_Environment_Setup.md # Dev environment setup
+│   ├── db/
+│   │   └── COMMON_DB_GUIDE.md            # Centralized DB package com.ulpf.common.db specification & reference
 │   ├── API_SPECIFICATION.md
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE_SCHEMA.md
@@ -97,14 +102,21 @@ ULPF uses a strict separation between the **Control Plane** (infrequent manageme
 │   └── src/main/
 │       ├── java/com/ulpf/
 │       │   ├── UlpfApplication.java      # Main application entrypoint
-│       │   ├── common/                   # Spring Security & JWT auth infrastructure
+│       │   ├── common/                   # Security, JWT auth & Centralized DB package
 │       │   │   ├── JwtUtil.java
 │       │   │   ├── JwtFilter.java
 │       │   │   ├── SpringSecurity.java
-│       │   │   └── UlpfPrincipal.java
-│       │   ├── controlplane/             # Control-plane models, repositories, & controllers
+│       │   │   ├── UlpfPrincipal.java
+│       │   │   └── db/                   # Centralized SQLite & ClickHouse connection & repository layer
+│       │   │       ├── SqliteConnectionConfig.java
+│       │   │       ├── ClickHouseConnectionConfig.java
+│       │   │       ├── UserRepository.java
+│       │   │       ├── CredentialRepository.java
+│       │   │       ├── MappingRepository.java
+│       │   │       └── ClickHouseIngestionRepository.java
+│       │   ├── controlplane/             # Control-plane models, services, & controllers
 │       │   ├── dataplane/                # Data-plane ingestion & mapping services
-│       │   ├── mapping/                  # Mapping engine logic
+│       │   ├── mapping/                  # Mapping engine logic & ONNX lifecycle manager
 │       │   └── analytics/                # Analytics query engine
 │       └── resources/
 │           ├── sqlite/
@@ -153,13 +165,13 @@ For full cross-platform setup details, see [docs/Your_first/ULPF_Dev_Environment
 
 ## API Endpoints
 
-| Method | Endpoint | Description | Status |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/v1/login` | Authenticate user and issue JWT token | Implemented |
-| `POST` | `/v1/signup` | Register new user account | Planned |
-| `POST` | `/v1/onboard` | Submit new vendor/source onboarding request with sample payload | Planned |
-| `GET` | `/v1/notifications` | Retrieve user notifications and onboarding request status | Planned |
-| `POST` | `/v1/events` | Runtime log ingestion endpoint for onboarded sources | Planned |
+| Method | Endpoint | Request Body | Description | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `POST` | `/v1/login` | `{"username", "password", "role"}` | Authenticate user against role and issue JWT token | Implemented |
+| `POST` | `/v1/signup` | `{"name", "username", "password", "confirmPassword"}` | Register new user account (assigned `Role.USER`) | Implemented |
+| `POST` | `/v1/onboard` | `{"source_name", "sample_payload"}` | Submit new vendor/source onboarding request | Planned |
+| `GET` | `/v1/notifications` | Header `Bearer <token>` | Retrieve user notifications & onboarding request status | Planned |
+| `POST` | `/v1/events` | Header `X-API-Key`, Body `<raw log>` | Runtime log ingestion endpoint for onboarded sources | Implemented |
 
 ---
 
