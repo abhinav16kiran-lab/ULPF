@@ -37,6 +37,18 @@ services:
     networks:
       - ulpf-net
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    container_name: ulpf-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - core-engine
+    networks:
+      - ulpf-net
+
 volumes:
   clickhouse-data:
   sqlite-data:
