@@ -37,7 +37,11 @@ public class EventIngestionService {
     public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt) {}
 
     public Optional<CredentialRecord> resolveCredentialFromApiKey(String apiKey) {
-        return credentialRepository.findActiveByKeyHash(apiKey);
+        if (apiKey == null || apiKey.isBlank()) {
+            return Optional.empty();
+        }
+        String keyHash = com.ulpf.controlplane.service.OnboardingService.hashSha256(apiKey);
+        return credentialRepository.findActiveByKeyHash(keyHash);
     }
 
     public String resolveVendorFromApiKey(String apiKey) {

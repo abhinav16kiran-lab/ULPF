@@ -114,19 +114,27 @@ The `com.ulpf.common.db` package provides a centralized, dual-database access la
 #### Public Methods:
 
 ##### `Optional<CredentialRecord> findActiveByKeyHash(String keyHash)`
-* **Description:** Checks in-memory cache first; on cache miss, performs a multi-table JOIN query to validate an incoming API key hash against active log sources and active vendors:
+* **Description:** Checks in-memory RAM cache first; on cache miss, executes an **optimized early-exit subquery** to validate an incoming API key hash against active log sources and active vendors:
   ```sql
   SELECT c.credential_id, c.source_id, s.vendor_id, c.key_hash, c.status, c.created_at
   FROM credentials c
   JOIN sources s ON c.source_id = s.source_id
-  WHERE c.key_hash = ? AND c.status = 'ACTIVE' AND s.status = 'ACTIVE'
+  JOIN vendors v ON s.vendor_id = v.vendor_id
+  WHERE c.key_hash = ?
+    AND c.status = 'ACTIVE'
+    AND s.status = 'ACTIVE'
+    AND v.status = 'ACTIVE'
   ```
-* **Parameters:** `String keyHash` (SHA-256 or raw API key string).
+  *Optimization:* Filters `c.key_hash = ? AND c.status = 'ACTIVE'` first, short-circuiting instantly if the credential is invalid or revoked before joining `sources` or `vendors`.
+* **Parameters:** `String keyHash` (SHA-256 hash of API key).
 * **Returns:** `Optional<CredentialRecord>` if key is active; `Optional.empty()` if missing, revoked, or linked to a suspended vendor/source.
 
 ##### `CredentialRecord save(CredentialRecord cred)`
 * **Description:** Persists a new ingestion API key credential into SQLite and invalidates stale cache entries.
 * **Exceptions Thrown:** `org.springframework.dao.DataAccessException` if foreign key `source_id` is invalid.
+
+##### `void activateCredentialForSource(String sourceId)`
+* **Description:** Activates credential record associated with `sourceId` once onboarding request is approved by Admin.
 
 ##### `void revokeCredential(String credentialId)`
 * **Description:** Updates credential status to `'REVOKED'` and clears cache immediately.
@@ -275,19 +283,22 @@ public class EventIngestionService {
 
 ## 5. Test Suite Reference
 
-The package is verified by 4 dedicated unit test classes in `src/test/java/com/ulpf/common/db/`:
+The database and engine package is verified by dedicated unit & integration test classes across `src/test/java/com/ulpf/`:
 
 | Test Class | Test Target | What It Verifies |
 | :--- | :--- | :--- |
 | **`UserRepositoryTest`** | `UserRepository` | Verifies user creation (`save`), username uniqueness checks, SQL timestamp parsing, and `findByUsername` queries against in-memory SQLite. |
-| **`CredentialRepositoryTest`** | `CredentialRepository` | Verifies multi-table JOIN query resolving active API key hashes against linked `credentials`, `sources`, and `vendors` tables. |
+| **`CredentialRepositoryTest`** | `CredentialRepository` | Verifies early-exit subquery resolving active API key hashes against linked `credentials`, `sources`, and `vendors` tables, and suspension handling. |
 | **`MappingRepositoryTest`** | `MappingRepository` | Verifies active mapping lazy-loading into RAM cache, cache invalidation, version numbering (`getNextVersionNumber`), and version activation. |
 | **`ClickHouseIngestionRepositoryTest`** | `ClickHouseIngestionRepository` | Verifies in-memory queue buffer enqueueing, 500-batch limit trigger, `flush()` execution, and queue draining. |
+| **`OnboardingServiceTest`** | `OnboardingService` | Verifies request submission, SHA-256 key hash generation, candidate mapping creation, and admin approval flow. |
+| **`AnalyticsServiceTest`** | `AnalyticsService` | Verifies ClickHouse SQL aggregation query building and strict identifier regex sanitization. |
+| **`NotificationPurgeSchedulerTest`** | `NotificationPurgeScheduler` | Verifies 14d read / 60d unread notification TTL purging and 7d `sample_metadata` JSON nullification. |
 
 ### How to Run Tests:
 ```bash
 cd core-engine
-mvn test -Dtest="*RepositoryTest"
+mvn test
 ```
 
-All **58 test cases** across the application compile and pass cleanly (`BUILD SUCCESS`).
+All **74 test cases** across the application compile and pass cleanly (`BUILD SUCCESS`).

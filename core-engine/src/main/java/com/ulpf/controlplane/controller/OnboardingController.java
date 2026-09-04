@@ -65,8 +65,11 @@ public class OnboardingController {
 
         return ResponseEntity.status(201).body(Map.of(
                 "requestId", saved.requestId(),
+                "sourceId", saved.sourceId(),
+                "vendorId", saved.vendorId(),
+                "apiKey", saved.rawApiKey(),
                 "status", saved.status(),
-                "message", "Onboarding request submitted successfully"
+                "message", saved.message()
         ));
     }
 

@@ -1,32 +1,32 @@
 package com.ulpf.controlplane.service;
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
+import com.ulpf.common.db.OnboardingRepository;
+import com.ulpf.common.db.OnboardingRepository.NotificationRecord;
+import com.ulpf.common.db.UserRepository;
+import com.ulpf.controlplane.model.User;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 public class NotificationService {
 
-    public record Notification(
-            String id,
-            String title,
-            String message,
-            boolean read,
-            LocalDateTime createdAt
-    ) {}
+    private final UserRepository userRepository;
+    private final OnboardingRepository onboardingRepository;
 
-    // fake in-memory store, keyed by username
-    private static final Map<String, List<Notification>> fakeNotifications = new ConcurrentHashMap<>(Map.of(
-        "username", List.of(
-            new Notification("n1", "Welcome to ULPF", "Your account was created successfully.", false, LocalDateTime.now()),
-            new Notification("n2", "Onboarding approved", "Your vendor account has been approved.", true, LocalDateTime.now())
-        )
-    ));
+    public NotificationService(UserRepository userRepository, OnboardingRepository onboardingRepository) {
+        this.userRepository = userRepository;
+        this.onboardingRepository = onboardingRepository;
+    }
 
-    public List<Notification> getNotifications(String username) {
-        return fakeNotifications.getOrDefault(username, List.of());//empty list if no notifications for the user
+    public List<NotificationRecord> getNotifications(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+
+        return onboardingRepository.findNotificationsByUserId(user.userId());
+    }
+
+    public void markAsRead(String notificationId) {
+        onboardingRepository.markNotificationAsRead(notificationId);
     }
 }

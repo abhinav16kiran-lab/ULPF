@@ -14,17 +14,17 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 1. **Registration**: Vendor registers an account (`name`, `username`, `password`, `confirmPassword`) via `POST /v1/signup` (automatically assigned `USER` role; admin promotes to `VENDOR`/`ADMIN`).
 2. **Sample Upload**: Vendor submits sample log payloads and optional documentation for a new log source.
 3. **Onboarding Request**: System logs an `onboarding_request` in SQLite marked as `SUBMITTED`.
-4. **AI Analysis**: The AI mapping engine analyzes payload structure and generates candidate mapping proposals with confidence scores (`AI_ANALYSIS`).
+4. **AI Analysis & Candidate Versioning**: The AI mapping engine analyzes payload structure and generates candidate mapping proposals with confidence scores (`MappingProposalService`), saving them to `mapping_versions` as status `CANDIDATE`.
 5. **Human Review**: Request moves to `HUMAN_REVIEW`. An administrator inspects proposed mappings via the admin dashboard, makes necessary adjustments, and approves or rejects it.
-6. **Activation & Key Generation**: Upon approval (`APPROVED`), the mapping is saved to `mapping_versions` as `ACTIVE`, and a unique API key credential is created in `credentials`.
+6. **Activation & Key Generation**: Upon approval (`APPROVED`), the candidate mapping is activated (`ACTIVE`), raw API key `ulpf_live_...` is hashed via `SHA-256`, and saved in `credentials`.
 7. **Vendor Notification**: Vendor receives a notification containing their API key and status update.
 
 ### 2. Runtime Log Ingestion Workflow
 1. **Event Receipt**: Vendor sends log payloads using their API key via `POST /v1/events` (`X-API-Key` header).
-2. **Microsecond Credential & Mapping Resolution**: System authenticates the API key hash (`CredentialRepository`) and fetches the `ACTIVE` mapping version (`MappingRepository`) using in-memory lazy caches with 5-minute idle eviction (< 1 microsecond execution).
+2. **Microsecond Credential & Mapping Resolution**: System hashes incoming key via `SHA-256`, executes early-exit `EXISTS` subquery optimization (`CredentialRepository`), and fetches the `ACTIVE` mapping version (`MappingRepository`) using in-memory lazy caches with 5-minute idle eviction (< 1 microsecond execution).
 3. **Lossless Raw Preservation & Queue Buffering**: Raw logs are enqueued into a thread-safe `ConcurrentLinkedQueue` buffer in `ClickHouseIngestionRepository`.
 4. **Batch & Resilient Flushing**: Events are written to ClickHouse `ulpf_raw.raw_events` on reaching a 500-batch limit, every 1,000 ms via `@Scheduled` timer, or synchronously on container termination via `@PreDestroy` shutdown hook.
-5. **Normalization & Analytical Storage**: Normalized event records are made available in ClickHouse for querying and dashboard analytics.
+5. **ZSTD(15) TTL Compression & Analytical Storage**: Raw log events are retained and automatically re-compressed after 7 days using `CODEC(ZSTD(15))` for maximum storage density, while normalized records are available for dashboard analytics.
 
 ---
 
@@ -169,8 +169,10 @@ For full cross-platform setup details, see [docs/Your_first/ULPF_Dev_Environment
 | :--- | :--- | :--- | :--- | :--- |
 | `POST` | `/v1/login` | `{"username", "password", "role"}` | Authenticate user against role and issue JWT token | Implemented |
 | `POST` | `/v1/signup` | `{"name", "username", "password", "confirmPassword"}` | Register new user account (assigned `Role.USER`) | Implemented |
-| `POST` | `/v1/onboard` | `{"source_name", "sample_payload"}` | Submit new vendor/source onboarding request | Planned |
-| `GET` | `/v1/notifications` | Header `Bearer <token>` | Retrieve user notifications & onboarding request status | Planned |
+| `POST` | `/v1/onboard` | Multipart payload (`vendorName`, `sourceName`, `sampleLogFile`) | Submit new vendor/source onboarding request | Implemented |
+| `GET` | `/v1/notifications` | Header `Bearer <token>` | Retrieve user notifications & onboarding request status | Implemented |
+| `POST` | `/v1/admin/onboarding/{requestId}/decision` | `{"decision": "APPROVED" / "REJECTED"}` | Admin review, key activation & candidate mapping activation | Implemented |
+| `POST` | `/v1/analytics/query` | `{"table", "column", "aggregation"}` | Read-only ClickHouse aggregation query engine | Implemented |
 | `POST` | `/v1/events` | Header `X-API-Key`, Body `<raw log>` | Runtime log ingestion endpoint for onboarded sources | Implemented |
 
 ---
