@@ -75,18 +75,21 @@ public class VendorRepository {
     }
 
     public void suspendVendor(String vendorId) {
+        credentialRepository.evictByVendorId(vendorId);
         String sql = "UPDATE vendors SET status = 'SUSPENDED' WHERE vendor_id = ?";
         jdbcTemplate.update(sql, vendorId);
-        credentialRepository.clearCache();
     }
 
     public void activateVendor(String vendorId) {
+        credentialRepository.evictByVendorId(vendorId);
         String sql = "UPDATE vendors SET status = 'ACTIVE' WHERE vendor_id = ?";
         jdbcTemplate.update(sql, vendorId);
-        credentialRepository.clearCache();
     }
 
     public void revokeVendor(String vendorId) {
+        // Evict all credentials belonging to this vendor from RAM first
+        credentialRepository.evictByVendorId(vendorId);
+
         // Atomic bulk cascade update: vendors -> sources -> credentials
         String sqlRevokeCredentials = """
             UPDATE credentials SET status = 'REVOKED'
@@ -99,7 +102,5 @@ public class VendorRepository {
 
         String sqlRevokeVendor = "UPDATE vendors SET status = 'REVOKED' WHERE vendor_id = ?";
         jdbcTemplate.update(sqlRevokeVendor, vendorId);
-
-        credentialRepository.clearCache();
     }
 }

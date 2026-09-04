@@ -53,9 +53,14 @@ public class MappingEngineOrchestrator {
      * @return list of mapping proposals, one per field
      */
     public List<MappingProposal> mapFields(List<String> rawFieldNames, boolean vendorIsStrict) {
-        return rawFieldNames.stream()
-            .map(raw -> mapSingleField(raw, vendorIsStrict))
-            .collect(Collectors.toList());
+        try {
+            return rawFieldNames.stream()
+                .map(raw -> mapSingleField(raw, vendorIsStrict))
+                .collect(Collectors.toList());
+        } finally {
+            // Ephemeral ML memory eviction: pop canonical embeddings out of RAM immediately after onboarding proposal generation
+            embeddingMatchingService.clearCache();
+        }
     }
     
     /**

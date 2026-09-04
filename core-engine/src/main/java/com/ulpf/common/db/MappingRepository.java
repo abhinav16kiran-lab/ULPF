@@ -96,6 +96,11 @@ public class MappingRepository {
     }
 
     public MappingVersionRecord saveMappingVersion(MappingVersionRecord mapping) {
+        // Invalidate cache for sourceId first so next event gets fresh version
+        if (mapping.sourceId() != null) {
+            activeMappingCache.remove(mapping.sourceId());
+        }
+
         String id = (mapping.mappingId() != null && !mapping.mappingId().isBlank())
             ? mapping.mappingId()
             : UUID.randomUUID().toString();
@@ -107,9 +112,6 @@ public class MappingRepository {
 
         jdbcTemplate.update(sql, id, mapping.sourceId(), mapping.version(), mapping.mappingJson(), mapping.status());
 
-        // Invalidate cache for sourceId so next event gets fresh version
-        activeMappingCache.remove(mapping.sourceId());
-
         return new MappingVersionRecord(id, mapping.sourceId(), mapping.version(), mapping.mappingJson(), mapping.status(), LocalDateTime.now());
     }
 
@@ -120,6 +122,11 @@ public class MappingRepository {
     }
 
     public void activateVersion(String mappingId, String sourceId) {
+        // Invalidate cache entry FIRST before updating database status
+        if (sourceId != null) {
+            activeMappingCache.remove(sourceId);
+        }
+
         // Retire existing active versions for this source
         String retireSql = "UPDATE mapping_versions SET status = 'RETIRED' WHERE source_id = ? AND status = 'ACTIVE'";
         jdbcTemplate.update(retireSql, sourceId);
@@ -127,9 +134,12 @@ public class MappingRepository {
         // Activate specified mapping
         String activateSql = "UPDATE mapping_versions SET status = 'ACTIVE' WHERE mapping_id = ?";
         jdbcTemplate.update(activateSql, mappingId);
+    }
 
-        // Invalidate cache entry
-        activeMappingCache.remove(sourceId);
+    public void invalidateSource(String sourceId) {
+        if (sourceId != null) {
+            activeMappingCache.remove(sourceId);
+        }
     }
 
     /**

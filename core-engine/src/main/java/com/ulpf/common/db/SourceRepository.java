@@ -76,25 +76,26 @@ public class SourceRepository {
     }
 
     public void suspendSource(String sourceId) {
+        credentialRepository.evictBySourceId(sourceId);
         String sql = "UPDATE sources SET status = 'SUSPENDED' WHERE source_id = ?";
         jdbcTemplate.update(sql, sourceId);
-        credentialRepository.clearCache();
     }
 
     public void activateSource(String sourceId) {
+        credentialRepository.evictBySourceId(sourceId);
         String sql = "UPDATE sources SET status = 'ACTIVE' WHERE source_id = ?";
         jdbcTemplate.update(sql, sourceId);
-        credentialRepository.clearCache();
     }
 
     public void revokeSource(String sourceId) {
+        // Evict matching credentials from RAM first
+        credentialRepository.evictBySourceId(sourceId);
+
         // Atomic bulk cascade update: sources -> credentials
         String sqlRevokeCredentials = "UPDATE credentials SET status = 'REVOKED' WHERE source_id = ?";
         jdbcTemplate.update(sqlRevokeCredentials, sourceId);
 
         String sqlRevokeSource = "UPDATE sources SET status = 'REVOKED' WHERE source_id = ?";
         jdbcTemplate.update(sqlRevokeSource, sourceId);
-
-        credentialRepository.clearCache();
     }
 }

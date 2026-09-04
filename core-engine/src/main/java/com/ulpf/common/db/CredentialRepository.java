@@ -102,6 +102,11 @@ public class CredentialRepository {
     }
 
     public CredentialRecord save(CredentialRecord cred) {
+        // Evict matching entry from RAM first
+        if (cred.keyHash() != null) {
+            activeCredentialCache.remove(cred.keyHash());
+        }
+
         String id = (cred.credentialId() != null && !cred.credentialId().isBlank())
             ? cred.credentialId()
             : UUID.randomUUID().toString();
@@ -113,25 +118,46 @@ public class CredentialRepository {
 
         jdbcTemplate.update(sql, id, cred.sourceId(), cred.keyHash(), cred.status());
 
-        // Invalidate cache entry if keyHash was cached
-        activeCredentialCache.remove(cred.keyHash());
-
         return findActiveByKeyHash(cred.keyHash())
             .orElseGet(() -> new CredentialRecord(id, cred.sourceId(), cred.vendorId(), cred.keyHash(), cred.status(), LocalDateTime.now()));
     }
 
     public void revokeCredential(String credentialId) {
+        // Synchronously evict target credential from RAM first to guarantee zero microsecond stale access window
+        evictByCredentialId(credentialId);
+
         String sql = "UPDATE credentials SET status = 'REVOKED' WHERE credential_id = ?";
         jdbcTemplate.update(sql, credentialId);
+    }
 
-        // Clear cache so revoked key is immediately evicted
-        clearCache();
+    public void suspendCredential(String credentialId) {
+        // Synchronously evict target credential from RAM first
+        evictByCredentialId(credentialId);
+
+        String sql = "UPDATE credentials SET status = 'SUSPENDED' WHERE credential_id = ?";
+        jdbcTemplate.update(sql, credentialId);
     }
 
     public void activateCredentialForSource(String sourceId) {
+        evictBySourceId(sourceId);
+
         String sql = "UPDATE credentials SET status = 'ACTIVE' WHERE source_id = ?";
         jdbcTemplate.update(sql, sourceId);
-        clearCache();
+    }
+
+    public void evictByCredentialId(String credentialId) {
+        if (credentialId == null) return;
+        activeCredentialCache.values().removeIf(cached -> credentialId.equals(cached.record().credentialId()));
+    }
+
+    public void evictBySourceId(String sourceId) {
+        if (sourceId == null) return;
+        activeCredentialCache.values().removeIf(cached -> sourceId.equals(cached.record().sourceId()));
+    }
+
+    public void evictByVendorId(String vendorId) {
+        if (vendorId == null) return;
+        activeCredentialCache.values().removeIf(cached -> vendorId.equals(cached.record().vendorId()));
     }
 
     /**

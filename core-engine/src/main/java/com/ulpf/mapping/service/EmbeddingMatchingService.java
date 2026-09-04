@@ -120,4 +120,11 @@ public class EmbeddingMatchingService {
     private double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
     }
+
+    /**
+     * Clear cached canonical embeddings from memory to release RAM immediately.
+     */
+    public void clearCache() {
+        embeddingRepository.clearCache();
+    }
 }
