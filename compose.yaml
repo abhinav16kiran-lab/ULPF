@@ -17,6 +17,12 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     networks:
       - ulpf-net
 
@@ -30,10 +36,19 @@ services:
     environment:
       - SQLITE_DB_PATH=/app/data/control-plane.db
       - CLICKHOUSE_URL=http://clickhouse:8123
+      - JWT_SECRET=${JWT_SECRET:-super-secret-key-for-dev-environment-12345}
+      - API_KEY_HASH_SALT=${API_KEY_HASH_SALT:-dev-salt-key-12345}
     volumes:
       - sqlite-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/notifications || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
     networks:
       - ulpf-net
 
@@ -44,8 +59,14 @@ services:
     container_name: ulpf-frontend
     ports:
       - "3000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     depends_on:
-      - core-engine
+      core-engine:
+        condition: service_healthy
     networks:
       - ulpf-net
 
