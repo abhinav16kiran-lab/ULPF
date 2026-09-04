@@ -37,8 +37,8 @@ public class AuthService {
             throw new BadCredentialsException("Invalid Credentials");
         }
 
-        // Verify that the requested role matches the user's stored role in SQLite
-        if (requestedRole != null && !user.role().name().equalsIgnoreCase(requestedRole.trim())) {
+        // Verify that the requested role is satisfied by the user's stored role in SQLite (supports role hierarchy / promotions)
+        if (requestedRole != null && !requestedRole.isBlank() && !user.role().satisfiesRequestedRole(requestedRole)) {
             throw new BadCredentialsException("Invalid Credentials");
         }
 
