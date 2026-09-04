@@ -1,9 +1,7 @@
 package com.ulpf.controlplane.controller;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
+import com.ulpf.common.db.OnboardingRepository.OnboardingRequestRecord;
+import com.ulpf.controlplane.service.OnboardingService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,7 +10,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.ulpf.controlplane.service.OnboardingService;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/v1/admin")
@@ -22,13 +22,13 @@ public class AdminController {
 
     private final OnboardingService onboardingService;
 
-    AdminController(OnboardingService onboardingService) {
+    public AdminController(OnboardingService onboardingService) {
         this.onboardingService = onboardingService;
     }
 
     @GetMapping("/onboard")
     public ResponseEntity<?> listRequests() {
-        List<OnboardingService.OnboardingRequest> requests = onboardingService.getAllRequests();
+        List<OnboardingRequestRecord> requests = onboardingService.getAllRequests();
         return ResponseEntity.ok(Map.of("requests", requests));
     }
 
@@ -43,15 +43,15 @@ public class AdminController {
             ));
         }
 
-        var updated = onboardingService.updateStatus(requestId, body.decision());
-        if (updated == null) {
-            return ResponseEntity.status(404).body(Map.of("error", "onboarding request not found"));
+        try {
+            OnboardingRequestRecord updated = onboardingService.processAdminDecision(requestId, body.decision());
+            return ResponseEntity.ok(Map.of(
+                    "requestId", updated.requestId(),
+                    "status", updated.status()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
-
-        return ResponseEntity.ok(Map.of(
-                "requestId", updated.requestId(),
-                "status", updated.status()
-        ));
     }
 }
 

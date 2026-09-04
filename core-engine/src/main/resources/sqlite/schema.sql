@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS sources (
     vendor_id TEXT NOT NULL,
     source_name TEXT NOT NULL,
     source_type TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')),
+    status TEXT NOT NULL CHECK (status IN ('PENDING_APPROVAL', 'ACTIVE', 'SUSPENDED', 'REVOKED')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id)
 );
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     credential_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
     key_hash TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'REVOKED')),
+    status TEXT NOT NULL CHECK (status IN ('PENDING_APPROVAL', 'ACTIVE', 'REVOKED')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES sources(source_id)
 );
@@ -95,6 +95,10 @@ CREATE INDEX IF NOT EXISTS idx_credentials_key_hash ON credentials(key_hash);
 
 -- Index for fast active mapping resolution per log source
 CREATE INDEX IF NOT EXISTS idx_mapping_versions_source_status ON mapping_versions(source_id, status);
+
+-- Indexes for fast TTL purging of notifications and completed onboarding requests
+CREATE INDEX IF NOT EXISTS idx_notifications_ttl ON notifications(read, created_at);
+CREATE INDEX IF NOT EXISTS idx_onboarding_requests_ttl ON onboarding_requests(status, created_at);
 
 -- 9. Mapping Aliases table: Dictionary of known field aliases for Layer 1 lookup
 -- Note: This is a proposal not yet merged into docs/DATABASE_SCHEMA.md - needs team sign-off

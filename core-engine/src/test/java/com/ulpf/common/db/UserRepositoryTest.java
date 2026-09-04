@@ -28,6 +28,7 @@ class UserRepositoryTest {
             CREATE TABLE users (
                 user_id TEXT PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -39,7 +40,7 @@ class UserRepositoryTest {
 
     @Test
     void testSaveAndFindByUsername() {
-        User user = new User(null, "testuser", "hashedpass", Role.ADMIN, null);
+        User user = new User(null, "testuser", "Test User", "hashedpass", Role.ADMIN, null);
         User saved = userRepository.save(user);
 
         assertTrue(userRepository.existsByUsername("testuser"));
@@ -47,6 +48,7 @@ class UserRepositoryTest {
         Optional<User> retrieved = userRepository.findByUsername("testuser");
         assertTrue(retrieved.isPresent());
         assertEquals("testuser", retrieved.get().username());
+        assertEquals("Test User", retrieved.get().name());
         assertEquals(Role.ADMIN, retrieved.get().role());
     }
 }

@@ -1,15 +1,27 @@
 package com.ulpf.analytics.service;
 
-import java.util.Random;
-import java.util.Set;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.Set;
+
+/**
+ * Service for running read-only aggregation queries against ClickHouse.
+ */
 @Service
 public class AnalyticsService {
 
+    private static final Logger log = LoggerFactory.getLogger(AnalyticsService.class);
     private static final Set<String> VALID_AGGREGATIONS = Set.of("COUNT", "AVG", "MIN", "MAX", "SUM");
-    private static final Random random = new Random();
+
+    private final JdbcTemplate clickhouseJdbcTemplate;
+
+    public AnalyticsService(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
+        this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+    }
 
     public record AnalyticsResult(String table, String column, String aggregation, double result) {}
 
@@ -18,9 +30,39 @@ public class AnalyticsService {
     }
 
     public AnalyticsResult runQuery(String table, String column, String aggregation) {
-        // TODO: replace with real read-only ClickHouse query once integration is ready
-        // e.g. SELECT COUNT(column) FROM ulpf_events.table
-        double fakeResult = random.nextInt(100);
-        return new AnalyticsResult(table, column, aggregation.toUpperCase(), fakeResult);
+        if (!isValidAggregation(aggregation)) {
+            throw new IllegalArgumentException("Invalid aggregation function: " + aggregation);
+        }
+
+        String aggUpper = aggregation.toUpperCase();
+        String safeTable = sanitizeIdentifier(table);
+        String safeColumn = sanitizeIdentifier(column);
+
+        // Target ulpf_raw or ulpf_events database prefix if not explicitly provided
+        String fullTableName = safeTable.contains(".") ? safeTable : "ulpf_raw." + safeTable;
+
+        String sql = String.format("SELECT %s(%s) FROM %s", aggUpper, safeColumn, fullTableName);
+        log.info("Executing ClickHouse Analytics Query: {}", sql);
+
+        try {
+            Double queryResult = clickhouseJdbcTemplate.queryForObject(sql, Double.class);
+            double val = (queryResult != null) ? queryResult : 0.0;
+            return new AnalyticsResult(table, column, aggUpper, val);
+        } catch (Exception e) {
+            log.error("ClickHouse analytics query failed for table {}: {}", table, e.getMessage());
+            return new AnalyticsResult(table, column, aggUpper, 0.0);
+        }
+    }
+
+    private String sanitizeIdentifier(String input) {
+        if (input == null || input.isBlank()) {
+            throw new IllegalArgumentException("SQL identifier cannot be empty");
+        }
+        // Allow alphanumeric, underscores, and dots for table prefixing
+        String cleaned = input.trim();
+        if (!cleaned.matches("^[a-zA-Z0-9_.]+$")) {
+            throw new IllegalArgumentException("Invalid characters in SQL identifier: " + input);
+        }
+        return cleaned;
     }
 }

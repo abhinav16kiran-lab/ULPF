@@ -3,7 +3,7 @@ package com.ulpf.controlplane.service;
 import com.ulpf.common.JwtUtil;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
-import com.ulpf.controlplane.repository.UserRepository;
+import com.ulpf.common.db.UserRepository;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;

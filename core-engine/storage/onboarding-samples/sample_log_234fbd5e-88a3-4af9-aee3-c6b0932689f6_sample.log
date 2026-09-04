@@ -1,0 +1,2 @@
+src_ip=192.168.1.1 action=ALLOW
+src_ip=192.168.1.2 action=DENY

@@ -80,7 +80,14 @@ public class CredentialRepository {
             SELECT c.credential_id, c.source_id, s.vendor_id, c.key_hash, c.status, c.created_at
             FROM credentials c
             JOIN sources s ON c.source_id = s.source_id
-            WHERE c.key_hash = ? AND c.status = 'ACTIVE' AND s.status = 'ACTIVE'
+            WHERE c.key_hash = ?
+              AND c.status = 'ACTIVE'
+              AND s.status = 'ACTIVE'
+              AND EXISTS (
+                  SELECT 1 FROM vendors v
+                  WHERE v.vendor_id = s.vendor_id
+                    AND v.status = 'ACTIVE'
+              )
             """;
 
         List<CredentialRecord> list = jdbcTemplate.query(sql, ROW_MAPPER, keyHash);
@@ -118,6 +125,12 @@ public class CredentialRepository {
         jdbcTemplate.update(sql, credentialId);
 
         // Clear cache so revoked key is immediately evicted
+        clearCache();
+    }
+
+    public void activateCredentialForSource(String sourceId) {
+        String sql = "UPDATE credentials SET status = 'ACTIVE' WHERE source_id = ?";
+        jdbcTemplate.update(sql, sourceId);
         clearCache();
     }
 
