@@ -37,8 +37,9 @@ The system operates across two primary workflows: **Control-Plane Onboarding** a
 | **Event Storage** | ClickHouse 26.3 LTS (via `clickhouse-jdbc` 0.7.2) |
 | **AI Mapping Engine** | 4-Layer Hybrid Cascade (Dictionary, TF-IDF, Typo Match, Local ONNX `all-MiniLM-L6-v2`) |
 | **Centralized DB Layer** | `com.ulpf.common.db` (Dual Datasource, In-Memory Lazy Cache, 5-Min Eviction, Queue Buffering) |
-| **Frontend** | React + Node.js |
-| **Containerization** | Podman / Podman-Compose |
+| **Frontend** | React 19 + Vite 6 + Node.js 21 LTS |
+| **Containerization** | Podman / Podman-Compose / Docker Compose |
+| **CI/CD Pipeline** | GitHub Actions (`.github/workflows/ci-cd.yml`) with Java 21 / Node 21 tests, GHCR auto-publish, and `paths-ignore` doc skipping |
 
 ---
 

@@ -6,9 +6,17 @@ on:
       - main
       - "feature/*"
       - "ci-cd-implementation"
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
 
 env:
   REGISTRY: ghcr.io

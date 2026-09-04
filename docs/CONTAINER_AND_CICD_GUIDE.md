@@ -273,9 +273,21 @@ name: ULPF CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main", "feature/*" ]
+    branches:
+      - main
+      - "feature/*"
+      - "ci-cd-implementation"
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
 
 env:
   REGISTRY: ghcr.io
@@ -344,6 +356,10 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Lowercase Repository Name for GHCR
+        run: |
+          echo "IMAGE_PREFIX=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
