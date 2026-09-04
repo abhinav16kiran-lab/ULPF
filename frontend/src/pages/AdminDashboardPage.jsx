@@ -77,21 +77,29 @@ function AdminDashboardPage() {
       {!loading && !error && requests.length > 0 && (
         <ul>
           {requests.map((req) => (
-            <li key={req.requestId}>
+            <li key={req.requestId} style={{ marginBottom: "15px", padding: "10px", border: "1px solid #ccc", borderRadius: "5px" }}>
               <p>
                 <strong>Request ID:</strong> {req.requestId}<br />
-                <strong>Submitted By:</strong> {req.submittedBy}<br />
-                <strong>Vendor:</strong> {req.vendorName}<br />
-                <strong>Source:</strong> {req.sourceName}<br />
-                <strong>Source Type:</strong> {req.sourceType}<br />
-                <strong>Status:</strong> {req.status}<br />
+                <strong>User ID:</strong> {req.userId}<br />
+                <strong>Source ID:</strong> {req.sourceId || "N/A"}<br />
+                <strong>Request Type:</strong> {req.requestType}<br />
+                <strong>Status:</strong> <span style={{ fontWeight: "bold", color: req.status === "APPROVED" ? "green" : req.status === "REJECTED" ? "red" : "orange" }}>{req.status}</span><br />
                 <strong>Created At:</strong> {req.createdAt}
               </p>
+              {req.sampleMetadata && (
+                <details style={{ marginBottom: "10px" }}>
+                  <summary style={{ cursor: "pointer", color: "#0066cc" }}>View Sample Metadata</summary>
+                  <pre style={{ background: "#f8f9fa", padding: "8px", borderRadius: "4px", fontSize: "0.85em", overflowX: "auto" }}>
+                    {req.sampleMetadata}
+                  </pre>
+                </details>
+              )}
               {req.status === "SUBMITTED" && (
                 <div>
                   <button
                     onClick={() => handleDecision(req.requestId, "APPROVED")}
                     disabled={actionLoading === req.requestId}
+                    style={{ background: "#4CAF50", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}
                   >
                     {actionLoading === req.requestId ? "Processing…" : "Approve"}
                   </button>
@@ -99,6 +107,7 @@ function AdminDashboardPage() {
                   <button
                     onClick={() => handleDecision(req.requestId, "REJECTED")}
                     disabled={actionLoading === req.requestId}
+                    style={{ background: "#f44336", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}
                   >
                     {actionLoading === req.requestId ? "Processing…" : "Reject"}
                   </button>

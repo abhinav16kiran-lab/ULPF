@@ -51,6 +51,9 @@ function OnboardingPage() {
 
       setResult({
         requestId: response.data.requestId,
+        sourceId: response.data.sourceId,
+        vendorId: response.data.vendorId,
+        apiKey: response.data.apiKey,
         status: response.data.status,
         message: response.data.message,
       });
@@ -145,11 +148,24 @@ function OnboardingPage() {
       </form>
 
       {result && (
-        <div>
-          <h2>Request Submitted</h2>
-          <p>Request ID: {result.requestId}</p>
-          <p>Status: {result.status}</p>
-          {result.message && <p>Message: {result.message}</p>}
+        <div style={{ marginTop: "20px", padding: "15px", border: "1px solid #4CAF50", borderRadius: "5px" }}>
+          <h2>Request Submitted Successfully</h2>
+          <p><strong>Request ID:</strong> {result.requestId}</p>
+          <p><strong>Source ID:</strong> {result.sourceId}</p>
+          <p><strong>Status:</strong> {result.status}</p>
+
+          {result.apiKey && (
+            <div style={{ background: "#f4f4f4", padding: "10px", borderRadius: "4px", margin: "10px 0" }}>
+              <p style={{ color: "#d9534f", fontWeight: "bold", margin: "0 0 5px 0" }}>
+                ⚠️ Save your API Key now! For security reasons, it will not be shown again:
+              </p>
+              <code style={{ background: "#e0e0e0", padding: "4px 8px", borderRadius: "3px", fontSize: "1.1em" }}>
+                {result.apiKey}
+              </code>
+            </div>
+          )}
+
+          {result.message && <p>{result.message}</p>}
         </div>
       )}
 

@@ -3,73 +3,73 @@
 ## P0 — Core System
 
 ### Repository
-- [ ] Git repository finalized
-- [ ] README/setup instructions
-- [ ] `.env.example`, `.gitignore`, `.gitattributes`
-- [ ] Architecture/API/database documentation
-- [ ] Podman/Compose configuration
+- [x] Git repository finalized
+- [x] README/setup instructions
+- [x] `.env.example`, `.gitignore`, `.gitattributes`
+- [x] Architecture/API/database documentation
+- [x] Podman/Compose configuration
 
 ### Control Plane
-- [ ] SQLite schema
-- [ ] Users/vendor/source/credential CRUD
-- [ ] Mapping-version CRUD
-- [ ] Onboarding requests
-- [ ] Notifications
-- [ ] Login + basic RBAC
-- [ ] API-key generation and hashed storage
-- [ ] Vendor/source status handling
+- [x] SQLite schema
+- [x] Users/vendor/source/credential CRUD
+- [x] Mapping-version CRUD
+- [x] Onboarding requests
+- [x] Notifications
+- [x] Login + basic RBAC
+- [x] API-key generation and hashed storage
+- [x] Vendor/source status handling
 
 ### Onboarding
-- [ ] `/onboard` UI
-- [ ] sample-log upload
-- [ ] optional schema/documentation upload
-- [ ] onboarding request creation
-- [ ] mapping proposal generation
-- [ ] confidence output
-- [ ] unknown-field proposal
-- [ ] admin `/admin` review screen
-- [ ] current canonical schema display
-- [ ] proposal-vs-schema comparison
-- [ ] edit/approve/reject
-- [ ] mapping version activation
-- [ ] credential issuance/activation
+- [x] `/onboard` UI
+- [x] sample-log upload
+- [x] optional schema/documentation upload
+- [x] onboarding request creation
+- [x] mapping proposal generation
+- [x] confidence output
+- [x] unknown-field proposal
+- [x] admin `/admin` review screen
+- [x] current canonical schema display
+- [x] proposal-vs-schema comparison
+- [x] edit/approve/reject
+- [x] mapping version activation
+- [x] credential issuance/activation
 
 ## P0 — Runtime Ingestion
-- [ ] `POST /v1/events`
-- [ ] credential authentication
-- [ ] vendor/source resolution
-- [ ] `event_id` generation
-- [ ] `lineage_id` assignment
-- [ ] raw-first persistence
-- [ ] active mapping lookup
-- [ ] parse/normalize
-- [ ] normalized ClickHouse write
-- [ ] error handling without raw-data loss
-- [ ] raw ↔ normalized traceability
+- [x] `POST /v1/events`
+- [x] credential authentication
+- [x] vendor/source resolution
+- [x] `event_id` generation
+- [x] `lineage_id` assignment
+- [x] raw-first persistence
+- [x] active mapping lookup
+- [x] parse/normalize
+- [x] normalized ClickHouse write
+- [x] error handling without raw-data loss
+- [x] raw ↔ normalized traceability
 
 ## P0 — ClickHouse
-- [ ] One ClickHouse instance/container
-- [ ] `ulpf_raw` database
-- [ ] `ulpf_events` database
-- [ ] `raw_events` table
-- [ ] persistent ClickHouse volume
-- [ ] runtime schema manager
-- [ ] event-table `event_id` + `lineage_id` validation
-- [ ] runtime table creation test
-- [ ] runtime column addition test
-- [ ] raw-to-normalized backtracking test
+- [x] One ClickHouse instance/container
+- [x] `ulpf_raw` database
+- [x] `ulpf_events` database
+- [x] `raw_events` table (with 7-day ZSTD(15) TTL compression)
+- [x] persistent ClickHouse volume
+- [x] runtime schema manager
+- [x] event-table `event_id` + `lineage_id` validation
+- [x] runtime table creation test
+- [x] runtime column addition test
+- [x] raw-to-normalized backtracking test
 
 ## P0 — Analytics
-- [ ] React analytics page
-- [ ] Spring Boot analytics API
-- [ ] server-side authorization
-- [ ] read-only ClickHouse queries
-- [ ] predefined query templates
-- [ ] compact result JSON
-- [ ] table view
-- [ ] at least one chart
-- [ ] query timeout/result limit
-- [ ] direct browser→ClickHouse blocked
+- [x] React analytics page
+- [x] Spring Boot analytics API
+- [x] server-side authorization
+- [x] read-only ClickHouse queries
+- [x] predefined query templates
+- [x] compact result JSON
+- [] table view
+- [] at least one chart
+- [x] query timeout/result limit
+- [x] direct browser→ClickHouse blocked
 
 Recommended initial visuals:
 

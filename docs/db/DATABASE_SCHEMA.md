@@ -188,7 +188,8 @@ CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(received_at)
-ORDER BY (vendor_id, received_at, event_id);
+ORDER BY (vendor_id, received_at, event_id)
+TTL received_at + INTERVAL 7 DAY RECOMPRESS CODEC(ZSTD(15));
 ```
 
 ## Columns
@@ -308,10 +309,12 @@ ORDER BY received_at;
 
 ---
 
-# 8. Open Database Decisions
+# 8. Finalized Database Decisions & Retention Policies
 
-- Exact ClickHouse partition/order keys after workload testing
-- Retention policies
+- **Retention Policies**:
+  - **ClickHouse Log Compression**: `TTL received_at + INTERVAL 7 DAY RECOMPRESS CODEC(ZSTD(15))` applied to `raw_events` for non-destructive log block compression.
+  - **SQLite Notifications Cleanup**: Read notifications purged after 14 days, unread notifications purged after 60 days via `NotificationPurgeScheduler`.
+  - **SQLite Onboarding Sample Reclaim**: `sample_metadata` JSON in `onboarding_requests` nullified after 7 days to reclaim disk space while retaining request audit history.
+- Exact ClickHouse partition/order keys after workload testing (`toYYYYMM(received_at)` / `vendor_id, received_at, event_id`)
 - Ingestion duplicate/idempotency semantics
-- Exact schema-registry persistence location
-- Any logical parent/child event references beyond `lineage_id`
+- Dynamic runtime schema creation in `ulpf_events` on admin approval

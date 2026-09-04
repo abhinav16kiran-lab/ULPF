@@ -5,8 +5,9 @@
 core-engine/target/
 *.class
 
-# SQLite data files (generated at runtime, not source)
+# SQLite data files & local storage (generated at runtime, not source)
 core-engine/data/
+core-engine/storage/
 *.db
 *.db-journal
 

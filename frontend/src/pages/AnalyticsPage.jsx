@@ -2,8 +2,6 @@ import { useState } from "react";
 import client from "../api/client";
 import LogoutButton from "../components/LogoutButton";
 
-// NOTE: Backend currently returns non-real/placeholder data.
-// The result number isn't meaningful yet — this is just wiring.
 
 const AGGREGATIONS = ["COUNT", "AVG", "MIN", "MAX", "SUM"];
 
