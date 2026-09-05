@@ -131,6 +131,22 @@ public class OnboardingService {
         return onboardingRepository.findAllRequests();
     }
 
+    public List<OnboardingRequestRecord> getUserRequests(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+        return onboardingRepository.findRequestsByUserId(user.userId());
+    }
+
+    public List<SourceRecord> getUserSources(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+        Optional<VendorRecord> vendorOpt = vendorRepository.findByOwnerUserId(user.userId());
+        if (vendorOpt.isEmpty()) {
+            return List.of();
+        }
+        return sourceRepository.findByVendorId(vendorOpt.get().vendorId());
+    }
+
     public OnboardingRequestRecord processAdminDecision(String requestId, String decision) {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
@@ -153,6 +169,9 @@ public class OnboardingService {
                 );
             } else {
                 sourceRepository.revokeSource(req.sourceId());
+                // Drop unapproved candidate mapping records immediately on rejection
+                mappingRepository.deleteCandidateVersions(req.sourceId());
+
                 onboardingRepository.saveNotification(
                         req.userId(),
                         "Onboarding Request Rejected",
@@ -167,9 +186,17 @@ public class OnboardingService {
     }
 
     private void activateCandidateMappingForSource(String sourceId) {
-        Optional<MappingVersionRecord> candidateOpt = mappingRepository.findActiveBySourceId(sourceId);
+        Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {
             mappingRepository.activateVersion(candidateOpt.get().mappingId(), sourceId);
+        }
+    }
+
+    public void updateCandidateMapping(String requestId, String newMappingJson) {
+        OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
+                .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
+        if (req.sourceId() != null) {
+            mappingRepository.updateCandidateMappingJson(req.sourceId(), newMappingJson);
         }
     }
 

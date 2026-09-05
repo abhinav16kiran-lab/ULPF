@@ -136,6 +136,60 @@ public class MappingRepository {
         jdbcTemplate.update(activateSql, mappingId);
     }
 
+    /**
+     * Finds the CANDIDATE mapping version for a given source ID.
+     */
+    public Optional<MappingVersionRecord> findCandidateBySourceId(String sourceId) {
+        String sql = """
+            SELECT mapping_id, source_id, version, mapping_json, status, created_at
+            FROM mapping_versions
+            WHERE source_id = ? AND status = 'CANDIDATE'
+            ORDER BY version DESC
+            """;
+
+        List<MappingVersionRecord> results = jdbcTemplate.query(sql, ROW_MAPPER, sourceId);
+        return results.stream().findFirst();
+    }
+
+    /**
+     * Updates the mapping_json blob for a CANDIDATE mapping version (Admin editing feature).
+     */
+    public void updateCandidateMappingJson(String sourceId, String newMappingJson) {
+        String sql = "UPDATE mapping_versions SET mapping_json = ? WHERE source_id = ? AND status = 'CANDIDATE'";
+        jdbcTemplate.update(sql, newMappingJson, sourceId);
+    }
+
+    /**
+     * Drops all CANDIDATE mapping versions for a source ID upon request rejection.
+     */
+    public void deleteCandidateVersions(String sourceId) {
+        String sql = "DELETE FROM mapping_versions WHERE source_id = ? AND status = 'CANDIDATE'";
+        jdbcTemplate.update(sql, sourceId);
+    }
+
+    /**
+     * Drops a specific CANDIDATE mapping version by mapping ID upon request rejection.
+     * Prevents accidental deletion of concurrent candidate requests for the same source.
+     */
+    public void deleteCandidateByMappingId(String mappingId) {
+        String sql = "DELETE FROM mapping_versions WHERE mapping_id = ? AND status = 'CANDIDATE'";
+        jdbcTemplate.update(sql, mappingId);
+    }
+
+    /**
+     * Finds all valid (ACTIVE and RETIRED) mapping versions for a source ordered by version DESC.
+     * Used for multi-version fallback matching during log ingestion.
+     */
+    public List<MappingVersionRecord> findAllValidVersionsBySourceId(String sourceId) {
+        String sql = """
+            SELECT mapping_id, source_id, version, mapping_json, status, created_at
+            FROM mapping_versions
+            WHERE source_id = ? AND status IN ('ACTIVE', 'RETIRED')
+            ORDER BY version DESC
+            """;
+        return jdbcTemplate.query(sql, ROW_MAPPER, sourceId);
+    }
+
     public void invalidateSource(String sourceId) {
         if (sourceId != null) {
             activeMappingCache.remove(sourceId);

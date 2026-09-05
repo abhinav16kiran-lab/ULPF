@@ -14,6 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.bind.annotation.PatchMapping;
+
 @RestController
 @RequestMapping("/v1/admin")
 public class AdminController {
@@ -21,6 +24,7 @@ public class AdminController {
     private static final Set<String> VALID_DECISIONS = Set.of("APPROVED", "REJECTED");
 
     private final OnboardingService onboardingService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AdminController(OnboardingService onboardingService) {
         this.onboardingService = onboardingService;
@@ -51,6 +55,28 @@ public class AdminController {
             ));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PatchMapping("/onboard/{requestId}/mapping")
+    public ResponseEntity<?> editCandidateMapping(
+            @PathVariable String requestId,
+            @RequestBody Map<String, Object> body
+    ) {
+        if (!body.containsKey("mappingJson")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "mappingJson field is required"));
+        }
+
+        try {
+            Object raw = body.get("mappingJson");
+            String mappingJsonStr = (raw instanceof String str) ? str : objectMapper.writeValueAsString(raw);
+            onboardingService.updateCandidateMapping(requestId, mappingJsonStr);
+            return ResponseEntity.ok(Map.of(
+                    "requestId", requestId,
+                    "message", "Candidate mapping updated successfully"
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
         }
     }
 }

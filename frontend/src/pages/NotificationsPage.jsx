@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import client from "../api/client";
-import LogoutButton from "../components/LogoutButton";
+import Navbar from "../components/Navbar";
 
 function NotificationsPage() {
   const [notifications, setNotifications] = useState([]);
@@ -45,8 +45,9 @@ function NotificationsPage() {
 
   return (
     <div>
-      <LogoutButton />
-      <h1>Notifications</h1>
+      <Navbar />
+      <div style={{ padding: "0 20px" }}>
+        <h2>Notifications & Alerts</h2>
 
       {loading && <p>Loading…</p>}
       {error && <p style={{ color: "red" }}>{error}</p>}
@@ -93,6 +94,7 @@ function NotificationsPage() {
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }

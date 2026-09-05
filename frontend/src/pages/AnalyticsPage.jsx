@@ -1,13 +1,12 @@
 import { useState } from "react";
 import client from "../api/client";
-import LogoutButton from "../components/LogoutButton";
-
+import Navbar from "../components/Navbar";
 
 const AGGREGATIONS = ["COUNT", "AVG", "MIN", "MAX", "SUM"];
 
 function AnalyticsPage() {
-  const [table, setTable] = useState("");
-  const [column, setColumn] = useState("");
+  const [table, setTable] = useState("logs_canonical");
+  const [column, setColumn] = useState("source_ip");
   const [aggregation, setAggregation] = useState("COUNT");
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -45,8 +44,9 @@ function AnalyticsPage() {
 
   return (
     <div>
-      <LogoutButton />
-      <h1>Analytics</h1>
+      <Navbar />
+      <div style={{ padding: "0 20px" }}>
+        <h2>Log Analytics & Aggregation Engine</h2>
 
       <form onSubmit={handleSubmit}>
         <div>
@@ -104,6 +104,7 @@ function AnalyticsPage() {
       {error && (
         <p style={{ color: "red" }}>{error}</p>
       )}
+      </div>
     </div>
   );
 }

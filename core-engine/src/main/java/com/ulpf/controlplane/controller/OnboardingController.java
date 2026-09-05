@@ -73,6 +73,18 @@ public class OnboardingController {
         ));
     }
 
+    @org.springframework.web.bind.annotation.GetMapping("/onboard/my-requests")
+    public ResponseEntity<?> getMyRequests(@AuthenticationPrincipal UlpfPrincipal principal) {
+        var requests = onboardingService.getUserRequests(principal.username());
+        return ResponseEntity.ok(Map.of("requests", requests));
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping("/onboard/my-sources")
+    public ResponseEntity<?> getMySources(@AuthenticationPrincipal UlpfPrincipal principal) {
+        var sources = onboardingService.getUserSources(principal.username());
+        return ResponseEntity.ok(Map.of("sources", sources));
+    }
+
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
     }

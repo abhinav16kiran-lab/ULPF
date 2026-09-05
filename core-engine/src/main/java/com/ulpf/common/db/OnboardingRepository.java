@@ -95,6 +95,11 @@ public class OnboardingRepository {
         return jdbcTemplate.query(sql, REQUEST_ROW_MAPPER);
     }
 
+    public List<OnboardingRequestRecord> findRequestsByUserId(String userId) {
+        String sql = "SELECT request_id, user_id, source_id, request_type, sample_metadata, status, created_at FROM onboarding_requests WHERE user_id = ? ORDER BY created_at DESC";
+        return jdbcTemplate.query(sql, REQUEST_ROW_MAPPER, userId);
+    }
+
     public void updateRequestStatus(String requestId, String status) {
         String sql = "UPDATE onboarding_requests SET status = ? WHERE request_id = ?";
         jdbcTemplate.update(sql, status, requestId);
