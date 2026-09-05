@@ -106,10 +106,17 @@ public class EventIngestionService {
 
         boolean isSensor = "SEN_TEL".equalsIgnoreCase(logType) || "SENSOR".equalsIgnoreCase(logType);
 
-        // Assign active lineage ID: for SEN_TEL logs, share active window lineage ID; for REG_LOG, generate 1:1 ID
-        String lineageId = isSensor 
-                ? sensorTelemetryEvaluator.getOrCreateLineageId(cred.sourceId())
-                : UUID.randomUUID().toString();
+        // Evaluate sensor stream or assign regular log lineage ID atomically
+        String lineageId;
+        SensorTelemetryEvaluator.EvaluationResult evalResult = null;
+
+        if (isSensor) {
+            Double numericVal = extractNumericValue(payload, sensorField);
+            evalResult = sensorTelemetryEvaluator.evaluate(cred.sourceId(), numericVal, delta, maxIntervalMs);
+            lineageId = evalResult.lineageId();
+        } else {
+            lineageId = UUID.randomUUID().toString();
+        }
 
         // Serialize raw payload to JSON
         String rawJson;
@@ -133,14 +140,10 @@ public class EventIngestionService {
 
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
-            Double numericVal = extractNumericValue(payload, sensorField);
-            SensorTelemetryEvaluator.EvaluationResult evalResult = 
-                    sensorTelemetryEvaluator.evaluate(cred.sourceId(), numericVal, delta, maxIntervalMs);
-
-            if (evalResult.shouldEmit()) {
+            if (evalResult != null && evalResult.shouldEmit()) {
                 CanonicalEventRecord canonicalEvent = new CanonicalEventRecord(
                         eventId,
-                        evalResult.lineageId(),
+                        lineageId,
                         cred.vendorId(),
                         cred.sourceId(),
                         mappingVersion,
@@ -164,6 +167,7 @@ public class EventIngestionService {
             );
             clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
         }
+
 
         return new IngestResult(eventId, cred.vendorId(), cred.sourceId(), "ACCEPTED", now);
     }

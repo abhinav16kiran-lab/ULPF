@@ -1,6 +1,6 @@
 # P1 — Sensor Optimization Technical Architecture & Workflow Specification
 
-This document provides a comprehensive technical breakdown of **P1 — Sensor Optimization** within the Universal Log Processing Framework (ULPF). It details the metadata data model, onboarding and admin workflows, divergence logic during event ingestion, 100% raw reading preservation, shared `lineage_id` windowing, and raw-to-aggregate backtracking.
+This document provides a comprehensive technical breakdown of **P1 — Sensor Optimization** within the Universal Log Processing Framework (ULPF). It details the metadata data model, onboarding and admin workflows, divergence logic during event ingestion, 100% raw reading preservation, shared `lineage_id` windowing, atomic concurrency handling, and raw-to-aggregate backtracking.
 
 ---
 
@@ -24,20 +24,17 @@ sequenceDiagram
     Ingest->>RAM: Fetch Active Mapping & Metadata
     RAM-->>Ingest: { log_type: "SEN_TEL", delta: 2.5, max_interval_ms: 60000, sensor_field: "temperature" }
     
-    Ingest->>SensorEval: Get Current Window Lineage ID
-    SensorEval-->>Ingest: lineageId ("ling_984a12")
+    Ingest->>SensorEval: Evaluate & Obtain Window Lineage ID (Atomic)
+    SensorEval-->>Ingest: EvaluationResult(shouldEmit, lineageId, value)
     
     Ingest->>RawDB: Enqueue Raw Event (eventId, lineageId, rawPayload) [ALWAYS PRESERVED]
 
     alt log_type == "SEN_TEL"
-        Ingest->>Ingest: Extract Numeric Value (e.g., 24.5 from "temperature")
-        Ingest->>SensorEval: Evaluate Emission Rule(numericVal, now)
         alt Rule Met (|current - last| >= delta OR elapsed >= max_interval)
-            SensorEval-->>Ingest: EMIT = true (emittedValue, activeLineageId)
             Ingest->>CanonDB: Write Emitted Aggregate Event (eventId, lineageId, value)
-            Ingest->>SensorEval: Rotate to NEW Lineage ID for Next Window
+            Note over SensorEval: Lineage ID rotated to NEW UUID for next window
         else Rule Not Met
-            SensorEval-->>Ingest: EMIT = false (Suppress analytics emission)
+            Note over Ingest: Suppress analytics emission (raw event saved with active lineageId)
         end
     else log_type == "REG_LOG"
         Ingest->>CanonDB: Write Canonical Event (Fresh Lineage ID)
@@ -94,7 +91,7 @@ Metadata is **never required in raw incoming event payloads** from vendor device
 
 ---
 
-## 4. Evaluation Rules & Lineage Backtracking
+## 4. Evaluation Rules, Lineage Backtracking, & Concurrency Handling
 
 ### Sensor Emission Rule Logic
 
@@ -104,10 +101,24 @@ $$\text{Emit} \iff |v_{\text{current}} - v_{\text{last}}| \ge \Delta \quad \lor 
 - **First Event**: Always emits and initializes the baseline `v_last` and `t_last`.
 - **Suppressed Events**: When neither condition is met, the raw reading is stored in `ulpf_raw.raw_events` with the window's `lineage_id`, but no canonical aggregate event is emitted.
 
+### Concurrency, Atomic Evaluation, & Race Condition Prevention
+
+Under high request rates with multi-threaded Tomcat ingestion workers, race conditions could occur if lineage ID resolution and rule evaluation were non-atomic (e.g. if Thread B fetched `lineage_id` before Thread A finished evaluating the trigger event).
+
+To guarantee strict race-free execution:
+1. **Atomic Evaluation Block**: In `EventIngestionService.java`, the call to `sensorTelemetryEvaluator.evaluate(...)` is executed **before** instantiating `RawEventRecord`.
+2. **Per-Source Locking**: `SensorTelemetryEvaluator.java` acquires a monitor lock (`synchronized(state)`) scoped exclusively to that `sourceId`.
+3. **Single Lineage Assignment**:
+   - The trigger event (Event 1) that causes the delta/interval threshold to be met receives the current window's `lineage_id` (`L1`).
+   - Inside the synchronized block, `lastEmittedValue` and `lastEmittedTimeMs` are updated, and `currentLineageId` is rotated to a new UUID (`L2`) **before releasing the lock**.
+   - Subsequent Event 2 receives `L2` atomically.
+   - `EventIngestionService` uses `evalResult.lineageId()` for **both** the `RawEventRecord` and `CanonicalEventRecord`.
+
+> **HFT Optimization Note**: The current prototype uses per-source monitor locks (`synchronized(state)`). For ultra-low latency or High-Frequency Trading (HFT) requirements, this can be swapped for a lock-free CAS (`AtomicReference` state swapping) or LMAX Disruptor ring buffer pattern to eliminate thread contention entirely.
+
 ### Lineage Grouping & Raw-to-Aggregate Backtracking
 
 - **Lineage ID Windowing**: All raw events received during a single aggregate window share the **exact same `lineage_id`**.
-- **Lineage ID Rotation**: Upon an aggregate emission, the `SensorTelemetryEvaluator` updates `lastEmittedValue` and `lastEmittedTimeMs`, and **rotates `lineage_id`** to a new UUID for the subsequent window.
 - **Backtracking API Endpoint (`GET /v1/analytics/lineage/{lineageId}`)**:
   - Anyone inspecting an emitted aggregate event can take its `lineage_id` and query:
     ```http
@@ -121,5 +132,5 @@ $$\text{Emit} \iff |v_{\text{current}} - v_{\text{last}}| \ge \Delta \quad \lor 
 
 The P1 Sensor Optimization suite is covered by automated unit and integration tests:
 - `SensorTelemetryEvaluatorTest`: Tests first emission, delta thresholding, max-interval timeouts, suppression, and lineage rotation.
-- `EventIngestionServiceTest`: Tests 100% raw reading preservation and metadata extraction.
+- `EventIngestionServiceTest`: Tests 100% raw reading preservation, atomic lineage assignment, and metadata extraction.
 - `AnalyticsServiceTest`: Tests lineage backtracking queries.
