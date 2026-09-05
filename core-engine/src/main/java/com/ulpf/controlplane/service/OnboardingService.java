@@ -1,6 +1,8 @@
 package com.ulpf.controlplane.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ulpf.common.db.CredentialRepository;
 import com.ulpf.common.db.CredentialRepository.CredentialRecord;
 import com.ulpf.common.db.MappingRepository;
@@ -81,8 +83,28 @@ public class OnboardingService {
             MultipartFile sampleLogFile,
             MultipartFile schemaFile
     ) {
+        return submitRequest(username, vendorName, sourceName, sourceType, "REG_LOG", null, null, null, sampleLogFile, schemaFile);
+    }
+
+    public OnboardingSubmissionResult submitRequest(
+            String username,
+            String vendorName,
+            String sourceName,
+            String sourceType,
+            String logType,
+            Double delta,
+            Long maxIntervalMs,
+            String sensorField,
+            MultipartFile sampleLogFile,
+            MultipartFile schemaFile
+    ) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+
+        String effectiveLogType = (logType != null && !logType.isBlank()) ? logType.toUpperCase() : "REG_LOG";
+        if ("SENSOR".equals(effectiveLogType)) {
+            effectiveLogType = "SEN_TEL";
+        }
 
         // 1. Resolve or create vendor record for user
         VendorRecord vendor = vendorRepository.findByOwnerUserId(user.userId())
@@ -104,18 +126,21 @@ public class OnboardingService {
 
         // 5. Extract sample snippet & save files to disk
         String requestId = UUID.randomUUID().toString();
-        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile);
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType, delta, maxIntervalMs, sensorField);
 
         // 6. Generate candidate mapping version via AI mapping engine
         List<MappingProposal> proposals = new ArrayList<>();
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
+
+        // Inject metadata block into candidate mapping_json
+        injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
 
         // 7. Save onboarding request record
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
                 requestId, user.userId(), source.sourceId(), "NEW_SOURCE", sampleMetadataJson, "SUBMITTED", LocalDateTime.now()
         ));
 
-        log.info("Onboarding request {} submitted for source {} with raw API key generated", requestId, source.sourceId());
+        log.info("Onboarding request {} submitted for source {} with raw API key generated and metadata injected", requestId, source.sourceId());
 
         return new OnboardingSubmissionResult(
                 req.requestId(),
@@ -125,6 +150,33 @@ public class OnboardingService {
                 req.status(),
                 "Onboarding request submitted successfully. Please save your API key now — for security reasons, it will not be displayed again. The key will become ACTIVE once approved by an administrator."
         );
+    }
+
+    private void injectMetadataIntoCandidateMapping(String sourceId, String logType, Double delta, Long maxIntervalMs, String sensorField) {
+        Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
+        if (candidateOpt.isPresent()) {
+            try {
+                MappingVersionRecord candidate = candidateOpt.get();
+                ObjectNode rootNode = (ObjectNode) objectMapper.readTree(candidate.mappingJson());
+                ObjectNode metaNode = rootNode.putObject("metadata");
+                metaNode.put("log_type", logType);
+                if (delta != null) {
+                    metaNode.put("delta", delta);
+                } else {
+                    metaNode.putNull("delta");
+                }
+                metaNode.put("max_interval_ms", maxIntervalMs != null ? maxIntervalMs : 60000L);
+                if (sensorField != null && !sensorField.isBlank()) {
+                    metaNode.put("sensor_field", sensorField);
+                } else {
+                    metaNode.putNull("sensor_field");
+                }
+                String updatedJson = objectMapper.writeValueAsString(rootNode);
+                mappingRepository.updateCandidateMappingJson(sourceId, updatedJson);
+            } catch (Exception e) {
+                log.warn("Could not inject metadata into candidate mapping for sourceId {}: {}", sourceId, e.getMessage());
+            }
+        }
     }
 
     public List<OnboardingRequestRecord> getAllRequests() {
@@ -200,8 +252,20 @@ public class OnboardingService {
         }
     }
 
-    private String processAndStoreSampleFiles(String requestId, MultipartFile sampleLogFile, MultipartFile schemaFile) {
+    private String processAndStoreSampleFiles(
+            String requestId, 
+            MultipartFile sampleLogFile, 
+            MultipartFile schemaFile,
+            String logType,
+            Double delta,
+            Long maxIntervalMs,
+            String sensorField
+    ) {
         Map<String, Object> metadata = new HashMap<>();
+        metadata.put("log_type", logType);
+        metadata.put("delta", delta);
+        metadata.put("max_interval_ms", maxIntervalMs != null ? maxIntervalMs : 60000L);
+        metadata.put("sensor_field", sensorField);
 
         if (sampleLogFile != null && !sampleLogFile.isEmpty()) {
             String sampleSnippet = extractTopLines(sampleLogFile, 50);

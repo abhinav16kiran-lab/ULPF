@@ -1,15 +1,18 @@
 package com.ulpf.analytics.service;
 
+import com.ulpf.common.db.ClickHouseIngestionRepository;
+import com.ulpf.common.db.ClickHouseIngestionRepository.RawEventRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Set;
 
 /**
- * Service for running read-only aggregation queries against ClickHouse.
+ * Service for running read-only aggregation queries and lineage backtracking against ClickHouse.
  */
 @Service
 public class AnalyticsService {
@@ -18,9 +21,14 @@ public class AnalyticsService {
     private static final Set<String> VALID_AGGREGATIONS = Set.of("COUNT", "AVG", "MIN", "MAX", "SUM");
 
     private final JdbcTemplate clickhouseJdbcTemplate;
+    private final ClickHouseIngestionRepository clickHouseIngestionRepository;
 
-    public AnalyticsService(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
+    public AnalyticsService(
+            @Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate,
+            ClickHouseIngestionRepository clickHouseIngestionRepository
+    ) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+        this.clickHouseIngestionRepository = clickHouseIngestionRepository;
     }
 
     public record AnalyticsResult(String table, String column, String aggregation, double result) {}
@@ -54,11 +62,14 @@ public class AnalyticsService {
         }
     }
 
+    public List<RawEventRecord> getLineage(String lineageId) {
+        return clickHouseIngestionRepository.findRawEventsByLineageId(lineageId);
+    }
+
     private String sanitizeIdentifier(String input) {
         if (input == null || input.isBlank()) {
             throw new IllegalArgumentException("SQL identifier cannot be empty");
         }
-        // Allow alphanumeric, underscores, and dots for table prefixing
         String cleaned = input.trim();
         if (!cleaned.matches("^[a-zA-Z0-9_.]+$")) {
             throw new IllegalArgumentException("Invalid characters in SQL identifier: " + input);

@@ -9,6 +9,10 @@ function OnboardingPage() {
   const [vendorName, setVendorName] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [sourceType, setSourceType] = useState("");
+  const [logType, setLogType] = useState("REG_LOG");
+  const [delta, setDelta] = useState("");
+  const [maxIntervalMs, setMaxIntervalMs] = useState("60000");
+  const [sensorField, setSensorField] = useState("");
   const [sampleLogFile, setSampleLogFile] = useState(null);
   const [schemaFile, setSchemaFile] = useState(null);
   const [result, setResult] = useState(null);
@@ -59,6 +63,13 @@ function OnboardingPage() {
     formData.append("vendorName", vendorName);
     formData.append("sourceName", sourceName);
     formData.append("sourceType", sourceType);
+    formData.append("logType", logType);
+
+    if (logType === "SEN_TEL") {
+      if (delta) formData.append("delta", delta);
+      if (maxIntervalMs) formData.append("maxIntervalMs", maxIntervalMs);
+      if (sensorField) formData.append("sensorField", sensorField);
+    }
 
     if (sampleLogFile) {
       formData.append("sampleLogFile", sampleLogFile);
@@ -86,6 +97,10 @@ function OnboardingPage() {
       setVendorName("");
       setSourceName("");
       setSourceType("");
+      setLogType("REG_LOG");
+      setDelta("");
+      setMaxIntervalMs("60000");
+      setSensorField("");
       setSampleLogFile(null);
       setSchemaFile(null);
       await fetchUserData();
@@ -148,7 +163,7 @@ function OnboardingPage() {
           </div>
 
           <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-source-type" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Source Type / Format (required)</label>
+            <label htmlFor="onboard-source-type" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Source Format (required)</label>
             <input
               id="onboard-source-type"
               type="text"
@@ -158,6 +173,74 @@ function OnboardingPage() {
               required
               style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
             />
+          </div>
+
+          {/* Log Stream Type Selector & Sensor Optimization Settings */}
+          <div style={{ marginBottom: "16px", background: "#f8f9fa", padding: "14px", borderRadius: "6px", border: "1px solid #e9ecef" }}>
+            <label style={{ fontWeight: "600", display: "block", marginBottom: "6px" }}>Log Stream Type</label>
+            <div style={{ display: "flex", gap: "15px", marginBottom: "10px" }}>
+              <label style={{ cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="logType"
+                  value="REG_LOG"
+                  checked={logType === "REG_LOG"}
+                  onChange={(e) => setLogType(e.target.value)}
+                  style={{ marginRight: "6px" }}
+                />
+                Regular Log Stream (REG_LOG)
+              </label>
+              <label style={{ cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="logType"
+                  value="SEN_TEL"
+                  checked={logType === "SEN_TEL"}
+                  onChange={(e) => setLogType(e.target.value)}
+                  style={{ marginRight: "6px" }}
+                />
+                ⚡ Sensor / Telemetry Stream (SEN_TEL)
+              </label>
+            </div>
+
+            {logType === "SEN_TEL" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginTop: "10px", background: "#eef2f7", padding: "12px", borderRadius: "6px" }}>
+                <div>
+                  <label htmlFor="sensor-delta" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Emission Delta Threshold</label>
+                  <input
+                    id="sensor-delta"
+                    type="number"
+                    step="any"
+                    value={delta}
+                    onChange={(e) => setDelta(e.target.value)}
+                    placeholder="e.g. 0.5"
+                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="sensor-max-interval" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Max Interval (ms)</label>
+                  <input
+                    id="sensor-max-interval"
+                    type="number"
+                    value={maxIntervalMs}
+                    onChange={(e) => setMaxIntervalMs(e.target.value)}
+                    placeholder="60000"
+                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="sensor-field" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Sensor Field Name</label>
+                  <input
+                    id="sensor-field"
+                    type="text"
+                    value={sensorField}
+                    onChange={(e) => setSensorField(e.target.value)}
+                    placeholder="e.g. temperature"
+                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: "12px" }}>
@@ -217,7 +300,7 @@ function OnboardingPage() {
           </div>
         )}
 
-        {/* My Onboarding Requests Feed */}
+        {/* My Onboarding Requests Feed Feed */}
         <div style={{ background: "white", padding: "20px", borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.08)", marginBottom: "25px" }}>
           <h3>My Onboarding Requests</h3>
           {myRequestsLoading && <p>Loading requests…</p>}
