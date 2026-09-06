@@ -1,23 +1,25 @@
 package com.ulpf.analytics.service;
 
+import com.ulpf.common.db.ClickHouseIngestionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;
-// import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class AnalyticsServiceTest {
 
     private JdbcTemplate clickhouseJdbcTemplate;
+    private ClickHouseIngestionRepository clickHouseIngestionRepository;
     private AnalyticsService analyticsService;
 
     @BeforeEach
     void setUp() {
         clickhouseJdbcTemplate = mock(JdbcTemplate.class);
-        analyticsService = new AnalyticsService(clickhouseJdbcTemplate);
+        clickHouseIngestionRepository = mock(ClickHouseIngestionRepository.class);
+        analyticsService = new AnalyticsService(clickhouseJdbcTemplate, clickHouseIngestionRepository);
     }
 
     @Test

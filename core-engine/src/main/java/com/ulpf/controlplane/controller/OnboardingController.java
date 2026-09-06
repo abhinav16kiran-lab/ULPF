@@ -4,6 +4,7 @@ import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,6 +32,10 @@ public class OnboardingController {
             @RequestParam String vendorName,
             @RequestParam String sourceName,
             @RequestParam String sourceType,
+            @RequestParam(required = false) String logType,
+            @RequestParam(required = false) Double delta,
+            @RequestParam(required = false) Long maxIntervalMs,
+            @RequestParam(required = false) String sensorField,
             @RequestParam(required = false) MultipartFile sampleLogFile,
             @RequestParam(required = false) MultipartFile schemaFile
     ) {
@@ -60,7 +65,7 @@ public class OnboardingController {
         }
 
         var saved = onboardingService.submitRequest(
-                username, vendorName, sourceName, sourceType, sampleLogFile, schemaFile
+                username, vendorName, sourceName, sourceType, logType, delta, maxIntervalMs, sensorField, sampleLogFile, schemaFile
         );
 
         return ResponseEntity.status(201).body(Map.of(
@@ -73,13 +78,13 @@ public class OnboardingController {
         ));
     }
 
-    @org.springframework.web.bind.annotation.GetMapping("/onboard/my-requests")
+    @GetMapping("/onboard/my-requests")
     public ResponseEntity<?> getMyRequests(@AuthenticationPrincipal UlpfPrincipal principal) {
         var requests = onboardingService.getUserRequests(principal.username());
         return ResponseEntity.ok(Map.of("requests", requests));
     }
 
-    @org.springframework.web.bind.annotation.GetMapping("/onboard/my-sources")
+    @GetMapping("/onboard/my-sources")
     public ResponseEntity<?> getMySources(@AuthenticationPrincipal UlpfPrincipal principal) {
         var sources = onboardingService.getUserSources(principal.username());
         return ResponseEntity.ok(Map.of("sources", sources));
