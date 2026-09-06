@@ -18,7 +18,7 @@ import java.util.List;
 public class EmbeddingRepository {
     
     private final JdbcTemplate jdbcTemplate;
-    private List<CanonicalEmbedding> cachedEmbeddings;
+    private volatile List<CanonicalEmbedding> cachedEmbeddings;
     
     public EmbeddingRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -26,29 +26,36 @@ public class EmbeddingRepository {
     
     /**
      * Get all canonical field embeddings, lazy-loading from SQLite into cache on first demand.
+     * Lock-free read path via volatile double-checked locking to avoid thread serialization.
      * 
      * @return list of canonical embeddings
      */
-    public synchronized List<CanonicalEmbedding> findAllCanonicalEmbeddings() {
-        if (cachedEmbeddings != null) {
-            return cachedEmbeddings;
+    public List<CanonicalEmbedding> findAllCanonicalEmbeddings() {
+        List<CanonicalEmbedding> local = cachedEmbeddings;
+        if (local != null) {
+            return local;
         }
         
-        try {
-            String sql = "SELECT canonical_field, embedding FROM mapping_embeddings";
-            
-            cachedEmbeddings = jdbcTemplate.query(sql, (rs, rowNum) -> {
-                String canonicalField = rs.getString("canonical_field");
-                byte[] embeddingBytes = rs.getBytes("embedding");
-                double[] embeddingVector = bytesToDoubleArray(embeddingBytes);
-                return new CanonicalEmbedding(canonicalField, embeddingVector);
-            });
-        } catch (Exception e) {
-            // Table might be empty or not exist yet
-            cachedEmbeddings = new ArrayList<>();
+        synchronized (this) {
+            local = cachedEmbeddings;
+            if (local == null) {
+                try {
+                    String sql = "SELECT canonical_field, embedding FROM mapping_embeddings";
+                    
+                    local = jdbcTemplate.query(sql, (rs, rowNum) -> {
+                        String canonicalField = rs.getString("canonical_field");
+                        byte[] embeddingBytes = rs.getBytes("embedding");
+                        double[] embeddingVector = bytesToDoubleArray(embeddingBytes);
+                        return new CanonicalEmbedding(canonicalField, embeddingVector);
+                    });
+                } catch (Exception e) {
+                    // Table might be empty or not exist yet
+                    local = new ArrayList<>();
+                }
+                cachedEmbeddings = local;
+            }
+            return local;
         }
-
-        return cachedEmbeddings;
     }
 
     /**

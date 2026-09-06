@@ -198,6 +198,8 @@ all-MiniLM-L6-v2 embeddings
 
 This is only for difficult semantic cases and is a stretch goal for the prototype.
 
+Detailed performance, memory safety, and concurrency mechanics are documented in [MAPPING_ENGINE_OPTIMIZATIONS.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/MAPPING_ENGINE_OPTIMIZATIONS.md).
+
 ## 11. Analytics
 
 Production path:
