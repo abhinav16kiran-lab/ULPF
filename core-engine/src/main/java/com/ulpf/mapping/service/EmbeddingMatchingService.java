@@ -38,9 +38,10 @@ public class EmbeddingMatchingService {
     public MappingCandidate matchWithFallback(String rawFieldName, double bestPriorScore) {
         try {
             // Embed the raw field name (not cleaned/preprocessed per design doc)
-            double[] fieldEmbedding = embeddingClient.getEmbedding(rawFieldName);
+            double[] rawFieldEmbedding = embeddingClient.getEmbedding(rawFieldName);
+            double[] fieldEmbedding = normalize(rawFieldEmbedding);
             
-            // Find best matching canonical field by cosine similarity
+            // Find best matching canonical field by pre-normalized dot product
             List<CanonicalEmbedding> canonicalEmbeddings = embeddingRepository.findAllCanonicalEmbeddings();
             
             if (canonicalEmbeddings == null || canonicalEmbeddings.isEmpty()) {
@@ -52,7 +53,7 @@ public class EmbeddingMatchingService {
             double bestRawSimilarity = -1.0;
             
             for (CanonicalEmbedding candidate : canonicalEmbeddings) {
-                double similarity = cosineSimilarity(fieldEmbedding, candidate.getEmbeddingVector());
+                double similarity = fastDotProduct(fieldEmbedding, candidate.getEmbeddingVector());
                 if (similarity > bestRawSimilarity) {
                     bestRawSimilarity = similarity;
                     bestMatch = candidate;
@@ -87,31 +88,37 @@ public class EmbeddingMatchingService {
     }
     
     /**
-     * Compute cosine similarity between two vectors.
+     * Compute fast dot product between two L2-normalized vectors.
+     * Since vectors are pre-normalized to unit length (||v|| = 1.0),
+     * cosine similarity simplifies to a tight dot product loop without square roots or norm math.
      */
-    private double cosineSimilarity(double[] v1, double[] v2) {
+    private double fastDotProduct(double[] v1, double[] v2) {
         if (v1.length != v2.length) {
             throw new IllegalArgumentException("Vectors must have same length");
         }
         
         double dotProduct = 0.0;
-        double norm1 = 0.0;
-        double norm2 = 0.0;
-        
         for (int i = 0; i < v1.length; i++) {
             dotProduct += v1[i] * v2[i];
-            norm1 += v1[i] * v1[i];
-            norm2 += v2[i] * v2[i];
         }
-        
-        norm1 = Math.sqrt(norm1);
-        norm2 = Math.sqrt(norm2);
-        
-        if (norm1 == 0.0 || norm2 == 0.0) {
-            return 0.0;
+        return dotProduct;
+    }
+    
+    private double[] normalize(double[] v) {
+        if (v == null || v.length == 0) return v;
+        double norm = 0.0;
+        for (double val : v) {
+            norm += val * val;
         }
-        
-        return dotProduct / (norm1 * norm2);
+        norm = Math.sqrt(norm);
+        if (norm > 0.0) {
+            double[] normalized = new double[v.length];
+            for (int i = 0; i < v.length; i++) {
+                normalized[i] = v[i] / norm;
+            }
+            return normalized;
+        }
+        return v;
     }
     
     /**

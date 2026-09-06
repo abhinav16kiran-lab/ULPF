@@ -26,11 +26,13 @@ public class TfidfTrainingStore {
     private List<String> vocabulary;
     private List<double[]> indexedVectors;
     private List<String> indexedLabels;
+    private List<Posting>[] invertedIndex;
     
     public TfidfTrainingStore(FieldPreprocessor preprocessor) {
         this.preprocessor = preprocessor;
     }
     
+    @SuppressWarnings("unchecked")
     @PostConstruct
     public void buildIndex() throws IOException {
         trainingExamples = loadTrainingExamples();
@@ -39,12 +41,23 @@ public class TfidfTrainingStore {
         
         indexedVectors = new ArrayList<>();
         indexedLabels = new ArrayList<>();
+        invertedIndex = new List[vocabulary.size()];
+        for (int i = 0; i < vocabulary.size(); i++) {
+            invertedIndex[i] = new ArrayList<>();
+        }
         
-        for (TrainingExample ex : trainingExamples) {
+        for (int docId = 0; docId < trainingExamples.size(); docId++) {
+            TrainingExample ex = trainingExamples.get(docId);
             String preprocessed = preprocessor.process(ex.getText()).getCleanedText();
             double[] vector = vectorize(preprocessed);
             indexedVectors.add(vector);
             indexedLabels.add(ex.getCanonicalField());
+            
+            for (int termIdx = 0; termIdx < vector.length; termIdx++) {
+                if (vector[termIdx] > 0.0) {
+                    invertedIndex[termIdx].add(new Posting(docId, vector[termIdx]));
+                }
+            }
         }
     }
     
@@ -151,25 +164,86 @@ public class TfidfTrainingStore {
         return vector;
     }
     
+    /**
+     * High-performance nearest neighbor search using Sparse Inverted Index and Bounded Min-Heap.
+     * Only calculates dot products for documents with non-zero term overlaps, and avoids full N-element sorting.
+     */
     public List<ScoredExample> findNearestNeighbors(double[] queryVector, int k) {
-        List<ScoredExample> results = new ArrayList<>();
-        
-        for (int i = 0; i < indexedVectors.size(); i++) {
-            double similarity = cosineSimilarity(queryVector, indexedVectors.get(i));
-            results.add(new ScoredExample(indexedLabels.get(i), similarity));
+        if (indexedVectors.isEmpty() || k <= 0) {
+            return Collections.emptyList();
         }
         
-        results.sort(Comparator.comparingDouble(ScoredExample::getSimilarity).reversed());
+        int numDocs = indexedVectors.size();
+        double[] docScores = new double[numDocs];
+        boolean[] touchedDocs = new boolean[numDocs];
+        List<Integer> candidateDocIds = new ArrayList<>();
         
-        return results.stream().limit(k).collect(Collectors.toList());
+        // Sparse inverted index traversal: only compute for documents with overlapping terms
+        for (int termIdx = 0; termIdx < queryVector.length; termIdx++) {
+            double qWeight = queryVector[termIdx];
+            if (qWeight > 0.0 && invertedIndex != null && termIdx < invertedIndex.length) {
+                List<Posting> postings = invertedIndex[termIdx];
+                for (Posting p : postings) {
+                    int docId = p.getDocId();
+                    if (!touchedDocs[docId]) {
+                        touchedDocs[docId] = true;
+                        candidateDocIds.add(docId);
+                    }
+                    docScores[docId] += qWeight * p.getWeight();
+                }
+            }
+        }
+        
+        // Bounded Min-Heap PriorityQueue to track top K candidates without sorting all N documents
+        PriorityQueue<ScoredExample> minHeap = new PriorityQueue<>(
+            Comparator.comparingDouble(ScoredExample::getSimilarity)
+        );
+        
+        for (int docId : candidateDocIds) {
+            double similarity = docScores[docId];
+            ScoredExample example = new ScoredExample(indexedLabels.get(docId), similarity);
+            if (minHeap.size() < k) {
+                minHeap.offer(example);
+            } else if (similarity > minHeap.peek().getSimilarity()) {
+                minHeap.poll();
+                minHeap.offer(example);
+            }
+        }
+        
+        // Fill remaining top K entries with 0.0 similarity documents if non-zero matches < k
+        if (minHeap.size() < k) {
+            for (int i = 0; i < indexedLabels.size() && minHeap.size() < k; i++) {
+                if (!touchedDocs[i]) {
+                    minHeap.offer(new ScoredExample(indexedLabels.get(i), 0.0));
+                    touchedDocs[i] = true;
+                }
+            }
+        }
+        
+        List<ScoredExample> results = new ArrayList<>(minHeap.size());
+        while (!minHeap.isEmpty()) {
+            results.add(minHeap.poll());
+        }
+        Collections.reverse(results);
+        return results;
     }
     
-    private double cosineSimilarity(double[] v1, double[] v2) {
-        double dot = 0.0;
-        for (int i = 0; i < v1.length; i++) {
-            dot += v1[i] * v2[i];
+    public static class Posting {
+        private final int docId;
+        private final double weight;
+        
+        public Posting(int docId, double weight) {
+            this.docId = docId;
+            this.weight = weight;
         }
-        return dot;
+        
+        public int getDocId() {
+            return docId;
+        }
+        
+        public double getWeight() {
+            return weight;
+        }
     }
     
     public static class ScoredExample {

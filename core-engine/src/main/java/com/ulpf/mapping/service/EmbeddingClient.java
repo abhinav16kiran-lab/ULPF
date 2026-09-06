@@ -44,34 +44,27 @@ public class EmbeddingClient {
             long[][] attentionMask = createAttentionMask(inputIds[0].length);
             long[][] tokenTypeIds = createTokenTypeIds(inputIds[0].length);
             
-            // Create tensors
-            OnnxTensor inputIdsTensor = OnnxTensor.createTensor(env, inputIds);
-            OnnxTensor attentionMaskTensor = OnnxTensor.createTensor(env, attentionMask);
-            OnnxTensor tokenTypeIdsTensor = OnnxTensor.createTensor(env, tokenTypeIds);
-            
-            // Prepare inputs
-            Map<String, OnnxTensor> inputs = new HashMap<>();
-            inputs.put("input_ids", inputIdsTensor);
-            inputs.put("attention_mask", attentionMaskTensor);
-            inputs.put("token_type_ids", tokenTypeIdsTensor);
-            
-            // Run inference
-            OrtSession.Result results = session.run(inputs);
-            
-            // Extract embedding from output (typically the [CLS] token embedding or mean pooling)
-            float[][] output = (float[][]) results.get(0).getValue();
-            double[] embedding = new double[output[0].length];
-            for (int i = 0; i < output[0].length; i++) {
-                embedding[i] = output[0][i];
+            // Create tensors inside try-with-resources to prevent native C++ memory leaks
+            try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(env, inputIds);
+                 OnnxTensor attentionMaskTensor = OnnxTensor.createTensor(env, attentionMask);
+                 OnnxTensor tokenTypeIdsTensor = OnnxTensor.createTensor(env, tokenTypeIds)) {
+                
+                Map<String, OnnxTensor> inputs = Map.of(
+                    "input_ids", inputIdsTensor,
+                    "attention_mask", attentionMaskTensor,
+                    "token_type_ids", tokenTypeIdsTensor
+                );
+                
+                // Run inference inside try-with-resources to auto-close OrtSession.Result
+                try (OrtSession.Result results = session.run(inputs)) {
+                    float[][] output = (float[][]) results.get(0).getValue();
+                    double[] embedding = new double[output[0].length];
+                    for (int i = 0; i < output[0].length; i++) {
+                        embedding[i] = output[0][i];
+                    }
+                    return embedding;
+                }
             }
-            
-            // Clean up tensors
-            inputIdsTensor.close();
-            attentionMaskTensor.close();
-            tokenTypeIdsTensor.close();
-            results.close();
-            
-            return embedding;
             
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate embedding for text: " + text, e);

@@ -11,7 +11,24 @@ public class CanonicalEmbedding {
     
     public CanonicalEmbedding(String canonicalField, double[] embeddingVector) {
         this.canonicalField = canonicalField;
-        this.embeddingVector = embeddingVector;
+        this.embeddingVector = normalize(embeddingVector);
+    }
+    
+    private static double[] normalize(double[] v) {
+        if (v == null || v.length == 0) return v;
+        double norm = 0.0;
+        for (double val : v) {
+            norm += val * val;
+        }
+        norm = Math.sqrt(norm);
+        if (norm > 0.0) {
+            double[] normalized = new double[v.length];
+            for (int i = 0; i < v.length; i++) {
+                normalized[i] = v[i] / norm;
+            }
+            return normalized;
+        }
+        return v;
     }
     
     public String getCanonicalField() {
