@@ -189,6 +189,9 @@ For full cross-platform setup details, see [docs/Your_first/ULPF_Dev_Environment
 
 ---
 
-## License
+## License & Authors
 
-Prototype developed for SIH. License TBD.
+This project is licensed under the [Apache License, Version 2.0](LICENSE).  
+See [AUTHORS](AUTHORS) for the full list of project contributors.
+
+
