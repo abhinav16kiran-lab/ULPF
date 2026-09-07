@@ -49,6 +49,9 @@ function Navbar() {
               Analytics Console
             </Link>
           )}
+          <Link to="/integrity" style={linkStyle("/integrity")}>
+            🔐 Integrity Audit
+          </Link>
         </nav>
       </div>
 

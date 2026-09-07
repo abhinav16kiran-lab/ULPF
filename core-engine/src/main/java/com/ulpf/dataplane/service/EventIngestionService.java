@@ -138,6 +138,9 @@ public class EventIngestionService {
         );
         clickHouseIngestionRepository.enqueue(rawEvent);
 
+        // Extract unmapped fields into Lossless Overflow Field (raw_unmapped JSON)
+        String rawUnmappedJson = extractUnmappedFields(payload, mappingOpt);
+
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
             if (evalResult != null && evalResult.shouldEmit()) {
@@ -149,7 +152,8 @@ public class EventIngestionService {
                         mappingVersion,
                         now,
                         evalResult.value(),
-                        rawJson
+                        rawJson,
+                        rawUnmappedJson
                 );
                 clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
             }
@@ -163,7 +167,8 @@ public class EventIngestionService {
                     mappingVersion,
                     now,
                     null,
-                    rawJson
+                    rawJson,
+                    rawUnmappedJson
             );
             clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
         }
@@ -202,5 +207,72 @@ public class EventIngestionService {
             }
         } catch (Exception ignored) {}
         return null;
+    }
+
+    private String extractUnmappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt) {
+        if (payload == null) {
+            return "{}";
+        }
+        try {
+            JsonNode payloadNode;
+            if (payload instanceof JsonNode jn) {
+                payloadNode = jn;
+            } else if (payload instanceof String strPayload) {
+                try {
+                    payloadNode = objectMapper.readTree(strPayload);
+                } catch (Exception e) {
+                    payloadNode = objectMapper.valueToTree(payload);
+                }
+            } else {
+                payloadNode = objectMapper.valueToTree(payload);
+            }
+
+            if (payloadNode == null || !payloadNode.isObject()) {
+                return "{}";
+            }
+
+            JsonNode mappingRoot = null;
+            if (mappingOpt.isPresent()) {
+                try {
+                    mappingRoot = objectMapper.readTree(mappingOpt.get().mappingJson());
+                } catch (Exception e) {
+                    log.warn("Failed to parse mappingJson in extractUnmappedFields: {}", e.getMessage());
+                }
+            }
+
+            com.fasterxml.jackson.databind.node.ObjectNode unmappedNode = objectMapper.createObjectNode();
+            var fields = payloadNode.fields();
+
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                String vendorKey = entry.getKey();
+                JsonNode value = entry.getValue();
+
+                boolean isMapped = false;
+                if (mappingRoot != null && mappingRoot.has(vendorKey)) {
+                    JsonNode fieldMapping = mappingRoot.get(vendorKey);
+                    if (fieldMapping != null && fieldMapping.isObject() && fieldMapping.has("canonicalField")) {
+                        String canonicalField = fieldMapping.get("canonicalField").asText();
+                        if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
+                            isMapped = true;
+                        }
+                    } else if (fieldMapping != null && fieldMapping.isTextual()) {
+                        String canonicalField = fieldMapping.asText();
+                        if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
+                            isMapped = true;
+                        }
+                    }
+                }
+
+                if (!isMapped) {
+                    unmappedNode.set(vendorKey, value);
+                }
+            }
+
+            return unmappedNode.isEmpty() ? "{}" : objectMapper.writeValueAsString(unmappedNode);
+        } catch (Exception e) {
+            log.warn("Failed to extract unmapped fields: {}", e.getMessage());
+            return "{}";
+        }
     }
 }

@@ -209,16 +209,26 @@ function AdminDashboardPage() {
                       {req.sampleMetadata}
                     </pre>
 
+                    {/* Lossless Overflow Info Banner */}
+                    <div style={{ marginTop: "8px", background: "#e0f2fe", borderLeft: "4px solid #0284c7", padding: "8px 12px", borderRadius: "4px", fontSize: "0.85em", color: "#0369a1" }}>
+                      💡 <strong>Lossless Overflow Enabled (`raw_unmapped`)</strong>: Any unmapped vendor payload fields automatically overflow into ClickHouse <code>raw_unmapped</code> JSON without data loss or runtime table alters.
+                    </div>
+
                     {/* Interactive Candidate Mapping Editor */}
                     {req.status === "SUBMITTED" && (
                       <div style={{ marginTop: "10px" }}>
                         {editingRequestId === req.requestId ? (
                           <div style={{ background: "#fff", padding: "12px", borderRadius: "6px", border: "1px solid #ced4da" }}>
-                            <label style={{ fontWeight: "600", fontSize: "0.9em", display: "block", marginBottom: "5px" }}>
-                              Edit Candidate Mapping JSON:
-                            </label>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                              <label style={{ fontWeight: "600", fontSize: "0.9em" }}>
+                                Edit Candidate Mapping JSON:
+                              </label>
+                              <span style={{ fontSize: "0.8em", color: "#6c757d" }}>
+                                Promoted fields will be learned into SQLite mapping_aliases
+                              </span>
+                            </div>
                             <textarea
-                              rows={8}
+                              rows={10}
                               value={editingMappingJson}
                               onChange={(e) => setEditingMappingJson(e.target.value)}
                               style={{
@@ -234,9 +244,9 @@ function AdminDashboardPage() {
                               <button
                                 onClick={() => handleSaveCandidateMapping(req.requestId)}
                                 disabled={saveMappingLoading}
-                                style={{ background: "#0056b3", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}
+                                style={{ background: "#0056b3", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer", fontWeight: "600" }}
                               >
-                                {saveMappingLoading ? "Saving…" : "Save Candidate Mapping"}
+                                {saveMappingLoading ? "Saving…" : "💾 Save Mapping & Learn Aliases"}
                               </button>
                               <button
                                 onClick={() => setEditingRequestId(null)}
@@ -249,9 +259,9 @@ function AdminDashboardPage() {
                         ) : (
                           <button
                             onClick={() => startEditingMapping(req)}
-                            style={{ background: "#17a2b8", color: "white", border: "none", padding: "5px 10px", borderRadius: "4px", cursor: "pointer", fontSize: "0.85em" }}
+                            style={{ background: "#17a2b8", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer", fontSize: "0.85em", fontWeight: "600" }}
                           >
-                            ✏️ Edit Candidate Field Mapping
+                            ✏️ Promote Unmapped Fields / Edit Candidate Mapping
                           </button>
                         )}
                       </div>
