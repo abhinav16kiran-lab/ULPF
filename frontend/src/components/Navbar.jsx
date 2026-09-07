@@ -44,9 +44,11 @@ function Navbar() {
           <Link to="/notifications" style={linkStyle("/notifications")}>
             Notifications
           </Link>
-          <Link to="/analytics" style={linkStyle("/analytics")}>
-            Analytics Console
-          </Link>
+          {role === "ADMIN" && (
+            <Link to="/analytics" style={linkStyle("/analytics")}>
+              Analytics Console
+            </Link>
+          )}
         </nav>
       </div>
 

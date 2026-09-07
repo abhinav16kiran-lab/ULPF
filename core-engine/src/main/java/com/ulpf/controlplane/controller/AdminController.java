@@ -15,10 +15,12 @@ import java.util.Map;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PatchMapping;
 
 @RestController
 @RequestMapping("/v1/admin")
+@PreAuthorize("hasRole('ADMIN')")
 public class AdminController {
 
     private static final Set<String> VALID_DECISIONS = Set.of("APPROVED", "REJECTED");
