@@ -49,17 +49,34 @@ public class AuthService {
     }
 
     public void signUp(String name, String username, String password, String confirmPassword) {
-        if (password == null || confirmPassword == null || !password.equals(confirmPassword)) {
+        if (name == null || name.trim().length() < 2 || name.trim().length() > 100) {
+            throw new IllegalArgumentException("Name must be between 2 and 100 characters");
+        }
+
+        if (username == null || username.trim().length() < 3 || username.trim().length() > 30) {
+            throw new IllegalArgumentException("Username must be between 3 and 30 characters");
+        }
+
+        String cleanUsername = username.trim();
+        if (!cleanUsername.matches("^[a-zA-Z0-9_.-]+$")) {
+            throw new IllegalArgumentException("Username can only contain letters, numbers, underscores, hyphens, and periods");
+        }
+
+        if (password == null || password.length() < 6 || password.length() > 100) {
+            throw new IllegalArgumentException("Password must be between 6 and 100 characters");
+        }
+
+        if (confirmPassword == null || !password.equals(confirmPassword)) {
             throw new IllegalArgumentException("Passwords do not match");
         }
 
-        if (userRepository.existsByUsername(username)) {
+        if (userRepository.existsByUsername(cleanUsername)) {
             throw new IllegalArgumentException("Username already exists");
         }
 
         String hashedPassword = passwordEncoder.encode(password);
         // All public signups are automatically assigned Role.USER
-        User newUser = new User(null, username, name, hashedPassword, Role.USER, null);
+        User newUser = new User(null, cleanUsername, name.trim(), hashedPassword, Role.USER, null);
         userRepository.save(newUser);
     }
 }

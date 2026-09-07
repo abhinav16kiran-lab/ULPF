@@ -115,4 +115,31 @@ class AuthServiceTest {
             authService.login("nonexistent", "pass123", "USER");
         });
     }
+
+    @Test
+    void testSignUp_ValidationErrors() {
+        // Name validation
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("A", "validuser", "password123", "password123"));
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("a".repeat(101), "validuser", "password123", "password123"));
+
+        // Username validation
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "ab", "password123", "password123"));
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "u".repeat(31), "password123", "password123"));
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "user@invalid!", "password123", "password123"));
+
+        // Password validation
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "validuser", "12345", "12345"));
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "validuser", "p".repeat(101), "p".repeat(101)));
+        assertThrows(IllegalArgumentException.class, () -> authService.signUp("Valid Name", "validuser", "password123", "different"));
+    }
+
+    @Test
+    void testSignUp_Success() {
+        when(userRepository.existsByUsername("validuser")).thenReturn(false);
+        when(passwordEncoder.encode("password123")).thenReturn("hashedpass");
+
+        authService.signUp("Valid Name", "validuser", "password123", "password123");
+
+        verify(userRepository, times(1)).save(any(User.class));
+    }
 }
