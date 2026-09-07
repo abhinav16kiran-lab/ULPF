@@ -117,6 +117,18 @@ class AuthServiceTest {
     }
 
     @Test
+    void testLogin_ValidationErrors() {
+        // Username length validation
+        assertThrows(IllegalArgumentException.class, () -> authService.login("ab", "password123", "USER"));
+        assertThrows(IllegalArgumentException.class, () -> authService.login("u".repeat(31), "password123", "USER"));
+        assertThrows(IllegalArgumentException.class, () -> authService.login("user@invalid!", "password123", "USER"));
+
+        // Password length validation
+        assertThrows(IllegalArgumentException.class, () -> authService.login("validuser", "12345", "USER"));
+        assertThrows(IllegalArgumentException.class, () -> authService.login("validuser", "p".repeat(101), "USER"));
+    }
+
+    @Test
     void testSignUp_ValidationErrors() {
         // Name validation
         assertThrows(IllegalArgumentException.class, () -> authService.signUp("A", "validuser", "password123", "password123"));

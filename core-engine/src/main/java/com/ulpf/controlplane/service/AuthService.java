@@ -26,7 +26,18 @@ public class AuthService {
     public record LoginResult(String username, String role, String token) {}
 
     public LoginResult login(String username, String password, String requestedRole) {
-        Optional<User> userOpt = userRepository.findByUsername(username);
+        if (username == null || username.trim().length() < 3 || username.trim().length() > 30) {
+            throw new IllegalArgumentException("Username must be between 3 and 30 characters");
+        }
+        String cleanUsername = username.trim();
+        if (!cleanUsername.matches("^[a-zA-Z0-9_.-]+$")) {
+            throw new IllegalArgumentException("Username can only contain letters, numbers, underscores, hyphens, and periods");
+        }
+        if (password == null || password.length() < 6 || password.length() > 100) {
+            throw new IllegalArgumentException("Password must be between 6 and 100 characters");
+        }
+
+        Optional<User> userOpt = userRepository.findByUsername(cleanUsername);
 
         if (userOpt.isEmpty()) {
             throw new BadCredentialsException("Invalid Credentials");

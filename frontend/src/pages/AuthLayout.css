@@ -235,6 +235,42 @@ body, html {
   box-shadow: 0 0 0 4px var(--input-focus-ring);
 }
 
+/* Role Selector Tabs (ADMIN, VENDOR, USER) */
+.role-tabs-container {
+  display: flex;
+  align-items: center;
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 14px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.role-tab-btn {
+  flex: 1;
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-main);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.role-tab-btn:hover:not(.active) {
+  color: var(--text-dark);
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+.role-tab-btn.active {
+  background: linear-gradient(135deg, #0d9488, #059669);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.3);
+}
+
 /* Password Grid */
 .password-grid {
   display: grid;
@@ -260,7 +296,7 @@ body, html {
   color: var(--text-dark);
 }
 
-/* Checkbox Row */
+/* Checkbox Row & Remember Row */
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -270,6 +306,25 @@ body, html {
   cursor: pointer;
   user-select: none;
   margin-top: 2px;
+}
+
+.remember-forgot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.forgot-link {
+  color: var(--primary-teal);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.forgot-link:hover {
+  text-decoration: underline;
 }
 
 .checkbox-custom {

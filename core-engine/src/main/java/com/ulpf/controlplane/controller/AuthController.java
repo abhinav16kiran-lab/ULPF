@@ -37,6 +37,8 @@ public class AuthController {
                     "role", result.role(),
                     "token", result.token()
             ));
+        } catch (IllegalArgumentException e) {
+            return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);
         } catch (BadCredentialsException e) {
             return new ResponseEntity<>("Invalid Credentials", HttpStatus.UNAUTHORIZED);
         }
