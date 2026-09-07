@@ -109,3 +109,7 @@ CREATE TABLE IF NOT EXISTS mapping_aliases (
     source          TEXT NOT NULL DEFAULT 'seed',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Add unique constraint to prevent duplicate alias keys
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mapping_aliases_unique_key 
+ON mapping_aliases(alias_key);

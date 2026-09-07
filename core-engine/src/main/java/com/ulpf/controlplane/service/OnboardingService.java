@@ -16,6 +16,7 @@ import com.ulpf.common.db.VendorRepository;
 import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.model.User;
 import com.ulpf.mapping.model.MappingProposal;
+import com.ulpf.mapping.service.MappingLearningService;
 import com.ulpf.mapping.service.MappingProposalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,7 @@ public class OnboardingService {
     private final OnboardingRepository onboardingRepository;
     private final MappingRepository mappingRepository;
     private final MappingProposalService mappingProposalService;
+    private final MappingLearningService mappingLearningService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public OnboardingService(
@@ -55,7 +57,8 @@ public class OnboardingService {
             CredentialRepository credentialRepository,
             OnboardingRepository onboardingRepository,
             MappingRepository mappingRepository,
-            MappingProposalService mappingProposalService
+            MappingProposalService mappingProposalService,
+            MappingLearningService mappingLearningService
     ) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
@@ -64,6 +67,7 @@ public class OnboardingService {
         this.onboardingRepository = onboardingRepository;
         this.mappingRepository = mappingRepository;
         this.mappingProposalService = mappingProposalService;
+        this.mappingLearningService = mappingLearningService;
     }
 
     public record OnboardingSubmissionResult(
@@ -247,7 +251,25 @@ public class OnboardingService {
     public void updateCandidateMapping(String requestId, String newMappingJson) {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
+        
         if (req.sourceId() != null) {
+            // Get the OLD (AI-proposed) mapping before updating
+            Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(req.sourceId());
+            
+            if (candidateOpt.isPresent()) {
+                String oldMappingJson = candidateOpt.get().mappingJson();
+                
+                // LEARNING STEP: Extract and learn from human corrections
+                try {
+                    int aliasesLearned = mappingLearningService.learnFromCorrections(oldMappingJson, newMappingJson);
+                    log.info("Learned {} new aliases from mapping corrections for request {}", aliasesLearned, requestId);
+                } catch (Exception e) {
+                    // Don't fail the update if learning fails - just log it
+                    log.warn("Failed to learn from corrections for request {}: {}", requestId, e.getMessage());
+                }
+            }
+            
+            // Update the candidate mapping (original behavior)
             mappingRepository.updateCandidateMappingJson(req.sourceId(), newMappingJson);
         }
     }

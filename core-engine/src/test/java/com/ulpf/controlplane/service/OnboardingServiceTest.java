@@ -66,6 +66,13 @@ class OnboardingServiceTest {
                 onboardingRepository = new OnboardingRepository(jdbcTemplate);
                 MappingRepository mappingRepository = new MappingRepository(jdbcTemplate);
                 MappingProposalService mappingProposalService = new MappingProposalService(mappingRepository);
+                
+                // Create mock MappingLearningService for tests
+                var fieldPreprocessor = new com.ulpf.mapping.service.FieldPreprocessor();
+                var correctionExtractor = new com.ulpf.mapping.service.CorrectionExtractor(new com.fasterxml.jackson.databind.ObjectMapper());
+                var aliasRepository = new com.ulpf.mapping.repository.AliasRepository(jdbcTemplate);
+                var mappingLearningService = new com.ulpf.mapping.service.MappingLearningService(
+                    correctionExtractor, fieldPreprocessor, aliasRepository);
 
                 userRepository.save(new User(null, "vendor_alice", "Alice Vendor", "pass_hash", Role.USER, null));
 
@@ -76,7 +83,8 @@ class OnboardingServiceTest {
                                 credentialRepository,
                                 onboardingRepository,
                                 mappingRepository,
-                                mappingProposalService);
+                                mappingProposalService,
+                                mappingLearningService);
         }
 
         @Test
