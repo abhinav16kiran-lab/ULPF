@@ -124,20 +124,36 @@ function AdminDashboardPage() {
       <div style={{ padding: "0 20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
           <h2>Admin Control Panel & Schema Inspector</h2>
-          <Link
-            to="/analytics"
-            style={{
-              background: "#006b5f",
-              color: "white",
-              padding: "8px 16px",
-              borderRadius: "4px",
-              textDecoration: "none",
-              fontWeight: "600",
-              fontSize: "0.9em"
-            }}
-          >
-            ⚡ Open Analytics Console
-          </Link>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <Link
+              to="/integrity"
+              style={{
+                background: "#0f766e",
+                color: "white",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                textDecoration: "none",
+                fontWeight: "600",
+                fontSize: "0.9em"
+              }}
+            >
+              🔐 Audit Console
+            </Link>
+            <Link
+              to="/analytics"
+              style={{
+                background: "#006b5f",
+                color: "white",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                textDecoration: "none",
+                fontWeight: "600",
+                fontSize: "0.9em"
+              }}
+            >
+              ⚡ Open Analytics Console
+            </Link>
+          </div>
         </div>
 
         {actionSuccess && (

@@ -16,9 +16,11 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SpringSecurity {
 
     private final JwtFilter jwtFilter;
+    private final com.ulpf.common.tracing.TracingFilter tracingFilter;
 
-    SpringSecurity(JwtFilter jwtFilter) {
+    SpringSecurity(JwtFilter jwtFilter, com.ulpf.common.tracing.TracingFilter tracingFilter) {
         this.jwtFilter = jwtFilter;
+        this.tracingFilter = tracingFilter;
     }
 
     @Bean
@@ -32,6 +34,7 @@ public class SpringSecurity {
                 .anyRequest().authenticated()
             );
 
+        http.addFilterBefore(tracingFilter, UsernamePasswordAuthenticationFilter.class);
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

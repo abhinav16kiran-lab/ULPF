@@ -52,4 +52,10 @@ public class W3cTraceContextParser {
     public static String generateSpanId() {
         return java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     }
+
+    public static String formatTraceparent(TraceContext ctx) {
+        if (ctx == null) return null;
+        String flags = ctx.sampled() ? "01" : "00";
+        return String.format("00-%s-%s-%s", ctx.traceId(), ctx.spanId(), flags);
+    }
 }

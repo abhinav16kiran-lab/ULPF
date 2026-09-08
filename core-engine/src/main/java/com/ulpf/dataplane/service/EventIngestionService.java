@@ -58,7 +58,11 @@ public class EventIngestionService {
         this.schemaDriftNotificationService = schemaDriftNotificationService;
     }
 
-    public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt) {}
+    public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId) {
+        public IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt) {
+            this(eventId, vendorId, sourceId, status, receivedAt, null);
+        }
+    }
 
     public Optional<CredentialRecord> resolveCredentialFromApiKey(String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
@@ -75,6 +79,10 @@ public class EventIngestionService {
     }
 
     public IngestResult ingest(String apiKey, Object payload) {
+        return ingest(apiKey, payload, null);
+    }
+
+    public IngestResult ingest(String apiKey, Object payload, com.ulpf.common.tracing.TraceContext traceContext) {
         Optional<CredentialRecord> credOpt = resolveCredentialFromApiKey(apiKey);
         if (credOpt.isEmpty()) {
             throw new IllegalArgumentException("Invalid API key credential");
@@ -83,6 +91,14 @@ public class EventIngestionService {
         CredentialRecord cred = credOpt.get();
         String eventId = UUID.randomUUID().toString();
         LocalDateTime now = LocalDateTime.now();
+
+        // Extract or refine trace context from payload and MDC
+        com.ulpf.common.tracing.TraceContext activeTraceContext = traceContext;
+        if (activeTraceContext == null) {
+            activeTraceContext = com.ulpf.common.tracing.TraceContextExtractor.extract(null, payload);
+        }
+        com.ulpf.common.tracing.TraceMdcAdapter.put(activeTraceContext);
+        String traceId = activeTraceContext != null ? activeTraceContext.traceId() : null;
 
         // Resolve active mapping version if present (lazy-loaded from SQLite/RAM)
         Optional<MappingVersionRecord> mappingOpt = mappingRepository.findActiveBySourceId(cred.sourceId());
@@ -187,7 +203,7 @@ public class EventIngestionService {
         }
 
 
-        return new IngestResult(eventId, cred.vendorId(), cred.sourceId(), "ACCEPTED", now);
+        return new IngestResult(eventId, cred.vendorId(), cred.sourceId(), "ACCEPTED", now, traceId);
     }
 
     private Double extractNumericValue(Object payload, String sensorField) {
