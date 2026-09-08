@@ -136,4 +136,32 @@ class OnboardingServiceTest {
                 assertEquals(1, notifications.size());
                 assertTrue(notifications.get(0).title().contains("Approved"));
         }
+
+        @Test
+        void testSubmitUpdateRequestCreatesUpdateRecordAndPreservesKey() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+
+                onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+
+                // Submit update request for existing source
+                MockMultipartFile newSampleFile = new MockMultipartFile(
+                                "sampleLogFile", "v2_sample.log", "text/plain", "v2 log data with new field".getBytes());
+
+                var updateResult = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, newSampleFile, null);
+
+                assertNotNull(updateResult.requestId());
+                assertEquals(initResult.sourceId(), updateResult.sourceId());
+                org.junit.jupiter.api.Assertions.assertNull(updateResult.rawApiKey(), "API key must remain null (unchanged) for UPDATE_SOURCE");
+                assertEquals("SUBMITTED", updateResult.status());
+
+                // Verify request record in DB has type UPDATE_SOURCE
+                OnboardingRequestRecord req = onboardingRepository.findRequestById(updateResult.requestId()).get();
+                assertEquals("UPDATE_SOURCE", req.requestType());
+                assertEquals(initResult.sourceId(), req.sourceId());
+        }
 }

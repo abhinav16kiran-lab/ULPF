@@ -78,6 +78,57 @@ public class OnboardingController {
         ));
     }
 
+    @PostMapping(value = "/onboard/update/{username}", consumes = "multipart/form-data")
+    public ResponseEntity<?> updateSource(
+            @AuthenticationPrincipal UlpfPrincipal principal,
+            @PathVariable String username,
+            @RequestParam String sourceId,
+            @RequestParam(required = false) String sourceType,
+            @RequestParam(required = false) String logType,
+            @RequestParam(required = false) Double delta,
+            @RequestParam(required = false) Long maxIntervalMs,
+            @RequestParam(required = false) String sensorField,
+            @RequestParam(required = false) MultipartFile sampleLogFile,
+            @RequestParam(required = false) MultipartFile schemaFile
+    ) {
+        if (!principal.username().equals(username)) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "you can only submit onboarding updates for your own account"
+            ));
+        }
+
+        if (isBlank(sourceId)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "sourceId is required"
+            ));
+        }
+
+        if (sampleLogFile != null && !sampleLogFile.isEmpty() && !isAllowedFileType(sampleLogFile)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "sample log file must be .log, .csv, .json, or .txt"
+            ));
+        }
+
+        if (schemaFile != null && !schemaFile.isEmpty() && !isAllowedFileType(schemaFile)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "schema file must be .log, .csv, .json, or .txt"
+            ));
+        }
+
+        var saved = onboardingService.submitUpdateRequest(
+                username, sourceId, sourceType, logType, delta, maxIntervalMs, sensorField, sampleLogFile, schemaFile
+        );
+
+        java.util.Map<String, Object> respMap = new java.util.HashMap<>();
+        respMap.put("requestId", saved.requestId());
+        respMap.put("sourceId", saved.sourceId());
+        respMap.put("vendorId", saved.vendorId());
+        respMap.put("status", saved.status());
+        respMap.put("message", saved.message());
+
+        return ResponseEntity.status(201).body(respMap);
+    }
+
     @GetMapping("/onboard/my-requests")
     public ResponseEntity<?> getMyRequests(@AuthenticationPrincipal UlpfPrincipal principal) {
         var requests = onboardingService.getUserRequests(principal.username());

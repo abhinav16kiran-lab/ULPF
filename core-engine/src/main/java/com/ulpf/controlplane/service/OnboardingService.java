@@ -156,6 +156,59 @@ public class OnboardingService {
         );
     }
 
+    public OnboardingSubmissionResult submitUpdateRequest(
+            String username,
+            String sourceId,
+            String sourceType,
+            String logType,
+            Double delta,
+            Long maxIntervalMs,
+            String sensorField,
+            MultipartFile sampleLogFile,
+            MultipartFile schemaFile
+    ) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+
+        SourceRecord source = sourceRepository.findById(sourceId)
+                .orElseThrow(() -> new IllegalArgumentException("Log source not found: " + sourceId));
+
+        String effectiveLogType = (logType != null && !logType.isBlank()) ? logType.toUpperCase() : "REG_LOG";
+        if ("SENSOR".equals(effectiveLogType)) {
+            effectiveLogType = "SEN_TEL";
+        }
+
+        // 1. Extract sample snippet & store files
+        String requestId = UUID.randomUUID().toString();
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType, delta, maxIntervalMs, sensorField);
+
+        // 2. Delete any stale candidate mapping for this source if present before generating new candidate
+        mappingRepository.deleteCandidateVersions(sourceId);
+
+        // 3. Generate new candidate mapping version via AI mapping engine
+        List<MappingProposal> proposals = new ArrayList<>();
+        mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
+
+        // 4. Inject metadata block into candidate mapping_json
+        injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
+
+        // 5. Save onboarding request record with request_type = "UPDATE_SOURCE"
+        OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
+                requestId, user.userId(), source.sourceId(), "UPDATE_SOURCE", sampleMetadataJson, "SUBMITTED", LocalDateTime.now()
+        ));
+
+        log.info("Schema update request {} submitted for existing source {}", requestId, source.sourceId());
+
+        return new OnboardingSubmissionResult(
+                req.requestId(),
+                source.sourceId(),
+                source.vendorId(),
+                null,
+                req.status(),
+                "Schema update request submitted successfully. Your existing API key remains active. The proposed candidate mapping version will take effect once approved by an administrator."
+        );
+    }
+
     private void injectMetadataIntoCandidateMapping(String sourceId, String logType, Double delta, Long maxIntervalMs, String sensorField) {
         Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {

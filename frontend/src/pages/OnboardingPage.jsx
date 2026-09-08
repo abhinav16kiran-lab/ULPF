@@ -7,6 +7,8 @@ import "./OnboardingPage.css";
 function OnboardingPage() {
   const navigate = useNavigate();
 
+  const [onboardMode, setOnboardMode] = useState("NEW"); // "NEW" | "UPDATE"
+  const [selectedSourceId, setSelectedSourceId] = useState("");
   const [vendorName, setVendorName] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [sourceType, setSourceType] = useState("");
@@ -66,8 +68,19 @@ function OnboardingPage() {
     setLoading(true);
 
     const formData = new FormData();
-    formData.append("vendorName", vendorName);
-    formData.append("sourceName", sourceName);
+
+    if (onboardMode === "UPDATE") {
+      if (!selectedSourceId) {
+        setError("Please select an active log source to update.");
+        setLoading(false);
+        return;
+      }
+      formData.append("sourceId", selectedSourceId);
+    } else {
+      formData.append("vendorName", vendorName);
+      formData.append("sourceName", sourceName);
+    }
+
     formData.append("sourceType", sourceType);
     formData.append("logType", logType);
 
@@ -85,21 +98,23 @@ function OnboardingPage() {
     }
 
     try {
-      const response = await client.post(
-        `/v1/onboard/${username}`,
-        formData
-      );
+      const endpoint = onboardMode === "UPDATE"
+        ? `/v1/onboard/update/${username}`
+        : `/v1/onboard/${username}`;
+
+      const response = await client.post(endpoint, formData);
 
       setResult({
         requestId: response.data.requestId,
         sourceId: response.data.sourceId,
         vendorId: response.data.vendorId,
-        apiKey: response.data.apiKey,
+        apiKey: response.data.apiKey || null,
         status: response.data.status,
         message: response.data.message,
       });
 
       // Clear form & refetch user data
+      setSelectedSourceId("");
       setVendorName("");
       setSourceName("");
       setSourceType("");
@@ -228,11 +243,25 @@ function OnboardingPage() {
                 </div>
 
                 <div className="onboarding-mode-toggle">
-                  <button className="onboarding-mode-btn active" type="button">
+                  <button
+                    className={`onboarding-mode-btn ${onboardMode === "NEW" ? "active" : "inactive"}`}
+                    type="button"
+                    onClick={() => {
+                      setOnboardMode("NEW");
+                      setError(null);
+                    }}
+                  >
                     <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                     <span>Create New Log Source</span>
                   </button>
-                  <button className="onboarding-mode-btn inactive" type="button" disabled title="Not currently supported" style={{ opacity: 0.5, cursor: "not-allowed" }}>
+                  <button
+                    className={`onboarding-mode-btn ${onboardMode === "UPDATE" ? "active" : "inactive"}`}
+                    type="button"
+                    onClick={() => {
+                      setOnboardMode("UPDATE");
+                      setError(null);
+                    }}
+                  >
                     <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                     <span>Update Existing Source</span>
                   </button>
@@ -245,49 +274,85 @@ function OnboardingPage() {
                 )}
 
                 <form onSubmit={handleSubmit}>
-                  {/* Vendor Name */}
-                  <div className="onboarding-form-group">
-                    <div className="onboarding-label-wrapper">
-                      <label className="onboarding-label" htmlFor="vendorName">Vendor Name <span style={{ color: "#ef4444" }}>*</span></label>
-                      <span className="onboarding-label-tag">PROVIDER SPEC</span>
-                    </div>
-                    <div className="onboarding-input-wrapper">
-                      <div className="onboarding-input-icon">
-                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                  {onboardMode === "UPDATE" ? (
+                    <div className="onboarding-form-group">
+                      <div className="onboarding-label-wrapper">
+                        <label className="onboarding-label" htmlFor="sourceSelect">Select Active Log Source <span style={{ color: "#ef4444" }}>*</span></label>
+                        <span className="onboarding-label-tag">TARGET SOURCE</span>
                       </div>
-                      <input
-                        id="vendorName"
-                        className="onboarding-input"
-                        placeholder="e.g. CrowdStrike, Palo Alto, AWS"
-                        required
-                        type="text"
-                        value={vendorName}
-                        onChange={(e) => setVendorName(e.target.value)}
-                      />
+                      <div className="onboarding-input-wrapper">
+                        <select
+                          id="sourceSelect"
+                          className="onboarding-input no-icon"
+                          required={onboardMode === "UPDATE"}
+                          value={selectedSourceId}
+                          onChange={(e) => {
+                            const srcId = e.target.value;
+                            setSelectedSourceId(srcId);
+                            const found = mySources.find(s => s.sourceId === srcId);
+                            if (found) {
+                              setSourceName(found.sourceName || "");
+                              setSourceType(found.sourceType || "");
+                            }
+                          }}
+                          style={{ width: "100%", padding: "0.625rem 0.875rem" }}
+                        >
+                          <option value="">-- Select Active Source to Update --</option>
+                          {mySources.map((s) => (
+                            <option key={s.sourceId} value={s.sourceId}>
+                              {s.sourceName} ({s.sourceId}) — {s.sourceType} [{s.status}]
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <>
+                      {/* Vendor Name */}
+                      <div className="onboarding-form-group">
+                        <div className="onboarding-label-wrapper">
+                          <label className="onboarding-label" htmlFor="vendorName">Vendor Name <span style={{ color: "#ef4444" }}>*</span></label>
+                          <span className="onboarding-label-tag">PROVIDER SPEC</span>
+                        </div>
+                        <div className="onboarding-input-wrapper">
+                          <div className="onboarding-input-icon">
+                            <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                          </div>
+                          <input
+                            id="vendorName"
+                            className="onboarding-input"
+                            placeholder="e.g. CrowdStrike, Palo Alto, AWS"
+                            required={onboardMode === "NEW"}
+                            type="text"
+                            value={vendorName}
+                            onChange={(e) => setVendorName(e.target.value)}
+                          />
+                        </div>
+                      </div>
 
-                  {/* Log Source Name */}
-                  <div className="onboarding-form-group">
-                    <div className="onboarding-label-wrapper">
-                      <label className="onboarding-label" htmlFor="sourceName">Log Source Name <span style={{ color: "#ef4444" }}>*</span></label>
-                      <span className="onboarding-label-tag">IDENTIFIER</span>
-                    </div>
-                    <div className="onboarding-input-wrapper">
-                      <div className="onboarding-input-icon">
-                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                      {/* Log Source Name */}
+                      <div className="onboarding-form-group">
+                        <div className="onboarding-label-wrapper">
+                          <label className="onboarding-label" htmlFor="sourceName">Log Source Name <span style={{ color: "#ef4444" }}>*</span></label>
+                          <span className="onboarding-label-tag">IDENTIFIER</span>
+                        </div>
+                        <div className="onboarding-input-wrapper">
+                          <div className="onboarding-input-icon">
+                            <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                          </div>
+                          <input
+                            id="sourceName"
+                            className="onboarding-input"
+                            placeholder="e.g. Falcon EDR Logs, Okta Auth Events"
+                            required={onboardMode === "NEW"}
+                            type="text"
+                            value={sourceName}
+                            onChange={(e) => setSourceName(e.target.value)}
+                          />
+                        </div>
                       </div>
-                      <input
-                        id="sourceName"
-                        className="onboarding-input"
-                        placeholder="e.g. Falcon EDR Logs, Okta Auth Events"
-                        required
-                        type="text"
-                        value={sourceName}
-                        onChange={(e) => setSourceName(e.target.value)}
-                      />
-                    </div>
-                  </div>
+                    </>
+                  )}
 
                   {/* Source Format Selector */}
                   <div className="onboarding-form-group">
@@ -659,7 +724,7 @@ function OnboardingPage() {
               Your onboarding request (<span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827", backgroundColor: "#f3f4f6", padding: "0.125rem 0.375rem", borderRadius: "0.25rem", border: "1px solid rgba(229, 231, 235, 0.6)" }}>{result?.requestId}</span>) is now under review. Our system will evaluate your sample and prepare standard indices.
             </p>
 
-            {result?.apiKey && (
+            {result?.apiKey ? (
               <div style={{ backgroundColor: "#fffbeb", border: "1px solid rgba(253, 230, 138, 0.8)", borderRadius: "1rem", padding: "1rem", marginBottom: "1.25rem", textAlign: "left" }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem", marginBottom: "0.625rem" }}>
                   <span style={{ color: "#f59e0b", fontSize: "1rem", lineHeight: 1 }}>⚠️</span>
@@ -676,6 +741,16 @@ function OnboardingPage() {
                     {copySuccess ? "✅ Copied!" : "📋 Copy"}
                   </button>
                 </div>
+              </div>
+            ) : (
+              <div style={{ backgroundColor: "#f0fdfa", border: "1px solid #ccfbf1", borderRadius: "1rem", padding: "1rem", marginBottom: "1.25rem", textAlign: "left" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+                  <span style={{ fontSize: "1rem" }}>🔑</span>
+                  <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#0f766e", margin: 0 }}>Active API Key Preserved</p>
+                </div>
+                <p style={{ fontSize: "0.6875rem", color: "#0d9488", margin: 0, lineHeight: 1.4 }}>
+                  Your existing API key remains active and will apply to the proposed schema version once approved by an administrator.
+                </p>
               </div>
             )}
 
