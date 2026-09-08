@@ -70,4 +70,9 @@ public class UserRepository {
         Integer count = jdbcTemplate.queryForObject(sql, Integer.class, username);
         return count != null && count > 0;
     }
+
+    public List<User> findUsersByRole(Role role) {
+        String sql = "SELECT user_id, username, name, password_hash, role, created_at FROM users WHERE role = ?";
+        return jdbcTemplate.query(sql, ROW_MAPPER, role.name());
+    }
 }
