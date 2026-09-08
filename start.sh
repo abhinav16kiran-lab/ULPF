@@ -37,7 +37,7 @@ MAX_RETRIES=30
 RETRIES=0
 
 until curl -s -o /dev/null -w "%{http_code}" \
-    http://localhost:8080/v1/notifications | grep -qE "(200|401|403)" \
+    http://localhost:8080/v1/health | grep -qE "200" \
     || [ $RETRIES -eq $MAX_RETRIES ]; do
 
     sleep 2
