@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import client from "../api/client";
 import Navbar from "../components/Navbar";
+import "./OnboardingPage.css";
 
 function OnboardingPage() {
   const navigate = useNavigate();
@@ -18,6 +19,11 @@ function OnboardingPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
+
+  // Tabs state for history
+  const [historyTab, setHistoryTab] = useState("requests"); // "requests" | "active"
 
   // User requests & sources state
   const [myRequests, setMyRequests] = useState([]);
@@ -104,6 +110,10 @@ function OnboardingPage() {
       setSampleLogFile(null);
       setSchemaFile(null);
       await fetchUserData();
+
+      // Show success modal
+      setShowModal(true);
+
     } catch (err) {
       if (err.response && err.response.data) {
         if (typeof err.response.data === "string") {
@@ -121,271 +131,579 @@ function OnboardingPage() {
     }
   }
 
+  const isSensorMode = logType === "SEN_TEL";
+  const toggleSensorMode = () => {
+    setLogType(isSensorMode ? "REG_LOG" : "SEN_TEL");
+  };
+
+  const copyModalApiKey = () => {
+    if (navigator.clipboard && result?.apiKey) {
+      navigator.clipboard.writeText(result.apiKey);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    }
+  };
+
   if (!username) {
     return null;
   }
 
   const ACCEPTED_FILE_TYPES = ".log,.csv,.json,.txt";
 
+  const renderFormatSnippet = (fmt) => {
+    switch (fmt) {
+      case "JSON":
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"{\n"}
+            <span className="text-slate-500 select-none">2 </span>  <span className="text-teal-400">"timestamp"</span>: <span className="text-amber-300">"2026-09-04T12:00:00Z"</span>,{"\n"}
+            <span className="text-slate-500 select-none">3 </span>  <span className="text-teal-400">"src_ip"</span>: <span className="text-emerald-300">"192.168.1.50"</span>,{"\n"}
+            <span className="text-slate-500 select-none">4 </span>  <span className="text-teal-400">"dest_ip"</span>: <span className="text-emerald-300">"10.0.4.120"</span>,{"\n"}
+            <span className="text-slate-500 select-none">5 </span>  <span className="text-teal-400">"action"</span>: <span className="text-rose-400">"BLOCK"</span>,{"\n"}
+            <span className="text-slate-500 select-none">6 </span>  <span className="text-teal-400">"vendor"</span>: <span className="text-amber-300">"CrowdStrike Falcon"</span>,{"\n"}
+            <span className="text-slate-500 select-none">7 </span>  <span className="text-teal-400">"rule_id"</span>: <span className="text-indigo-300">"SEC_SURGE_99"</span>{"\n"}
+            <span className="text-slate-500 select-none">8 </span>{"}"}
+          </>
+        );
+      case "SYSLOG":
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"<134>1 2026-09-04T12:00:00Z falcon.host.corp CS-EDR - -"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"[meta src=\"192.168.1.50\" dst=\"10.0.4.120\" action=\"BLOCK\"]"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"Process injection attempt halted on PID 4410"}
+          </>
+        );
+      case "CEF":
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"CEF:0|CrowdStrike|Falcon|1.0|SEC_SURGE_99|Malicious Process|7|"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"src=192.168.1.50 dst=10.0.4.120 act=BLOCK"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"msg=Process terminated cleanly by kernel driver"}
+          </>
+        );
+      case "CSV":
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"timestamp,src_ip,dest_ip,action,rule_id"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"2026-09-04T12:00:00Z,192.168.1.50,10.0.4.120,BLOCK,SEC_SURGE_99"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"2026-09-04T12:00:01Z,192.168.1.52,10.0.4.121,ALLOW,SEC_SURGE_01"}
+          </>
+        );
+      default:
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"{}"}
+          </>
+        );
+    }
+  };
+
   return (
-    <div>
+    <div className="onboarding-page-container">
       <Navbar />
 
-      <div style={{ padding: "0 20px" }}>
-        <h2>Log Source Onboarding & Vendor Portal</h2>
-
-        <form onSubmit={handleSubmit} style={{ background: "white", padding: "20px", borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.08)", marginBottom: "25px" }}>
-          <h3>Submit New Log Source Request</h3>
-          <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-vendor-name" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Vendor Name (required)</label>
-            <input
-              id="onboard-vendor-name"
-              type="text"
-              value={vendorName}
-              onChange={(e) => setVendorName(e.target.value)}
-              placeholder="e.g. CrowdStrike"
-              required
-              style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
-            />
+      <main className="onboarding-main">
+        <div className="onboarding-max-w-7xl">
+          {/* Breadcrumb / Header */}
+          <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
+            <div>
+              <h1 className="onboarding-header-title">
+                Onboard New Log Stream
+                <span className="onboarding-header-badge">V2.4 Ingest Engine</span>
+              </h1>
+              <p className="onboarding-header-desc">Register telemetry connectors and calibrate custom schemas.</p>
+            </div>
           </div>
 
-          <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-source-name" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Source Name (required)</label>
-            <input
-              id="onboard-source-name"
-              type="text"
-              value={sourceName}
-              onChange={(e) => setSourceName(e.target.value)}
-              placeholder="e.g. Falcon EDR Logs"
-              required
-              style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
-            />
+          <div className="onboarding-grid">
+            {/* LEFT PANEL: Ingestion Form */}
+            <section className="onboarding-col-7">
+              <div className="onboarding-card">
+                <div className="onboarding-card-header">
+                  <div>
+                    <h2 className="onboarding-card-title">New Ingestion Pipeline</h2>
+                    <p className="onboarding-card-subtitle">Configure vendor schema definitions and stream protocols.</p>
+                  </div>
+                  <div className="onboarding-step-badge">01</div>
+                </div>
+
+                <div className="onboarding-mode-toggle">
+                  <button className="onboarding-mode-btn active" type="button">
+                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                    <span>Create New Log Source</span>
+                  </button>
+                  <button className="onboarding-mode-btn inactive" type="button" disabled title="Not currently supported" style={{ opacity: 0.5, cursor: "not-allowed" }}>
+                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                    <span>Update Existing Source</span>
+                  </button>
+                </div>
+
+                {error && (
+                  <div style={{ padding: "0.75rem", marginBottom: "1.25rem", borderRadius: "0.5rem", backgroundColor: "#fef2f2", color: "#b91c1c", fontSize: "0.875rem", border: "1px solid #f87171" }}>
+                    <strong>Error: </strong>{error}
+                  </div>
+                )}
+
+                <form onSubmit={handleSubmit}>
+                  {/* Vendor Name */}
+                  <div className="onboarding-form-group">
+                    <div className="onboarding-label-wrapper">
+                      <label className="onboarding-label" htmlFor="vendorName">Vendor Name <span style={{ color: "#ef4444" }}>*</span></label>
+                      <span className="onboarding-label-tag">PROVIDER SPEC</span>
+                    </div>
+                    <div className="onboarding-input-wrapper">
+                      <div className="onboarding-input-icon">
+                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                      </div>
+                      <input
+                        id="vendorName"
+                        className="onboarding-input"
+                        placeholder="e.g. CrowdStrike, Palo Alto, AWS"
+                        required
+                        type="text"
+                        value={vendorName}
+                        onChange={(e) => setVendorName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Log Source Name */}
+                  <div className="onboarding-form-group">
+                    <div className="onboarding-label-wrapper">
+                      <label className="onboarding-label" htmlFor="sourceName">Log Source Name <span style={{ color: "#ef4444" }}>*</span></label>
+                      <span className="onboarding-label-tag">IDENTIFIER</span>
+                    </div>
+                    <div className="onboarding-input-wrapper">
+                      <div className="onboarding-input-icon">
+                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                      </div>
+                      <input
+                        id="sourceName"
+                        className="onboarding-input"
+                        placeholder="e.g. Falcon EDR Logs, Okta Auth Events"
+                        required
+                        type="text"
+                        value={sourceName}
+                        onChange={(e) => setSourceName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Source Format Selector */}
+                  <div className="onboarding-form-group">
+                    <div className="onboarding-label-wrapper">
+                      <label className="onboarding-label">Source Format <span style={{ color: "#ef4444" }}>*</span></label>
+                      <span className="onboarding-label-tag">PARSING ENGINE</span>
+                    </div>
+                    <div className="onboarding-format-grid">
+                      {["SYSLOG", "JSON", "CEF", "CSV"].map(fmt => (
+                        <button
+                          key={fmt}
+                          type="button"
+                          className={`onboarding-format-btn ${sourceType === fmt ? "active" : ""}`}
+                          onClick={() => setSourceType(fmt)}
+                        >
+                          {fmt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Sensor Configuration */}
+                  <div className={`onboarding-form-group onboarding-sensor-wrapper ${isSensorMode ? "active" : ""}`}>
+                    <div className="onboarding-sensor-header">
+                      <div style={{ flex: 1, cursor: "pointer", userSelect: "none" }} onClick={toggleSensorMode}>
+                        <div className="onboarding-sensor-title">
+                          <span style={{ fontSize: "0.875rem", fontWeight: 600, color: "#111827" }}>This is a sensor/telemetry source</span>
+                          <span className="onboarding-header-badge" style={{ fontSize: "0.625rem", padding: "0.125rem 0.5rem" }}>IOT & METRICS</span>
+                        </div>
+                        <p className="onboarding-sensor-desc">Enable this for high-frequency numeric sensor data (e.g. IoT, metrics) that requires delta-based aggregation instead of per-event logging.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className={`onboarding-switch ${isSensorMode ? "active" : ""}`}
+                        role="switch"
+                        aria-checked={isSensorMode}
+                        onClick={toggleSensorMode}
+                      >
+                        <span className="onboarding-switch-thumb"></span>
+                      </button>
+                    </div>
+
+                    {isSensorMode && (
+                      <div className="onboarding-sensor-body">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                          <span style={{ width: "1.25rem", height: "1.25rem", borderRadius: "9999px", backgroundColor: "#f0fdfa", color: "var(--ulpf-teal)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: "bold", border: "1px solid rgba(204, 251, 241, 0.6)" }}>i</span>
+                          <h4 style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#1f2937", textTransform: "uppercase", letterSpacing: "0.025em", margin: 0 }}>Sensor Configuration</h4>
+                        </div>
+                        <div className="onboarding-sensor-grid">
+                          <div>
+                            <label className="onboarding-label" style={{ display: "block", marginBottom: "0.375rem" }} htmlFor="sensorDeltaThreshold">DELTA THRESHOLD</label>
+                            <input
+                              className="onboarding-input no-icon"
+                              id="sensorDeltaThreshold"
+                              placeholder="e.g. 2.5"
+                              step="any"
+                              type="number"
+                              value={delta}
+                              onChange={(e) => setDelta(e.target.value)}
+                            />
+                            <p style={{ fontSize: "0.6875rem", color: "#9ca3af", marginTop: "0.25rem", lineHeight: "1.5" }}>Minimum value change required before a new event is emitted.</p>
+                          </div>
+                          <div>
+                            <label className="onboarding-label" style={{ display: "block", marginBottom: "0.375rem" }} htmlFor="sensorMaxInterval">MAX INTERVAL (MS)</label>
+                            <input
+                              className="onboarding-input no-icon"
+                              id="sensorMaxInterval"
+                              placeholder="e.g. 60000"
+                              step="100"
+                              type="number"
+                              value={maxIntervalMs}
+                              onChange={(e) => setMaxIntervalMs(e.target.value)}
+                            />
+                            <p style={{ fontSize: "0.6875rem", color: "#9ca3af", marginTop: "0.25rem", lineHeight: "1.5" }}>Maximum time before an emission is forced. Defaults to 60000ms.</p>
+                          </div>
+                          <div>
+                            <label className="onboarding-label" style={{ display: "block", marginBottom: "0.375rem" }} htmlFor="sensorFieldName">SENSOR FIELD</label>
+                            <input
+                              className="onboarding-input no-icon"
+                              id="sensorFieldName"
+                              placeholder="e.g. temp_celsius"
+                              type="text"
+                              value={sensorField}
+                              onChange={(e) => setSensorField(e.target.value)}
+                            />
+                            <p style={{ fontSize: "0.6875rem", color: "#9ca3af", marginTop: "0.25rem", lineHeight: "1.5" }}>The JSON key containing the numeric sensor value. Leave blank to auto-detect.</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Sample Log File */}
+                  <div className="onboarding-form-group">
+                    <div className="onboarding-label-wrapper">
+                      <span className="onboarding-label">Sample Log File</span>
+                      <span className="onboarding-header-badge" style={{ fontSize: "0.6875rem", borderRadius: "9999px" }}>Auto-Discovery</span>
+                    </div>
+
+                    {sampleLogFile ? (
+                      <div className="onboarding-file-attached">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                          <div style={{ width: "2.25rem", height: "2.25rem", borderRadius: "0.75rem", backgroundColor: "white", border: "1px solid #ccfbf1", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <svg style={{ width: "1.25rem", height: "1.25rem", color: "var(--ulpf-teal)" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" x2="8" y1="13" y2="13"></line><line x1="16" x2="8" y1="17" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                          </div>
+                          <div>
+                            <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>{sampleLogFile.name}</p>
+                            <p style={{ fontSize: "0.6875rem", fontFamily: "var(--font-mono)", color: "#6b7280", margin: 0 }}>{Math.round(sampleLogFile.size / 1024)} KB</p>
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => setSampleLogFile(null)} style={{ width: "1.5rem", height: "1.5rem", borderRadius: "9999px", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", background: "transparent", border: "none", cursor: "pointer" }} title="Remove file">
+                          <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="onboarding-dropzone" onClick={() => document.getElementById('sampleLogFileInput').click()}>
+                        <div className="onboarding-dropzone-icon">
+                          <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        </div>
+                        <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#374151", margin: "0 0 0.125rem 0" }}>Click to select sample log file</p>
+                        <p style={{ fontSize: "0.6875rem", color: "#9ca3af", margin: 0 }}>Accepted: .log, .csv, .json, .txt</p>
+                        <input
+                          id="sampleLogFileInput"
+                          type="file"
+                          accept={ACCEPTED_FILE_TYPES}
+                          onChange={(e) => setSampleLogFile(e.target.files[0] || null)}
+                          style={{ display: "none" }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Schema File */}
+                  <div className="onboarding-form-group">
+                    <div className="onboarding-label-wrapper">
+                      <label className="onboarding-label" style={{ color: "#6b7280" }}>Schema Specification (Optional)</label>
+                      <span className="onboarding-label-tag">AVRO / JSON-SCHEMA</span>
+                    </div>
+                    <div style={{ border: "1px dashed #e5e7eb", borderRadius: "0.75rem", padding: "0.75rem 1rem", display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: "rgba(249, 250, 251, 0.4)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.75rem", color: "#6b7280" }}>
+                        <svg style={{ width: "1rem", height: "1rem", color: "#9ca3af" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        <span>{schemaFile ? schemaFile.name : "Upload schema dictionary (Optional)"}</span>
+                      </div>
+                      <button type="button" onClick={() => document.getElementById('schemaFileInput').click()} style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--ulpf-teal-dark)", background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
+                        {schemaFile ? "Replace" : "Select"}
+                      </button>
+                      <input
+                        id="schemaFileInput"
+                        type="file"
+                        accept={ACCEPTED_FILE_TYPES}
+                        onChange={(e) => setSchemaFile(e.target.files[0] || null)}
+                        style={{ display: "none" }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ paddingTop: "0.5rem" }}>
+                    <button
+                      className="onboarding-submit-btn"
+                      type="submit"
+                      disabled={loading || !sourceType}
+                    >
+                      {loading ? (
+                        <>
+                          <svg className="animate-spin" style={{ width: "1rem", height: "1rem", animation: "spin 1s linear infinite" }} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25"></circle>
+                            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" opacity="0.75"></path>
+                          </svg>
+                          Submitting...
+                        </>
+                      ) : (
+                        "Submit Onboarding Request"
+                      )}
+                    </button>
+                  </div>
+
+                </form>
+              </div>
+            </section>
+
+            {/* RIGHT PANEL: Guidelines & Live Preview */}
+            <section className="onboarding-col-5">
+              <div className="onboarding-card" style={{ marginBottom: "1.5rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", paddingBottom: "0.75rem", marginBottom: "0.75rem", borderBottom: "1px solid #f3f4f6" }}>
+                  <span style={{ width: "1.5rem", height: "1.5rem", borderRadius: "9999px", backgroundColor: "#fffbeb", color: "#d97706", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: "bold", border: "1px solid rgba(253, 230, 138, 0.6)" }}>i</span>
+                  <h3 style={{ fontSize: "0.875rem", fontWeight: "bold", color: "#1f2937", textTransform: "uppercase", letterSpacing: "0.025em", margin: 0 }}>Ingestion Guidelines</h3>
+                </div>
+                <ul className="onboarding-guidelines-list">
+                  <li>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <span><strong>Supported Formats:</strong> .log, .json, .csv, .txt up to 10MB sample payload size.</span>
+                  </li>
+                  <li>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <span><strong>Manual Verification:</strong> Submitted requests will be reviewed by an administrator prior to activation.</span>
+                  </li>
+                  <li>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <span><strong>Security & Hygiene:</strong> PII anonymization heuristics run within in-memory buffer before indexing.</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="onboarding-card">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: "0.75rem", marginBottom: "0.75rem", borderBottom: "1px solid #f3f4f6" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span style={{ fontSize: "0.875rem" }}>📄</span>
+                    <h3 style={{ fontSize: "0.875rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>Format Reference Preview</h3>
+                  </div>
+                  <span style={{ fontSize: "0.625rem", fontFamily: "var(--font-mono)", fontWeight: 600, padding: "0.125rem 0.5rem", backgroundColor: "#f3f4f6", color: "#4b5563", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
+                    SYNTAX: <span>{sourceType || "NONE"}</span>
+                  </span>
+                </div>
+
+                <div className="onboarding-code-viewer">
+                  <div style={{ position: "absolute", top: "0.5rem", right: "0.5rem", fontSize: "0.5625rem", color: "#64748b" }}>UTF-8</div>
+                  <pre>
+                    {renderFormatSnippet(sourceType)}
+                  </pre>
+                </div>
+
+                <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <div style={{ width: "1.75rem", height: "1.75rem", borderRadius: "0.75rem", backgroundColor: "#f0fdfa", border: "1px solid #ccfbf1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative", boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)" }}>
+                      <div style={{ display: "flex", gap: "0.25rem", marginBottom: "0.125rem" }}>
+                        <span style={{ width: "0.25rem", height: "0.25rem", borderRadius: "9999px", backgroundColor: "var(--ulpf-teal-dark)" }}></span>
+                        <span style={{ width: "0.25rem", height: "0.25rem", borderRadius: "9999px", backgroundColor: "var(--ulpf-teal-dark)" }}></span>
+                      </div>
+                      <div style={{ width: "0.5rem", height: "0.125rem", backgroundColor: "var(--ulpf-teal-dark)", borderRadius: "9999px" }}></div>
+                    </div>
+                    <div style={{ fontSize: "0.6875rem", lineHeight: 1.25 }}>
+                      <span style={{ fontWeight: "bold", color: "#1f2937" }}>Schema Learning Engine</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
 
-          <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-source-type" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Source Format (required)</label>
-            <input
-              id="onboard-source-type"
-              type="text"
-              value={sourceType}
-              onChange={(e) => setSourceType(e.target.value)}
-              placeholder="e.g. SYSLOG, JSON, CEF"
-              required
-              style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
-            />
-          </div>
-
-          {/* Log Stream Type Selector & Sensor Optimization Settings */}
-          <div style={{ marginBottom: "16px", background: "#f8f9fa", padding: "14px", borderRadius: "6px", border: "1px solid #e9ecef" }}>
-            <label style={{ fontWeight: "600", display: "block", marginBottom: "6px" }}>Log Stream Type</label>
-            <div style={{ display: "flex", gap: "15px", marginBottom: "10px" }}>
-              <label style={{ cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="logType"
-                  value="REG_LOG"
-                  checked={logType === "REG_LOG"}
-                  onChange={(e) => setLogType(e.target.value)}
-                  style={{ marginRight: "6px" }}
-                />
-                Regular Log Stream (REG_LOG)
-              </label>
-              <label style={{ cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="logType"
-                  value="SEN_TEL"
-                  checked={logType === "SEN_TEL"}
-                  onChange={(e) => setLogType(e.target.value)}
-                  style={{ marginRight: "6px" }}
-                />
-                ⚡ Sensor / Telemetry Stream (SEN_TEL)
-              </label>
+          {/* SECTION: Pipelines & Requests History */}
+          <div className="onboarding-card onboarding-history-section">
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem", paddingBottom: "1.5rem", borderBottom: "1px solid #f3f4f6" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <div style={{ width: "2.25rem", height: "2.25rem", borderRadius: "1rem", backgroundColor: "#f0fdfa", color: "var(--ulpf-teal)", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #ccfbf1" }}>
+                    <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: "1.125rem", fontWeight: "bold", color: "#111827", margin: 0 }}>Pipelines & Requests History</h2>
+                    <p style={{ fontSize: "0.75rem", color: "#6b7280", margin: 0 }}>Audit submitted schema onboarding tickets and inspect active stream endpoints.</p>
+                  </div>
+                </div>
+                <div className="onboarding-tabs">
+                  <button
+                    className={`onboarding-mode-btn ${historyTab === "requests" ? "active" : "inactive"}`}
+                    onClick={() => setHistoryTab("requests")}
+                    type="button"
+                  >
+                    My Onboarding Requests
+                  </button>
+                  <button
+                    className={`onboarding-mode-btn ${historyTab === "active" ? "active" : "inactive"}`}
+                    onClick={() => setHistoryTab("active")}
+                    type="button"
+                  >
+                    My Active Log Sources
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {logType === "SEN_TEL" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginTop: "10px", background: "#eef2f7", padding: "12px", borderRadius: "6px" }}>
-                <div>
-                  <label htmlFor="sensor-delta" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Emission Delta Threshold</label>
-                  <input
-                    id="sensor-delta"
-                    type="number"
-                    step="any"
-                    value={delta}
-                    onChange={(e) => setDelta(e.target.value)}
-                    placeholder="e.g. 0.5"
-                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
-                  />
+            <div style={{ marginTop: "1.5rem", overflowX: "auto" }}>
+              {myRequestsLoading ? (
+                <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>Loading data...</p>
+              ) : historyTab === "requests" ? (
+                myRequests.length === 0 ? (
+                  <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>No onboarding requests submitted yet.</p>
+                ) : (
+                  <table className="onboarding-table">
+                    <thead>
+                      <tr>
+                        <th>Request ID</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {myRequests.map((r) => (
+                        <tr key={r.requestId}>
+                          <td style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827" }}>{r.requestId}</td>
+                          <td style={{ fontWeight: 500, color: "#1f2937" }}>{r.requestType}</td>
+                          <td>
+                            <span className={`status-badge ${r.status === "APPROVED" ? "status-approved" : r.status === "REJECTED" ? "status-rejected" : "status-submitted"}`}>
+                              {r.status}
+                            </span>
+                          </td>
+                          <td style={{ fontFamily: "var(--font-mono)", color: "#6b7280" }}>{r.createdAt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              ) : (
+                mySources.length === 0 ? (
+                  <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>No active sources onboarded yet.</p>
+                ) : (
+                  <table className="onboarding-table">
+                    <thead>
+                      <tr>
+                        <th>SOURCE NAME</th>
+                        <th>SOURCE ID</th>
+                        <th>TYPE</th>
+                        <th>STATUS</th>
+                        <th>DATE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mySources.map((s) => (
+                        <tr key={s.sourceId}>
+                          <td style={{ fontWeight: 500, color: "#1f2937", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <span style={{ width: "0.5rem", height: "0.5rem", borderRadius: "9999px", backgroundColor: "var(--ulpf-teal)" }}></span>
+                            {s.sourceName}
+                          </td>
+                          <td style={{ fontFamily: "var(--font-mono)", color: "#6b7280" }}>{s.sourceId}</td>
+                          <td>
+                            <span style={{ display: "inline-flex", alignItems: "center", padding: "0.125rem 0.5rem", borderRadius: "0.375rem", fontSize: "0.6875rem", fontFamily: "var(--font-mono)", fontWeight: 600, backgroundColor: "#f0fdfa", color: "var(--ulpf-teal-dark)", border: "1px solid #ccfbf1" }}>
+                              {s.sourceType}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-badge ${s.status === "ACTIVE" ? "status-approved" : s.status === "SUSPENDED" ? "status-submitted" : "status-rejected"}`}>
+                              {s.status}
+                            </span>
+                          </td>
+                          <td style={{ fontFamily: "var(--font-mono)", color: "#6b7280" }}>{s.createdAt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Success Modal */}
+      {showModal && (
+        <div className="onboarding-modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="onboarding-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => setShowModal(false)}
+              style={{ position: "absolute", top: "1rem", right: "1rem", color: "#9ca3af", padding: "0.375rem", borderRadius: "9999px", background: "transparent", border: "none", cursor: "pointer" }}
+              title="Close modal"
+            >
+              <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+            </button>
+
+            <div style={{ margin: "0 auto 1.25rem auto", width: "4rem", height: "4rem", borderRadius: "1.5rem", backgroundColor: "#f0fdfa", border: "1px solid rgba(204, 251, 241, 0.8)", color: "var(--ulpf-teal)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", boxShadow: "var(--box-shadow-soft)" }}>
+              <span style={{ fontSize: "1.5rem", userSelect: "none" }}>✨</span>
+              <div style={{ position: "absolute", top: "-0.25rem", right: "-0.25rem", width: "1.5rem", height: "1.5rem", backgroundColor: "#10b981", borderRadius: "9999px", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: "bold", boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)" }}>
+                <svg style={{ width: "0.875rem", height: "0.875rem" }} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+              </div>
+            </div>
+
+            <h3 style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#111827", marginBottom: "0.5rem" }}>Request Submitted!</h3>
+            <p style={{ fontSize: "0.875rem", color: "#4b5563", marginBottom: "1.5rem", lineHeight: "1.625" }}>
+              Your onboarding request (<span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827", backgroundColor: "#f3f4f6", padding: "0.125rem 0.375rem", borderRadius: "0.25rem", border: "1px solid rgba(229, 231, 235, 0.6)" }}>{result?.requestId}</span>) is now under review. Our system will evaluate your sample and prepare standard indices.
+            </p>
+
+            {result?.apiKey && (
+              <div style={{ backgroundColor: "#fffbeb", border: "1px solid rgba(253, 230, 138, 0.8)", borderRadius: "1rem", padding: "1rem", marginBottom: "1.25rem", textAlign: "left" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem", marginBottom: "0.625rem" }}>
+                  <span style={{ color: "#f59e0b", fontSize: "1rem", lineHeight: 1 }}>⚠️</span>
+                  <div>
+                    <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#78350f", letterSpacing: "-0.025em", margin: 0 }}>Save this API key now!</p>
+                    <p style={{ fontSize: "0.6875rem", color: "#b45309", marginTop: "0.125rem", margin: 0 }}>It will not be shown again for security reasons.</p>
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="sensor-max-interval" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Max Interval (ms)</label>
-                  <input
-                    id="sensor-max-interval"
-                    type="number"
-                    value={maxIntervalMs}
-                    onChange={(e) => setMaxIntervalMs(e.target.value)}
-                    placeholder="60000"
-                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="sensor-field" style={{ fontSize: "0.85em", fontWeight: "600", display: "block", marginBottom: "4px" }}>Sensor Field Name</label>
-                  <input
-                    id="sensor-field"
-                    type="text"
-                    value={sensorField}
-                    onChange={(e) => setSensorField(e.target.value)}
-                    placeholder="e.g. temperature"
-                    style={{ width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "0.9em" }}
-                  />
+                <div style={{ backgroundColor: "white", borderRadius: "0.75rem", border: "1px solid rgba(253, 230, 138, 0.7)", padding: "0.625rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem", fontWeight: 600, color: "#1f2937", wordBreak: "break-all", userSelect: "all" }}>
+                    {result.apiKey}
+                  </span>
+                  <button onClick={copyModalApiKey} type="button" style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: "0.25rem", fontSize: "0.6875rem", fontWeight: 600, color: "var(--ulpf-teal-dark)", border: "1px solid #ccfbf1", backgroundColor: "rgba(240, 253, 250, 0.7)", padding: "0.25rem 0.625rem", borderRadius: "0.5rem", transition: "all 0.2s", cursor: "pointer" }}>
+                    {copySuccess ? "✅ Copied!" : "📋 Copy"}
+                  </button>
                 </div>
               </div>
             )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "1.5rem" }}>
+              <button
+                onClick={() => {
+                  setShowModal(false);
+                  navigate("/notifications");
+                }}
+                className="onboarding-submit-btn"
+                style={{ fontSize: "0.875rem", padding: "0.75rem 1.5rem", borderRadius: "9999px" }}
+              >
+                View Notifications
+              </button>
+              <button
+                onClick={() => {
+                  setShowModal(false);
+                  setHistoryTab("requests");
+                  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                }}
+                style={{ width: "100%", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", padding: "0.25rem 0", background: "transparent", border: "none", cursor: "pointer" }}
+              >
+                Start another request
+              </button>
+            </div>
           </div>
-
-          <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-sample-log" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Sample Log File (optional)</label>
-            <input
-              id="onboard-sample-log"
-              type="file"
-              accept={ACCEPTED_FILE_TYPES}
-              onChange={(e) => setSampleLogFile(e.target.files[0] || null)}
-            />
-          </div>
-
-          <div style={{ marginBottom: "12px" }}>
-            <label htmlFor="onboard-schema" style={{ fontWeight: "600", display: "block", marginBottom: "4px" }}>Schema File (optional)</label>
-            <input
-              id="onboard-schema"
-              type="file"
-              accept={ACCEPTED_FILE_TYPES}
-              onChange={(e) => setSchemaFile(e.target.files[0] || null)}
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{ background: "#006b5f", color: "white", border: "none", padding: "10px 20px", borderRadius: "4px", fontWeight: "600", cursor: "pointer" }}
-          >
-            {loading ? "Submitting…" : "🚀 Submit Onboarding Request"}
-          </button>
-        </form>
-
-        {result && (
-          <div style={{ background: "#e8f5e9", border: "1px solid #4CAF50", padding: "15px", borderRadius: "6px", marginBottom: "25px" }}>
-            <h3 style={{ margin: "0 0 10px 0", color: "#2e7d32" }}>Request Submitted Successfully</h3>
-            <p><strong>Request ID:</strong> <code style={{ fontFamily: "monospace" }}>{result.requestId}</code></p>
-            <p><strong>Source ID:</strong> <code style={{ fontFamily: "monospace" }}>{result.sourceId}</code></p>
-            <p><strong>Status:</strong> {result.status}</p>
-
-            {result.apiKey && (
-              <div style={{ background: "#fff3cd", border: "1px solid #ffebaba", padding: "12px", borderRadius: "6px", margin: "10px 0" }}>
-                <p style={{ color: "#856404", fontWeight: "bold", margin: "0 0 5px 0" }}>
-                  🔑 Save your Raw API Key now! For security reasons, it will not be displayed again:
-                </p>
-                <code style={{ background: "#e0e0e0", padding: "6px 12px", borderRadius: "4px", fontSize: "1.1em", fontFamily: "monospace" }}>
-                  {result.apiKey}
-                </code>
-              </div>
-            )}
-
-            {result.message && <p>{result.message}</p>}
-          </div>
-        )}
-
-        {error && (
-          <div style={{ background: "#f8d7da", color: "#721c24", padding: "12px", borderRadius: "6px", marginBottom: "25px" }}>
-            {error}
-          </div>
-        )}
-
-        {/* My Onboarding Requests Feed Feed */}
-        <div style={{ background: "white", padding: "20px", borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.08)", marginBottom: "25px" }}>
-          <h3>My Onboarding Requests</h3>
-          {myRequestsLoading && <p>Loading requests…</p>}
-          {!myRequestsLoading && myRequests.length === 0 && <p style={{ color: "#666" }}>No onboarding requests submitted yet.</p>}
-          {!myRequestsLoading && myRequests.length > 0 && (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9em" }}>
-              <thead>
-                <tr style={{ background: "#f0f4f8", textAlign: "left" }}>
-                  <th style={{ padding: "8px" }}>Request ID</th>
-                  <th style={{ padding: "8px" }}>Type</th>
-                  <th style={{ padding: "8px" }}>Status</th>
-                  <th style={{ padding: "8px" }}>Submitted At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {myRequests.map((r) => (
-                  <tr key={r.requestId} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "8px", fontFamily: "monospace" }}>{r.requestId}</td>
-                    <td style={{ padding: "8px" }}>{r.requestType}</td>
-                    <td style={{ padding: "8px" }}>
-                      <span
-                        style={{
-                          padding: "2px 8px",
-                          borderRadius: "10px",
-                          fontSize: "0.8em",
-                          fontWeight: "bold",
-                          color: "white",
-                          background: r.status === "APPROVED" ? "#28a745" : r.status === "REJECTED" ? "#dc3545" : "#fd7e14"
-                        }}
-                      >
-                        {r.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "8px" }}>{r.createdAt}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
         </div>
-
-        {/* My Active Sources */}
-        <div style={{ background: "white", padding: "20px", borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.08)", marginBottom: "25px" }}>
-          <h3>My Log Sources</h3>
-          {myRequestsLoading && <p>Loading sources…</p>}
-          {!myRequestsLoading && mySources.length === 0 && <p style={{ color: "#666" }}>No sources onboarded yet.</p>}
-          {!myRequestsLoading && mySources.length > 0 && (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9em" }}>
-              <thead>
-                <tr style={{ background: "#f0f4f8", textAlign: "left" }}>
-                  <th style={{ padding: "8px" }}>Source Name</th>
-                  <th style={{ padding: "8px" }}>Source ID</th>
-                  <th style={{ padding: "8px" }}>Type</th>
-                  <th style={{ padding: "8px" }}>Status</th>
-                  <th style={{ padding: "8px" }}>Created At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mySources.map((s) => (
-                  <tr key={s.sourceId} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "8px", fontWeight: "600" }}>{s.sourceName}</td>
-                    <td style={{ padding: "8px", fontFamily: "monospace" }}>{s.sourceId}</td>
-                    <td style={{ padding: "8px" }}>{s.sourceType}</td>
-                    <td style={{ padding: "8px" }}>
-                      <span
-                        style={{
-                          padding: "2px 8px",
-                          borderRadius: "10px",
-                          fontSize: "0.8em",
-                          fontWeight: "bold",
-                          color: "white",
-                          background: s.status === "ACTIVE" ? "#28a745" : s.status === "SUSPENDED" ? "#ffc107" : "#dc3545"
-                        }}
-                      >
-                        {s.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "8px" }}>{s.createdAt}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
