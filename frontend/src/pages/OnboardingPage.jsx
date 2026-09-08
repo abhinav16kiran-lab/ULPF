@@ -9,7 +9,7 @@ function OnboardingPage() {
 
   const [vendorName, setVendorName] = useState("");
   const [sourceName, setSourceName] = useState("");
-  const [sourceType, setSourceType] = useState("JSON");
+  const [sourceType, setSourceType] = useState("");
   const [logType, setLogType] = useState("REG_LOG");
   const [delta, setDelta] = useState("");
   const [maxIntervalMs, setMaxIntervalMs] = useState("60000");
@@ -20,6 +20,7 @@ function OnboardingPage() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   // Tabs state for history
   const [historyTab, setHistoryTab] = useState("requests"); // "requests" | "active"
@@ -101,7 +102,7 @@ function OnboardingPage() {
       // Clear form & refetch user data
       setVendorName("");
       setSourceName("");
-      setSourceType("JSON");
+      setSourceType("");
       setLogType("REG_LOG");
       setDelta("");
       setMaxIntervalMs("60000");
@@ -138,7 +139,8 @@ function OnboardingPage() {
   const copyModalApiKey = () => {
     if (navigator.clipboard && result?.apiKey) {
       navigator.clipboard.writeText(result.apiKey);
-      alert("Copied API key to clipboard!");
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
     }
   };
 
@@ -148,18 +150,51 @@ function OnboardingPage() {
 
   const ACCEPTED_FILE_TYPES = ".log,.csv,.json,.txt";
 
-  const getFormatSnippet = (fmt) => {
+  const renderFormatSnippet = (fmt) => {
     switch (fmt) {
       case "JSON":
-        return `<span class="text-slate-500 select-none">1 </span>{\n<span class="text-slate-500 select-none">2 </span>  <span class="text-teal-400">"timestamp"</span>: <span class="text-amber-300">"2026-09-04T12:00:00Z"</span>,\n<span class="text-slate-500 select-none">3 </span>  <span class="text-teal-400">"src_ip"</span>: <span class="text-emerald-300">"192.168.1.50"</span>,\n<span class="text-slate-500 select-none">4 </span>  <span class="text-teal-400">"dest_ip"</span>: <span class="text-emerald-300">"10.0.4.120"</span>,\n<span class="text-slate-500 select-none">5 </span>  <span class="text-teal-400">"action"</span>: <span class="text-rose-400">"BLOCK"</span>,\n<span class="text-slate-500 select-none">6 </span>  <span class="text-teal-400">"vendor"</span>: <span class="text-amber-300">"CrowdStrike Falcon"</span>,\n<span class="text-slate-500 select-none">7 </span>  <span class="text-teal-400">"rule_id"</span>: <span class="text-indigo-300">"SEC_SURGE_99"</span>\n<span class="text-slate-500 select-none">8 </span>}`;
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"{\n"}
+            <span className="text-slate-500 select-none">2 </span>  <span className="text-teal-400">"timestamp"</span>: <span className="text-amber-300">"2026-09-04T12:00:00Z"</span>,{"\n"}
+            <span className="text-slate-500 select-none">3 </span>  <span className="text-teal-400">"src_ip"</span>: <span className="text-emerald-300">"192.168.1.50"</span>,{"\n"}
+            <span className="text-slate-500 select-none">4 </span>  <span className="text-teal-400">"dest_ip"</span>: <span className="text-emerald-300">"10.0.4.120"</span>,{"\n"}
+            <span className="text-slate-500 select-none">5 </span>  <span className="text-teal-400">"action"</span>: <span className="text-rose-400">"BLOCK"</span>,{"\n"}
+            <span className="text-slate-500 select-none">6 </span>  <span className="text-teal-400">"vendor"</span>: <span className="text-amber-300">"CrowdStrike Falcon"</span>,{"\n"}
+            <span className="text-slate-500 select-none">7 </span>  <span className="text-teal-400">"rule_id"</span>: <span className="text-indigo-300">"SEC_SURGE_99"</span>{"\n"}
+            <span className="text-slate-500 select-none">8 </span>{"}"}
+          </>
+        );
       case "SYSLOG":
-        return `<span class="text-slate-500 select-none">1 </span>&lt;134&gt;1 2026-09-04T12:00:00Z falcon.host.corp CS-EDR - -\n<span class="text-slate-500 select-none">2 </span>[meta src="192.168.1.50" dst="10.0.4.120" action="BLOCK"]\n<span class="text-slate-500 select-none">3 </span>Process injection attempt halted on PID 4410`;
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"<134>1 2026-09-04T12:00:00Z falcon.host.corp CS-EDR - -"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"[meta src=\"192.168.1.50\" dst=\"10.0.4.120\" action=\"BLOCK\"]"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"Process injection attempt halted on PID 4410"}
+          </>
+        );
       case "CEF":
-        return `<span class="text-slate-500 select-none">1 </span>CEF:0|CrowdStrike|Falcon|1.0|SEC_SURGE_99|Malicious Process|7|\n<span class="text-slate-500 select-none">2 </span>src=192.168.1.50 dst=10.0.4.120 act=BLOCK\n<span class="text-slate-500 select-none">3 </span>msg=Process terminated cleanly by kernel driver`;
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"CEF:0|CrowdStrike|Falcon|1.0|SEC_SURGE_99|Malicious Process|7|"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"src=192.168.1.50 dst=10.0.4.120 act=BLOCK"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"msg=Process terminated cleanly by kernel driver"}
+          </>
+        );
       case "CSV":
-        return `<span class="text-slate-500 select-none">1 </span>timestamp,src_ip,dest_ip,action,rule_id\n<span class="text-slate-500 select-none">2 </span>2026-09-04T12:00:00Z,192.168.1.50,10.0.4.120,BLOCK,SEC_SURGE_99\n<span class="text-slate-500 select-none">3 </span>2026-09-04T12:00:01Z,192.168.1.52,10.0.4.121,ALLOW,SEC_SURGE_01`;
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"timestamp,src_ip,dest_ip,action,rule_id"}{"\n"}
+            <span className="text-slate-500 select-none">2 </span>{"2026-09-04T12:00:00Z,192.168.1.50,10.0.4.120,BLOCK,SEC_SURGE_99"}{"\n"}
+            <span className="text-slate-500 select-none">3 </span>{"2026-09-04T12:00:01Z,192.168.1.52,10.0.4.121,ALLOW,SEC_SURGE_01"}
+          </>
+        );
       default:
-        return `<span class="text-slate-500 select-none">1 </span>{}`;
+        return (
+          <>
+            <span className="text-slate-500 select-none">1 </span>{"{}"}
+          </>
+        );
     }
   };
 
@@ -176,7 +211,7 @@ function OnboardingPage() {
                 Onboard New Log Stream
                 <span className="onboarding-header-badge">V2.4 Ingest Engine</span>
               </h1>
-              <p className="onboarding-header-desc">Register telemetry connectors, calibrate custom schemas, and activate zero-friction parsing.</p>
+              <p className="onboarding-header-desc">Register telemetry connectors and calibrate custom schemas.</p>
             </div>
           </div>
 
@@ -194,11 +229,11 @@ function OnboardingPage() {
 
                 <div className="onboarding-mode-toggle">
                   <button className="onboarding-mode-btn active" type="button">
-                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                     <span>Create New Log Source</span>
                   </button>
-                  <button className="onboarding-mode-btn inactive" type="button" disabled>
-                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                  <button className="onboarding-mode-btn inactive" type="button" disabled title="Not currently supported" style={{ opacity: 0.5, cursor: "not-allowed" }}>
+                    <svg style={{ width: "14px", height: "14px" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                     <span>Update Existing Source</span>
                   </button>
                 </div>
@@ -218,7 +253,7 @@ function OnboardingPage() {
                     </div>
                     <div className="onboarding-input-wrapper">
                       <div className="onboarding-input-icon">
-                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
                       </div>
                       <input
                         id="vendorName"
@@ -240,7 +275,7 @@ function OnboardingPage() {
                     </div>
                     <div className="onboarding-input-wrapper">
                       <div className="onboarding-input-icon">
-                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        <svg style={{ width: "16px", height: "16px" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
                       </div>
                       <input
                         id="sourceName"
@@ -257,7 +292,7 @@ function OnboardingPage() {
                   {/* Source Format Selector */}
                   <div className="onboarding-form-group">
                     <div className="onboarding-label-wrapper">
-                      <label className="onboarding-label">Source Format</label>
+                      <label className="onboarding-label">Source Format <span style={{ color: "#ef4444" }}>*</span></label>
                       <span className="onboarding-label-tag">PARSING ENGINE</span>
                     </div>
                     <div className="onboarding-format-grid">
@@ -356,7 +391,7 @@ function OnboardingPage() {
                       <div className="onboarding-file-attached">
                         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                           <div style={{ width: "2.25rem", height: "2.25rem", borderRadius: "0.75rem", backgroundColor: "white", border: "1px solid #ccfbf1", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <svg style={{ width: "1.25rem", height: "1.25rem", color: "var(--ulpf-teal)" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" x2="8" y1="13" y2="13"></line><line x1="16" x2="8" y1="17" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                            <svg style={{ width: "1.25rem", height: "1.25rem", color: "var(--ulpf-teal)" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" x2="8" y1="13" y2="13"></line><line x1="16" x2="8" y1="17" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
                           </div>
                           <div>
                             <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>{sampleLogFile.name}</p>
@@ -364,13 +399,13 @@ function OnboardingPage() {
                           </div>
                         </div>
                         <button type="button" onClick={() => setSampleLogFile(null)} style={{ width: "1.5rem", height: "1.5rem", borderRadius: "9999px", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", background: "transparent", border: "none", cursor: "pointer" }} title="Remove file">
-                          <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                          <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
                         </button>
                       </div>
                     ) : (
                       <div className="onboarding-dropzone" onClick={() => document.getElementById('sampleLogFileInput').click()}>
                         <div className="onboarding-dropzone-icon">
-                          <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                          <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
                         </div>
                         <p style={{ fontSize: "0.75rem", fontWeight: "bold", color: "#374151", margin: "0 0 0.125rem 0" }}>Click to select sample log file</p>
                         <p style={{ fontSize: "0.6875rem", color: "#9ca3af", margin: 0 }}>Accepted: .log, .csv, .json, .txt</p>
@@ -393,8 +428,8 @@ function OnboardingPage() {
                     </div>
                     <div style={{ border: "1px dashed #e5e7eb", borderRadius: "0.75rem", padding: "0.75rem 1rem", display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: "rgba(249, 250, 251, 0.4)" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.75rem", color: "#6b7280" }}>
-                        <svg style={{ width: "1rem", height: "1rem", color: "#9ca3af" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
-                        <span>{schemaFile ? schemaFile.name : "Upload schema dictionary or let AI infer structure"}</span>
+                        <svg style={{ width: "1rem", height: "1rem", color: "#9ca3af" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+                        <span>{schemaFile ? schemaFile.name : "Upload schema dictionary (Optional)"}</span>
                       </div>
                       <button type="button" onClick={() => document.getElementById('schemaFileInput').click()} style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--ulpf-teal-dark)", background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
                         {schemaFile ? "Replace" : "Select"}
@@ -413,7 +448,7 @@ function OnboardingPage() {
                     <button
                       className="onboarding-submit-btn"
                       type="submit"
-                      disabled={loading}
+                      disabled={loading || !sourceType}
                     >
                       {loading ? (
                         <>
@@ -427,10 +462,6 @@ function OnboardingPage() {
                         "Submit Onboarding Request"
                       )}
                     </button>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", marginTop: "0.75rem", fontSize: "0.75rem", color: "#9ca3af" }}>
-                      <svg style={{ width: "0.875rem", height: "0.875rem", color: "#10b981" }} fill="currentColor" viewBox="0 0 20 20"><path clipRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" fillRule="evenodd"></path></svg>
-                      <span>Pre-flight payload check passes with TLS 1.3 encryption</span>
-                    </div>
                   </div>
 
                 </form>
@@ -446,15 +477,15 @@ function OnboardingPage() {
                 </div>
                 <ul className="onboarding-guidelines-list">
                   <li>
-                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
                     <span><strong>Supported Formats:</strong> .log, .json, .csv, .txt up to 10MB sample payload size.</span>
                   </li>
                   <li>
-                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
-                    <span><strong>AI Field Discovery:</strong> Timestamp patterns, IPv4/IPv6, and tenant markers are detected automatically.</span>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <span><strong>Manual Verification:</strong> Submitted requests will be reviewed by an administrator prior to activation.</span>
                   </li>
                   <li>
-                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
+                    <div className="onboarding-guidelines-icon"><svg style={{ width: "0.625rem", height: "0.625rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3"></path></svg></div>
                     <span><strong>Security & Hygiene:</strong> PII anonymization heuristics run within in-memory buffer before indexing.</span>
                   </li>
                 </ul>
@@ -464,16 +495,18 @@ function OnboardingPage() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: "0.75rem", marginBottom: "0.75rem", borderBottom: "1px solid #f3f4f6" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <span style={{ fontSize: "0.875rem" }}>📄</span>
-                    <h3 style={{ fontSize: "0.875rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>Raw File Content Preview</h3>
+                    <h3 style={{ fontSize: "0.875rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>Format Reference Preview</h3>
                   </div>
                   <span style={{ fontSize: "0.625rem", fontFamily: "var(--font-mono)", fontWeight: 600, padding: "0.125rem 0.5rem", backgroundColor: "#f3f4f6", color: "#4b5563", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
-                    SYNTAX: <span>{sourceType} / STREAM</span>
+                    SYNTAX: <span>{sourceType || "NONE"}</span>
                   </span>
                 </div>
 
                 <div className="onboarding-code-viewer">
                   <div style={{ position: "absolute", top: "0.5rem", right: "0.5rem", fontSize: "0.5625rem", color: "#64748b" }}>UTF-8</div>
-                  <pre dangerouslySetInnerHTML={{ __html: getFormatSnippet(sourceType) }}></pre>
+                  <pre>
+                    {renderFormatSnippet(sourceType)}
+                  </pre>
                 </div>
 
                 <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -486,12 +519,8 @@ function OnboardingPage() {
                       <div style={{ width: "0.5rem", height: "0.125rem", backgroundColor: "var(--ulpf-teal-dark)", borderRadius: "9999px" }}></div>
                     </div>
                     <div style={{ fontSize: "0.6875rem", lineHeight: 1.25 }}>
-                      <span style={{ fontWeight: "bold", color: "#1f2937" }}>Schema Confidence:</span>
-                      <span style={{ color: "#059669", fontFamily: "var(--font-mono)", fontWeight: "bold", marginLeft: "0.25rem" }}>99.4%</span>
+                      <span style={{ fontWeight: "bold", color: "#1f2937" }}>Schema Learning Engine</span>
                     </div>
-                  </div>
-                  <div style={{ display: "inline-flex", alignItems: "center", padding: "0.25rem 0.5rem", borderRadius: "0.5rem", backgroundColor: "rgba(240, 253, 250, 0.7)", border: "1px solid rgba(204, 251, 241, 0.5)", fontSize: "0.625rem", fontFamily: "var(--font-mono)", color: "var(--ulpf-teal-dark)" }}>
-                    <span style={{ color: "#f59e0b", marginRight: "0.25rem" }}>✨</span> 14 fields auto-indexed
                   </div>
                 </div>
               </div>
@@ -504,7 +533,7 @@ function OnboardingPage() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                   <div style={{ width: "2.25rem", height: "2.25rem", borderRadius: "1rem", backgroundColor: "#f0fdfa", color: "var(--ulpf-teal)", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #ccfbf1" }}>
-                    <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                    <svg style={{ width: "1rem", height: "1rem" }} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                   </div>
                   <div>
                     <h2 style={{ fontSize: "1.125rem", fontWeight: "bold", color: "#111827", margin: 0 }}>Pipelines & Requests History</h2>
@@ -541,7 +570,6 @@ function OnboardingPage() {
                     <thead>
                       <tr>
                         <th>Request ID</th>
-                        <th>Source Name</th>
                         <th>Type</th>
                         <th>Status</th>
                         <th>Date</th>
@@ -552,7 +580,6 @@ function OnboardingPage() {
                         <tr key={r.requestId}>
                           <td style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827" }}>{r.requestId}</td>
                           <td style={{ fontWeight: 500, color: "#1f2937" }}>{r.requestType}</td>
-                          <td style={{ color: "#4b5563" }}>{r.sourceType}</td>
                           <td>
                             <span className={`status-badge ${r.status === "APPROVED" ? "status-approved" : r.status === "REJECTED" ? "status-rejected" : "status-submitted"}`}>
                               {r.status}
@@ -617,19 +644,19 @@ function OnboardingPage() {
               style={{ position: "absolute", top: "1rem", right: "1rem", color: "#9ca3af", padding: "0.375rem", borderRadius: "9999px", background: "transparent", border: "none", cursor: "pointer" }}
               title="Close modal"
             >
-              <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+              <svg style={{ width: "1.25rem", height: "1.25rem" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
             </button>
 
             <div style={{ margin: "0 auto 1.25rem auto", width: "4rem", height: "4rem", borderRadius: "1.5rem", backgroundColor: "#f0fdfa", border: "1px solid rgba(204, 251, 241, 0.8)", color: "var(--ulpf-teal)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", boxShadow: "var(--box-shadow-soft)" }}>
               <span style={{ fontSize: "1.5rem", userSelect: "none" }}>✨</span>
               <div style={{ position: "absolute", top: "-0.25rem", right: "-0.25rem", width: "1.5rem", height: "1.5rem", backgroundColor: "#10b981", borderRadius: "9999px", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: "bold", boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)" }}>
-                <svg style={{ width: "0.875rem", height: "0.875rem" }} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                <svg style={{ width: "0.875rem", height: "0.875rem" }} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"></path></svg>
               </div>
             </div>
 
             <h3 style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#111827", marginBottom: "0.5rem" }}>Request Submitted!</h3>
             <p style={{ fontSize: "0.875rem", color: "#4b5563", marginBottom: "1.5rem", lineHeight: "1.625" }}>
-              Your onboarding request (<span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827", backgroundColor: "#f3f4f6", padding: "0.125rem 0.375rem", borderRadius: "0.25rem", border: "1px solid rgba(229, 231, 235, 0.6)" }}>{result?.requestId}</span>) is now under review. AI Field Discovery has calibrated the schema and registered live routing channels.
+              Your onboarding request (<span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "#111827", backgroundColor: "#f3f4f6", padding: "0.125rem 0.375rem", borderRadius: "0.25rem", border: "1px solid rgba(229, 231, 235, 0.6)" }}>{result?.requestId}</span>) is now under review. Our system will evaluate your sample and prepare standard indices.
             </p>
 
             {result?.apiKey && (
@@ -646,7 +673,7 @@ function OnboardingPage() {
                     {result.apiKey}
                   </span>
                   <button onClick={copyModalApiKey} type="button" style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: "0.25rem", fontSize: "0.6875rem", fontWeight: 600, color: "var(--ulpf-teal-dark)", border: "1px solid #ccfbf1", backgroundColor: "rgba(240, 253, 250, 0.7)", padding: "0.25rem 0.625rem", borderRadius: "0.5rem", transition: "all 0.2s", cursor: "pointer" }}>
-                    📋 Copy
+                    {copySuccess ? "✅ Copied!" : "📋 Copy"}
                   </button>
                 </div>
               </div>
@@ -656,8 +683,7 @@ function OnboardingPage() {
               <button
                 onClick={() => {
                   setShowModal(false);
-                  setHistoryTab("requests");
-                  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                  navigate("/notifications");
                 }}
                 className="onboarding-submit-btn"
                 style={{ fontSize: "0.875rem", padding: "0.75rem 1.5rem", borderRadius: "9999px" }}
@@ -665,10 +691,14 @@ function OnboardingPage() {
                 View Notifications
               </button>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => {
+                  setShowModal(false);
+                  setHistoryTab("requests");
+                  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                }}
                 style={{ width: "100%", fontSize: "0.75rem", fontWeight: 600, color: "#6b7280", padding: "0.25rem 0", background: "transparent", border: "none", cursor: "pointer" }}
               >
-                Return to Dashboard
+                Start another request
               </button>
             </div>
           </div>
