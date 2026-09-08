@@ -113,3 +113,18 @@ CREATE TABLE IF NOT EXISTS mapping_aliases (
 -- Add unique constraint to prevent duplicate alias keys
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mapping_aliases_unique_key 
 ON mapping_aliases(alias_key);
+
+-- 10. Batch Integrity Blocks table: Merkle-tree batch roots and hash chain blocks for log tamper-evidence.
+CREATE TABLE IF NOT EXISTS batch_integrity_blocks (
+    block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL,
+    event_count INTEGER NOT NULL,
+    first_event_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    merkle_root TEXT NOT NULL,
+    previous_block_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_integrity_source_created ON batch_integrity_blocks(source_id, created_at);
+

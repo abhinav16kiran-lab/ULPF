@@ -29,6 +29,7 @@ public class ClickHouseIngestionRepository {
     private static final Logger log = LoggerFactory.getLogger(ClickHouseIngestionRepository.class);
 
     private final JdbcTemplate clickhouseJdbcTemplate;
+    private com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService;
     private final Queue<RawEventRecord> bufferQueue = new ConcurrentLinkedQueue<>();
     private final Queue<CanonicalEventRecord> canonicalQueue = new ConcurrentLinkedQueue<>();
     
@@ -41,6 +42,11 @@ public class ClickHouseIngestionRepository {
 
     public ClickHouseIngestionRepository(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setBatchIntegrityService(com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService) {
+        this.batchIntegrityService = batchIntegrityService;
     }
 
     public record RawEventRecord(
@@ -61,8 +67,22 @@ public class ClickHouseIngestionRepository {
         Integer mappingVersion,
         LocalDateTime timestamp,
         Double numericValue,
-        String canonicalPayload
-    ) {}
+        String canonicalPayload,
+        String rawUnmapped
+    ) {
+        public CanonicalEventRecord(
+            String eventId,
+            String lineageId,
+            String vendorId,
+            String sourceId,
+            Integer mappingVersion,
+            LocalDateTime timestamp,
+            Double numericValue,
+            String canonicalPayload
+        ) {
+            this(eventId, lineageId, vendorId, sourceId, mappingVersion, timestamp, numericValue, canonicalPayload, "{}");
+        }
+    }
 
     /**
      * Enqueues a raw event record into the in-memory buffer and recent history tracker.
@@ -142,6 +162,15 @@ public class ClickHouseIngestionRepository {
 
             log.info("Successfully flushed {} raw log events to ClickHouse.", batch.size());
 
+            // Generate Merkle Tree tamper-evident integrity block for batch
+            if (batchIntegrityService != null) {
+                try {
+                    batchIntegrityService.processRawBatch(batch);
+                } catch (Exception e) {
+                    log.warn("Failed to process batch integrity block: {}", e.getMessage());
+                }
+            }
+
         } catch (Exception e) {
             log.error("Failed to flush batch of {} raw log events to ClickHouse!", batch.size(), e);
             // Re-enqueue batch in case of transient network failure
@@ -170,8 +199,8 @@ public class ClickHouseIngestionRepository {
         try {
             log.info("Flushing batch of {} canonical events to ClickHouse (ulpf_events.canonical_events)...", batch.size());
             String sql = """
-                INSERT INTO ulpf_events.canonical_events (event_id, lineage_id, vendor_id, source_id, mapping_version, timestamp, numeric_value, canonical_payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO ulpf_events.canonical_events (event_id, lineage_id, vendor_id, source_id, mapping_version, timestamp, numeric_value, canonical_payload, raw_unmapped)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
 
             clickhouseJdbcTemplate.batchUpdate(sql, batch, batch.size(), (ps, record) -> {
@@ -191,6 +220,7 @@ public class ClickHouseIngestionRepository {
                     ps.setNull(7, java.sql.Types.DOUBLE);
                 }
                 ps.setString(8, record.canonicalPayload());
+                ps.setString(9, record.rawUnmapped() != null ? record.rawUnmapped() : "{}");
             });
 
             log.info("Successfully flushed {} canonical events to ClickHouse.", batch.size());
