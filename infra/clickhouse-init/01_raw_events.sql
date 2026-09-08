@@ -6,10 +6,10 @@ CREATE DATABASE IF NOT EXISTS ulpf_events;
 -- Re-compressed with ultra-high ZSTD(15) after 7 days (saves ~80% storage, 0 row deletions).
 CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
 (
-    event_id         STRING,
-    lineage_id       STRING,
+    event_id         String,
+    lineage_id       String,
     vendor_id        String,
-    source_id        STRING,
+    source_id        String,
     mapping_version  Nullable(UInt32),
     received_at      DateTime64(3) DEFAULT now64(3),
     raw_payload      String CODEC(ZSTD(1))
