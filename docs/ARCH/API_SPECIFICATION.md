@@ -21,6 +21,7 @@
 | `POST /v1/login` | Prototype authentication | Control plane |
 | `GET /v1/notifications` | Load notifications for the logged-in user | Control plane |
 | `GET /v1/analytics` | Authorized read-only analytics access to ClickHouse | Analytics |
+| `GET /v1/integrity/verify/{blockId}` | Cryptographic Merkle tree audit verification endpoint | Control / Integrity plane |
 
 ## 3. `POST /v1/events`
 
@@ -215,3 +216,20 @@ The final API should represent at least:
 - validation failure
 
 Exact error-object structure is TBD.
+
+## 11. `GET /v1/integrity/verify/{blockId}`
+
+Cryptographic Merkle Tree audit verification endpoint. Re-computes SHA-256 event hashes for raw logs in ClickHouse corresponding to the specified `blockId`, constructs the binary Merkle root, and compares it against SQLite's persisted root.
+
+### Response format:
+```json
+{
+  "blockId": "blk_9012830192",
+  "sourceId": "src_fw_001",
+  "eventCount": 100,
+  "persistedMerkleRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "calculatedMerkleRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "status": "VERIFIED_INTACT",
+  "verifiedAt": "2026-09-08T17:20:00"
+}
+```

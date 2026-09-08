@@ -31,6 +31,7 @@ public class EventIngestionService {
     private final MappingRepository mappingRepository;
     private final ClickHouseIngestionRepository clickHouseIngestionRepository;
     private final SensorTelemetryEvaluator sensorTelemetryEvaluator;
+    private final SchemaDriftNotificationService schemaDriftNotificationService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EventIngestionService(
@@ -39,10 +40,22 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator
     ) {
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public EventIngestionService(
+            CredentialRepository credentialRepository,
+            MappingRepository mappingRepository,
+            ClickHouseIngestionRepository clickHouseIngestionRepository,
+            SensorTelemetryEvaluator sensorTelemetryEvaluator,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) SchemaDriftNotificationService schemaDriftNotificationService
+    ) {
         this.credentialRepository = credentialRepository;
         this.mappingRepository = mappingRepository;
         this.clickHouseIngestionRepository = clickHouseIngestionRepository;
         this.sensorTelemetryEvaluator = sensorTelemetryEvaluator;
+        this.schemaDriftNotificationService = schemaDriftNotificationService;
     }
 
     public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt) {}
@@ -139,7 +152,7 @@ public class EventIngestionService {
         clickHouseIngestionRepository.enqueue(rawEvent);
 
         // Extract unmapped fields into Lossless Overflow Field (raw_unmapped JSON)
-        String rawUnmappedJson = extractUnmappedFields(payload, mappingOpt);
+        String rawUnmappedJson = extractUnmappedFields(payload, mappingOpt, cred.sourceId());
 
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
@@ -209,7 +222,7 @@ public class EventIngestionService {
         return null;
     }
 
-    private String extractUnmappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt) {
+    private String extractUnmappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
         if (payload == null) {
             return "{}";
         }
@@ -243,23 +256,27 @@ public class EventIngestionService {
             com.fasterxml.jackson.databind.node.ObjectNode unmappedNode = objectMapper.createObjectNode();
             var fields = payloadNode.fields();
 
+            List<HistoricalVersion> historicalVersions = null;
+            java.util.Map<Integer, java.util.Set<String>> fallbackKeysByVersion = new java.util.HashMap<>();
+
             while (fields.hasNext()) {
                 var entry = fields.next();
                 String vendorKey = entry.getKey();
                 JsonNode value = entry.getValue();
 
-                boolean isMapped = false;
-                if (mappingRoot != null && mappingRoot.has(vendorKey)) {
-                    JsonNode fieldMapping = mappingRoot.get(vendorKey);
-                    if (fieldMapping != null && fieldMapping.isObject() && fieldMapping.has("canonicalField")) {
-                        String canonicalField = fieldMapping.get("canonicalField").asText();
-                        if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
+                boolean isMapped = isKeyMappedInJson(vendorKey, mappingRoot);
+
+                // Fallback check against historical/retired versions if not mapped in active version
+                if (!isMapped && sourceId != null && mappingRepository != null) {
+                    if (historicalVersions == null) {
+                        historicalVersions = loadHistoricalVersions(sourceId, mappingOpt);
+                    }
+                    for (HistoricalVersion hist : historicalVersions) {
+                        if (isKeyMappedInJson(vendorKey, hist.rootNode())) {
                             isMapped = true;
-                        }
-                    } else if (fieldMapping != null && fieldMapping.isTextual()) {
-                        String canonicalField = fieldMapping.asText();
-                        if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
-                            isMapped = true;
+                            fallbackKeysByVersion.computeIfAbsent(hist.version(), k -> new java.util.HashSet<>()).add(vendorKey);
+                            log.debug("Field '{}' matched against historical mapping version v{} for source {}", vendorKey, hist.version(), sourceId);
+                            break;
                         }
                     }
                 }
@@ -269,10 +286,72 @@ public class EventIngestionService {
                 }
             }
 
-            return unmappedNode.isEmpty() ? "{}" : objectMapper.writeValueAsString(unmappedNode);
+            // Dispatch deduplicated notification to vendor if historical fallback occurred
+            if (!fallbackKeysByVersion.isEmpty() && schemaDriftNotificationService != null && sourceId != null) {
+                for (var entry : fallbackKeysByVersion.entrySet()) {
+                    schemaDriftNotificationService.notifyHistoricalFallback(sourceId, entry.getKey(), entry.getValue());
+                }
+            } else if (fallbackKeysByVersion.isEmpty() && schemaDriftNotificationService != null && sourceId != null && mappingOpt.isPresent()) {
+                // If log stream fully resumed active mapping (0 fallbacks) and previously had a fallback alert active
+                if (schemaDriftNotificationService.hasFallbackAlert(sourceId)) {
+                    schemaDriftNotificationService.notifyVersionUpgrade(sourceId, mappingOpt.get().version());
+                }
+            }
+
+            if (!unmappedNode.isEmpty()) {
+                if (schemaDriftNotificationService != null && sourceId != null) {
+                    java.util.Set<String> unmappedKeys = new java.util.HashSet<>();
+                    var fieldNames = unmappedNode.fieldNames();
+                    while (fieldNames.hasNext()) {
+                        unmappedKeys.add(fieldNames.next());
+                    }
+                    schemaDriftNotificationService.checkAndNotifyDrift(sourceId, unmappedKeys);
+                }
+                return objectMapper.writeValueAsString(unmappedNode);
+            }
+
+            return "{}";
         } catch (Exception e) {
             log.warn("Failed to extract unmapped fields: {}", e.getMessage());
             return "{}";
         }
+    }
+
+    private record HistoricalVersion(int version, JsonNode rootNode) {}
+
+    private boolean isKeyMappedInJson(String vendorKey, JsonNode mappingRoot) {
+        if (mappingRoot == null || !mappingRoot.has(vendorKey)) {
+            return false;
+        }
+        JsonNode fieldMapping = mappingRoot.get(vendorKey);
+        if (fieldMapping != null && fieldMapping.isObject() && fieldMapping.has("canonicalField")) {
+            String canonicalField = fieldMapping.get("canonicalField").asText();
+            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
+        } else if (fieldMapping != null && fieldMapping.isTextual()) {
+            String canonicalField = fieldMapping.asText();
+            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
+        }
+        return false;
+    }
+
+    private List<HistoricalVersion> loadHistoricalVersions(String sourceId, Optional<MappingVersionRecord> activeMappingOpt) {
+        List<HistoricalVersion> list = new java.util.ArrayList<>();
+        try {
+            List<MappingVersionRecord> allVersions = mappingRepository.findAllValidVersionsBySourceId(sourceId);
+            for (MappingVersionRecord ver : allVersions) {
+                if (activeMappingOpt.isPresent() && activeMappingOpt.get().mappingId() != null
+                        && activeMappingOpt.get().mappingId().equals(ver.mappingId())) {
+                    continue;
+                }
+                if (ver.mappingJson() != null && !ver.mappingJson().isBlank()) {
+                    try {
+                        list.add(new HistoricalVersion(ver.version(), objectMapper.readTree(ver.mappingJson())));
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load historical mapping versions for source {}: {}", sourceId, e.getMessage());
+        }
+        return list;
     }
 }
