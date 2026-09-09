@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import client from "../api/client";
 import Navbar from "../components/Navbar";
+import EmptyState from "../components/EmptyState";
 
 function AdminDashboardPage() {
   const navigate = useNavigate();
@@ -304,28 +305,36 @@ function AdminDashboardPage() {
 
         {/* MAIN MASTER-DETAIL WORKSPACE */}
         {!sandboxSkeleton && !sandboxEmpty && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: "20px" }}>
-            {/* LEFT COLUMN: REQUEST QUEUE */}
-            <section style={{ display: mobileView === "inspector" ? "none" : "flex", flexDirection: "column", gap: "12px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "0.75rem", fontWeight: "700", color: "#6c7a77", textTransform: "uppercase" }}>
-                  INCOMING STREAMS ({requests.length})
-                </span>
-                <span style={{ fontSize: "0.75rem", color: "#006b5f", fontFamily: "monospace", fontWeight: "600" }}>
-                  auto-sync ON
-                </span>
-              </div>
-
-              {loading && <p>Loading stream queue…</p>}
-              {error && <p style={{ color: "red" }}>{error}</p>}
-
-              {!loading && !error && requests.length === 0 && (
-                <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "16px", textAlign: "center", color: "#6c7a77" }}>
-                  No onboarding requests submitted yet.
+          loading ? (
+            <div style={{ padding: "40px 0", textAlign: "center", color: "#6c7a77" }}>
+              Loading stream queue…
+            </div>
+          ) : error ? (
+            <div style={{ padding: "40px 0", textAlign: "center", color: "#ae2f34" }}>
+              {error}
+            </div>
+          ) : requests.length === 0 ? (
+            <div style={{ padding: "20px 0" }}>
+              <EmptyState
+                title="All caught up!"
+                description="No pending requests. Great job! All incoming vendor log streams are mapped and healthy."
+                transparent={true}
+              />
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: "20px" }}>
+              {/* LEFT COLUMN: REQUEST QUEUE */}
+              <section style={{ display: mobileView === "inspector" ? "none" : "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.75rem", fontWeight: "700", color: "#6c7a77", textTransform: "uppercase" }}>
+                    INCOMING STREAMS ({requests.length})
+                  </span>
+                  <span style={{ fontSize: "0.75rem", color: "#006b5f", fontFamily: "monospace", fontWeight: "600" }}>
+                    auto-sync ON
+                  </span>
                 </div>
-              )}
 
-              {!loading && !error && requests.map((req) => {
+                {requests.map((req) => {
                 const isSelected = req.requestId === selectedReqId;
                 const meta = parseMetadata(req);
                 const reqLogType = meta.log_type || "REG_LOG";
@@ -598,7 +607,7 @@ function AdminDashboardPage() {
               )}
             </section>
           </div>
-        )}
+        ))}
 
         {/* REJECTION REASON OVERLAY MODAL */}
         {showRejectModal && (

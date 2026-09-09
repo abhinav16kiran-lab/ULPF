@@ -1,10 +1,13 @@
 export default function EmptyState({
-  title = "All Caught Up!",
-  description = "No items or records found matching your filter.",
-  actionButton = null
+  title = "All caught up!",
+  description = "No pending requests. Great job! All incoming vendor log streams are mapped and healthy.",
+  actionButton = null,
+  transparent = false
 }) {
   return (
-    <div className="bg-white rounded-3xl border border-slate-200/80 p-8 sm:p-12 text-center shadow-sm my-6 flex flex-col items-center justify-center">
+    <div className={`w-full py-12 px-6 text-center flex flex-col items-center justify-center ${
+      transparent ? "my-2" : "bg-white rounded-3xl border border-slate-200/80 shadow-sm my-6"
+    }`}>
       {/* Official ULPF Empty Page Character Illustration SVG */}
       <div className="w-52 h-40 mb-4 flex items-center justify-center">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" fill="none" className="w-full h-full">
