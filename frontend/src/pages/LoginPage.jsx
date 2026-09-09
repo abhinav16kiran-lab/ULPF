@@ -64,12 +64,15 @@ function LoginPage() {
       }
     } catch (err) {
       if (err.response && err.response.data) {
-        if (typeof err.response.data === "string") {
-          setError(err.response.data);
-        } else if (err.response.data.error) {
-          setError(err.response.data.error);
+        const data = err.response.data;
+        if (typeof data === "string") {
+          setError(data.startsWith("<") ? "Login failed. Please try again later." : data);
+        } else if (data.message) {
+          setError(data.message);
+        } else if (data.error) {
+          setError(data.error);
         } else {
-          setError(JSON.stringify(err.response.data));
+          setError("An unexpected error occurred during login");
         }
       } else {
         setError(err.message || "An unexpected error occurred during login");

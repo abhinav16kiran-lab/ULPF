@@ -74,10 +74,15 @@ function SignupPage() {
       navigate("/login");
     } catch (err) {
       if (err.response && err.response.data) {
-        if (typeof err.response.data === "string") {
-          setError(err.response.data);
+        const data = err.response.data;
+        if (typeof data === "string") {
+          setError(data.startsWith("<") ? "Signup failed. Please try again later." : data);
+        } else if (data.message) {
+          setError(data.message);
+        } else if (data.error) {
+          setError(data.error);
         } else {
-          setError(JSON.stringify(err.response.data));
+          setError("An unexpected error occurred during signup");
         }
       } else {
         setError(err.message || "An unexpected error occurred during signup");
