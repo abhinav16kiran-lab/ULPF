@@ -80,4 +80,19 @@ class AnalyticsControllerTest {
                         .param("interval", "5m"))
                 .andExpect(status().isOk());
     }
+
+    @Test
+    void testImportLogFile_ReturnsOk() throws Exception {
+        org.springframework.mock.web.MockMultipartFile mockFile = new org.springframework.mock.web.MockMultipartFile(
+                "file", "logs.json", "application/json", "{\"test\":true}".getBytes()
+        );
+        when(analyticsService.importLogFile(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new AnalyticsService.BulkImportResult("SUCCESS", "logs.json", 1, 10, "cisco", "fw1"));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/v1/analytics/import/file")
+                        .file(mockFile)
+                        .param("vendorId", "cisco")
+                        .param("sourceId", "fw1"))
+                .andExpect(status().isOk());
+    }
 }

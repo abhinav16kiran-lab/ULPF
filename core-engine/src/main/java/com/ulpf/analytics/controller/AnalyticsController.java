@@ -117,6 +117,20 @@ public class AnalyticsController {
         ));
     }
 
+    @org.springframework.web.bind.annotation.PostMapping(value = "/analytics/import/file", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> importLogFile(
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(required = false) String vendorId,
+            @RequestParam(required = false) String sourceId
+    ) {
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Uploaded log file cannot be empty"));
+        }
+
+        var result = analyticsService.importLogFile(file, vendorId, sourceId);
+        return ResponseEntity.ok(result);
+    }
+
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
     }

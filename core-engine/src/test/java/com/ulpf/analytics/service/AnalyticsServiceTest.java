@@ -93,4 +93,34 @@ class AnalyticsServiceTest {
         assertNotNull(buckets);
         assertFalse(buckets.isEmpty());
     }
+
+    @Test
+    void testImportLogFile_Success() {
+        org.springframework.mock.web.MockMultipartFile mockFile = new org.springframework.mock.web.MockMultipartFile(
+                "file",
+                "test_logs.json",
+                "application/json",
+                "{\"event\":\"login\",\"user\":\"admin\"}\n{\"event\":\"logout\",\"user\":\"admin\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+
+        var result = analyticsService.importLogFile(mockFile, "cisco", "fw1");
+        assertNotNull(result);
+        assertEquals("SUCCESS", result.status());
+        assertEquals("test_logs.json", result.fileName());
+        assertEquals("cisco", result.vendorId());
+        assertEquals("fw1", result.sourceId());
+        assertTrue(result.importedCount() > 0);
+    }
+
+    @Test
+    void testImportLogFile_EmptyFileThrowsException() {
+        org.springframework.mock.web.MockMultipartFile emptyFile = new org.springframework.mock.web.MockMultipartFile(
+                "file",
+                "empty.log",
+                "text/plain",
+                new byte[0]
+        );
+
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.importLogFile(emptyFile, "v1", "s1"));
+    }
 }

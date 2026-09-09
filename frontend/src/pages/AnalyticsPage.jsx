@@ -51,6 +51,40 @@ function AnalyticsPage() {
   const [selectedPayload, setSelectedPayload] = useState(null);
   const [exportingParquet, setExportingParquet] = useState(false);
 
+  // Bulk File Upload Modal State
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importingFile, setImportingFile] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importVendor, setImportVendor] = useState("");
+  const [importSource, setImportSource] = useState("");
+  const [importResult, setImportResult] = useState(null);
+
+  const handleBulkImportFile = async (e) => {
+    e.preventDefault();
+    if (!importFile) return;
+    setImportingFile(true);
+    setErrorMessage("");
+    setImportResult(null);
+
+    const formData = new FormData();
+    formData.append("file", importFile);
+    if (importVendor) formData.append("vendorId", importVendor);
+    if (importSource) formData.append("sourceId", importSource);
+
+    try {
+      const res = await client.post("/v1/analytics/import/file", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setImportResult(res.data);
+    } catch (err) {
+      console.warn("Bulk import error:", err);
+      const msg = err.response?.data?.error || err.message || "Failed to import file";
+      setErrorMessage(msg);
+    } finally {
+      setImportingFile(false);
+    }
+  };
+
   const handleGrafanaSearch = async () => {
     setLoading(true);
     setViewState("running");
@@ -303,17 +337,30 @@ function AnalyticsPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleParquetExport}
-            disabled={exportingParquet}
-            className="inline-flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow-md transition-all shrink-0 active:scale-95 disabled:opacity-50"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            <span>{exportingParquet ? "Generating Parquet..." : "📦 Export Parquet for AI/ML"}</span>
-          </button>
+          <div className="flex items-center space-x-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => { setShowImportModal(true); setImportResult(null); }}
+              className="inline-flex items-center space-x-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow-md transition-all shrink-0 active:scale-95"
+            >
+              <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3V8" />
+              </svg>
+              <span>📁 Bulk Import Log File</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleParquetExport}
+              disabled={exportingParquet}
+              className="inline-flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow-md transition-all shrink-0 active:scale-95 disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span>{exportingParquet ? "Generating Parquet..." : "📦 Export Parquet for AI/ML"}</span>
+            </button>
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -1549,6 +1596,102 @@ function AnalyticsPage() {
             </div>
           )}
         </div>
+
+        {/* BULK IMPORT LOG FILE MODAL */}
+        {showImportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 lg:p-8 space-y-6 relative overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-600">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3V8" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Bulk Import Log File</h3>
+                    <p className="text-xs text-slate-500">Upload legacy JSON, GZIP (.gz), or raw log archives to ClickHouse.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowImportModal(false)}
+                  className="text-slate-400 hover:text-slate-600 text-lg font-bold p-1"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleBulkImportFile} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Log File (.json, .gz, .log, .csv) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="file"
+                    required
+                    accept=".json,.gz,.log,.csv,.txt"
+                    onChange={(e) => setImportFile(e.target.files[0])}
+                    className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-teal-600 file:text-white hover:file:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Vendor ID (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. cisco"
+                      value={importVendor}
+                      onChange={(e) => setImportVendor(e.target.value)}
+                      className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                      Source ID (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. legacy_fw"
+                      value={importSource}
+                      onChange={(e) => setImportSource(e.target.value)}
+                      className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+
+                {importResult && (
+                  <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs space-y-1 font-mono">
+                    <div className="font-bold">✓ Upload Success: {importResult.fileName}</div>
+                    <div>Imported Records: <strong>{importResult.importedCount}</strong></div>
+                    <div>Processing Time: <strong>{importResult.executionTimeMs} ms</strong></div>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowImportModal(false)}
+                    className="px-5 py-2.5 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={importingFile || !importFile}
+                    className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-all disabled:opacity-50"
+                  >
+                    {importingFile ? "Uploading & Ingesting..." : "⚡ Upload & Ingest File"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Footer */}

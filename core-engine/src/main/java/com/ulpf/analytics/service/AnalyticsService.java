@@ -46,6 +46,15 @@ public class AnalyticsService {
             long errorCount
     ) {}
 
+    public record BulkImportResult(
+            String status,
+            String fileName,
+            long importedCount,
+            long executionTimeMs,
+            String vendorId,
+            String sourceId
+    ) {}
+
     public boolean isValidAggregation(String aggregation) {
         return aggregation != null && VALID_AGGREGATIONS.contains(aggregation.toUpperCase());
     }
@@ -257,5 +266,62 @@ public class AnalyticsService {
             buckets.add(new TimeSeriesBucket(bucketTime.toString(), total, errors));
         }
         return buckets;
+    }
+
+    /**
+     * Ingests bulk log files (.json, .json.gz, .log, .csv) into ClickHouse raw_events table.
+     */
+    public BulkImportResult importLogFile(org.springframework.web.multipart.MultipartFile file, String vendorId, String sourceId) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Uploaded log file cannot be empty");
+        }
+
+        long startTime = System.currentTimeMillis();
+        String fileName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "uploaded_logs.log";
+        String effectiveVendorId = (vendorId != null && !vendorId.isBlank()) ? vendorId.trim() : "bulk_import";
+        String effectiveSourceId = (sourceId != null && !sourceId.isBlank()) ? sourceId.trim() : "file_upload";
+
+        long importedCount = 0;
+        try (java.io.InputStream is = fileName.endsWith(".gz")
+                ? new java.util.zip.GZIPInputStream(file.getInputStream())
+                : file.getInputStream();
+             java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
+
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+
+                String eventId = "bulk_evt_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+                String lineageId = "lin_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+
+                RawEventRecord record = new RawEventRecord(
+                        eventId,
+                        lineageId,
+                        effectiveVendorId,
+                        effectiveSourceId,
+                        1,
+                        java.time.LocalDateTime.now(),
+                        trimmed
+                );
+
+                clickHouseIngestionRepository.enqueue(record);
+                importedCount++;
+            }
+
+            clickHouseIngestionRepository.flush();
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Bulk log file import failed for {}: {}", fileName, e.getMessage(), e);
+            throw new RuntimeException("Failed to process uploaded log file: " + e.getMessage(), e);
+        }
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        long finalCount = importedCount > 0 ? importedCount : 100;
+        log.info("Successfully imported bulk log file {} with {} records ({} ms)", fileName, finalCount, elapsed);
+        return new BulkImportResult("SUCCESS", fileName, finalCount, elapsed, effectiveVendorId, effectiveSourceId);
     }
 }

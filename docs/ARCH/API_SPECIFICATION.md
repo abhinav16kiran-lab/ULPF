@@ -306,4 +306,27 @@ Time-series histogram aggregation endpoint calculating total log throughput and 
 ]
 ```
 
+## 15. `POST /v1/analytics/import/file`
+
+Bulk log file ingestion endpoint supporting direct upload of legacy JSON, GZIP compressed (`.gz`), raw log (`.log`), or CSV files directly into ClickHouse's `ulpf_raw.raw_events` table for accelerated enterprise data migration.
+
+### Request Format:
+`multipart/form-data`
+- `file` (required): Uploaded log file binary byte stream (`.json`, `.gz`, `.log`, `.csv`)
+- `vendorId` (optional): Override vendor identifier (default: `bulk_import`)
+- `sourceId` (optional): Override source identifier (default: `file_upload`)
+
+### Response Format:
+```json
+{
+  "status": "SUCCESS",
+  "fileName": "legacy_logs_2026.json.gz",
+  "importedCount": 12500,
+  "executionTimeMs": 142,
+  "vendorId": "cisco",
+  "sourceId": "fw_legacy"
+}
+```
+
+
 

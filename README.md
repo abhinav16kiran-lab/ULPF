@@ -310,6 +310,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
 | `GET` | `/v1/analytics/search` | Admin Token | Full-text log substring & regex search (ClickHouse `tokenbf_v1`) |
 | `GET` | `/v1/analytics/timeseries` | Admin Token | Time-series histogram throughput & error spike aggregation |
+| `POST` | `/v1/analytics/import/file` | Admin Token | Bulk upload legacy log files (`.json`, `.gz`, `.log`, `.csv`) |
 | `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |
 | `GET` | `/v1/integrity/blocks` | Bearer Token | List Merkle batch integrity blocks |
