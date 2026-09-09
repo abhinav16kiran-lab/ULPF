@@ -51,38 +51,68 @@ fi
 
 echo "Using container orchestrator: $COMPOSE_CMD"
 
-echo "Building and launching containers..."
-$COMPOSE_CMD up --build -d
+echo "Building and launching container services..."
+$COMPOSE_CMD up --build -d > /dev/null 2>&1 &
+BUILD_PID=$!
 
-echo "Waiting for Core Engine..."
+# Clean progress spinner while containers build
+SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+i=0
+while kill -0 $BUILD_PID 2>/dev/null; do
+    i=$(( (i + 1) % 10 ))
+    printf "\r[%s] Compiling and starting containers... Please wait..." "${SPINNER[$i]}"
+    sleep 0.2
+done
+wait $BUILD_PID
+printf "\r[✓] Container build and launch complete!               \n"
 
-MAX_RETRIES=30
+echo "Verifying service readiness..."
+
+MAX_RETRIES=40
 RETRIES=0
 
-until curl -s -o /dev/null -w "%{http_code}" \
-    http://localhost:8080/v1/health | grep -qE "200" \
-    || [ $RETRIES -eq $MAX_RETRIES ]; do
+ENGINE_READY=0
+FRONTEND_READY=0
+
+until [ $RETRIES -eq $MAX_RETRIES ]; do
+    if [ $ENGINE_READY -eq 0 ]; then
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/v1/health 2>/dev/null | grep -qE "200"; then
+            ENGINE_READY=1
+        fi
+    fi
+
+    if [ $FRONTEND_READY -eq 0 ]; then
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null | grep -qE "200|304"; then
+            FRONTEND_READY=1
+        fi
+    fi
+
+    if [ $ENGINE_READY -eq 1 ] && [ $FRONTEND_READY -eq 1 ]; then
+        break
+    fi
 
     sleep 2
     RETRIES=$((RETRIES+1))
-    echo -n "."
+    printf "\rWaiting for services... [%d/%d]" "$RETRIES" "$MAX_RETRIES"
 done
 
 echo ""
 
-if [ $RETRIES -eq $MAX_RETRIES ]; then
-    echo "Backend is taking longer than expected."
-    echo "Check logs with:"
-    echo "$COMPOSE_CMD logs core-engine"
+if [ $ENGINE_READY -eq 1 ] && [ $FRONTEND_READY -eq 1 ]; then
+    echo "All ULPF services initialized successfully!"
+    echo ""
+    echo "============================================================"
+    echo "ULPF Platform is READY!"
+    echo "------------------------------------------------------------"
+    echo "Frontend App:     http://localhost:3000"
+    echo "Core Engine API:  http://localhost:8080/v1"
+    echo "ClickHouse DB:    http://localhost:8123"
+    echo "============================================================"
 else
-    echo "Core Engine initialized successfully!"
+    echo "============================================================"
+    echo "WARNING: One or more services took longer than expected to start."
+    echo "------------------------------------------------------------"
+    echo "Check active container status with: $COMPOSE_CMD ps"
+    echo "Inspect container logs with:       $COMPOSE_CMD logs"
+    echo "============================================================"
 fi
-
-echo ""
-echo "============================================================"
-echo "ULPF Platform is READY!"
-echo "------------------------------------------------------------"
-echo "Frontend App:     http://localhost:3000"
-echo "Core Engine API:  http://localhost:8080/v1"
-echo "ClickHouse DB:    http://localhost:8123"
-echo "============================================================"

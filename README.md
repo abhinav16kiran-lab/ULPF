@@ -51,6 +51,7 @@ Run the automated platform launcher for your operating system:
 
 * **Linux / macOS**:
   ```bash
+  chmod +x start.sh
   ./start.sh
   ```
 

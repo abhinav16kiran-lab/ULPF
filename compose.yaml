@@ -26,7 +26,10 @@ services:
       retries: 10
       start_period: 5s
     networks:
-      - ulpf-net
+      ulpf-net:
+        aliases:
+          - clickhouse
+          - ulpf-clickhouse
 
   core-engine:
     build:
@@ -56,7 +59,10 @@ services:
       clickhouse:
         condition: service_healthy
     networks:
-      - ulpf-net
+      ulpf-net:
+        aliases:
+          - core-engine
+          - ulpf-core-engine
 
   frontend:
     build:
@@ -74,7 +80,10 @@ services:
       core-engine:
         condition: service_healthy
     networks:
-      - ulpf-net
+      ulpf-net:
+        aliases:
+          - frontend
+          - ulpf-frontend
 
 volumes:
   clickhouse-data:

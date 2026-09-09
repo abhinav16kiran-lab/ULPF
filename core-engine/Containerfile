@@ -5,13 +5,13 @@ WORKDIR /build
 
 # Copy Maven POM and pre-fetch dependencies for layer caching
 COPY pom.xml .
-RUN mvn dependency:go-offline -B || true
+RUN mvn dependency:go-offline -B -q || true
 
 # Copy application source and resources
 COPY src ./src
 
 # Package application JAR without running unit tests during container image build
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -q
 
 # Stage 2: Runtime stage with lightweight OpenJDK 21 JRE
 FROM docker.io/eclipse-temurin:21-jre-alpine
