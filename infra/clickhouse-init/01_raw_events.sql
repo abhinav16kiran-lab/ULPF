@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
     source_id        String,
     mapping_version  Nullable(UInt32),
     received_at      DateTime64(3) DEFAULT now64(3),
-    raw_payload      String CODEC(ZSTD(1))
+    raw_payload      String CODEC(ZSTD(1)),
+    INDEX idx_raw_token raw_payload TYPE tokenbf_v1(30720, 2, 0) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(received_at)

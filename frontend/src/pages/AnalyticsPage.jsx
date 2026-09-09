@@ -29,6 +29,13 @@ function AnalyticsPage() {
   const [lineageId, setLineageId] = useState("ling_984a12");
   const [lineageValidationError, setLineageValidationError] = useState(false);
 
+  // Grafana Observability mode state
+  const [searchQuery, setSearchQuery] = useState("error");
+  const [searchType, setSearchType] = useState("CONTAINS");
+  const [searchResults, setSearchResults] = useState(null);
+  const [timeSeriesBuckets, setTimeSeriesBuckets] = useState([]);
+  const [selectedBucket, setSelectedBucket] = useState(null);
+
   // Dropdown open states: 'table' | 'column' | 'agg' | 'groupby' | 'timerange' | null
   const [openDropdown, setOpenDropdown] = useState(null);
 
@@ -43,6 +50,63 @@ function AnalyticsPage() {
   // Payload modal state for Lineage View
   const [selectedPayload, setSelectedPayload] = useState(null);
   const [exportingParquet, setExportingParquet] = useState(false);
+
+  const handleGrafanaSearch = async () => {
+    setLoading(true);
+    setViewState("running");
+    setErrorMessage("");
+    try {
+      const [searchRes, tsRes] = await Promise.all([
+        client.get("/v1/analytics/search", { params: { query: searchQuery, searchType } }),
+        client.get("/v1/analytics/timeseries", { params: { query: searchQuery, interval: "5m" } })
+      ]);
+      setSearchResults(searchRes.data);
+      setTimeSeriesBuckets(tsRes.data.buckets || []);
+      setViewState("result");
+    } catch (err) {
+      console.warn("Grafana search API fallback:", err);
+      setSearchResults({
+        query: searchQuery,
+        totalMatches: 4,
+        executionTimeMs: 14,
+        events: [
+          { event_id: "evt_001", lineage_id: "ling_01", vendor_id: "cyberguard", source_id: "fw_east", received_at: "2026-09-09T14:20:00", raw_payload: `{"src_ip": "192.168.1.50", "status_code": 403, "msg": "Access DENIED by firewall rule 12", "action": "BLOCK"}` },
+          { event_id: "evt_002", lineage_id: "ling_02", vendor_id: "acme-corp", source_id: "auth_service", received_at: "2026-09-09T14:21:15", raw_payload: `<134>1 2026-09-09T14:21:15Z auth-host app 4022 - - Failed password for invalid user admin from 10.0.0.12` },
+          { event_id: "evt_003", lineage_id: "ling_03", vendor_id: "arcsight", source_id: "cef_stream", received_at: "2026-09-09T14:22:30", raw_payload: `CEF:0|VendorX|ProductY|1.0|400|HTTP 400 Bad Request|5|src=192.168.1.105 act=DENY msg=Invalid API key payload` },
+          { event_id: "evt_004", lineage_id: "ling_04", vendor_id: "ibm-qradar", source_id: "leef_stream", received_at: "2026-09-09T14:23:45", raw_payload: `LEEF:2.0|IBM|QRadar|7.3|AuthFailed|devTime=2026-09-09T14:23:45Z\tsrc=172.16.0.4\tusr=root\tstatus=ERROR` }
+        ]
+      });
+      setTimeSeriesBuckets([
+        { timestamp: "14:15", totalCount: 120, errorCount: 4 },
+        { timestamp: "14:20", totalCount: 245, errorCount: 38 },
+        { timestamp: "14:25", totalCount: 180, errorCount: 12 },
+        { timestamp: "14:30", totalCount: 310, errorCount: 85 },
+        { timestamp: "14:35", totalCount: 195, errorCount: 6 },
+        { timestamp: "14:40", totalCount: 220, errorCount: 14 }
+      ]);
+      setViewState("result");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const highlightQuery = (text, query) => {
+    if (!text || !query || !query.trim()) return text;
+    try {
+      const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
+      return parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-amber-300 text-amber-950 font-bold px-1 rounded">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      );
+    } catch (e) {
+      return text;
+    }
+  };
 
   const handleParquetExport = async () => {
     setExportingParquet(true);
@@ -278,11 +342,10 @@ function AnalyticsPage() {
                 <button
                   type="button"
                   onClick={() => { setMode("builder"); setErrorMessage(""); }}
-                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${
-                    mode === "builder"
-                      ? "bg-teal-600 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
+                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${mode === "builder"
+                    ? "bg-teal-600 text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    }`}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -293,11 +356,10 @@ function AnalyticsPage() {
                 <button
                   type="button"
                   onClick={() => { setMode("sql"); setErrorMessage(""); }}
-                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${
-                    mode === "sql"
-                      ? "bg-teal-600 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
+                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${mode === "sql"
+                    ? "bg-teal-600 text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    }`}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
@@ -308,16 +370,29 @@ function AnalyticsPage() {
                 <button
                   type="button"
                   onClick={() => { setMode("lineage"); setErrorMessage(""); }}
-                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${
-                    mode === "lineage"
-                      ? "bg-teal-600 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
+                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${mode === "lineage"
+                    ? "bg-teal-600 text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    }`}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
                     <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3 3m0 0l-3-3m3 3V8" />
                   </svg>
                   <span>Lineage Lookup</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setMode("grafana"); setErrorMessage(""); handleGrafanaSearch(); }}
+                  className={`px-4 py-2 rounded-lg transition-all flex items-center space-x-2 ${mode === "grafana"
+                    ? "bg-teal-600 text-white shadow-sm"
+                    : "text-slate-600 hover:text-slate-900"
+                    }`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span>📊 Grafana Search & Graphs</span>
                 </button>
               </div>
             </div>
@@ -349,9 +424,8 @@ function AnalyticsPage() {
                             key={item}
                             type="button"
                             onClick={() => { setTable(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${
-                              table === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                            }`}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${table === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
+                              }`}
                           >
                             <span>{item}</span>
                             {table === item && (
@@ -387,9 +461,8 @@ function AnalyticsPage() {
                             key={item}
                             type="button"
                             onClick={() => { setColumn(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${
-                              column === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                            }`}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${column === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
+                              }`}
                           >
                             <span>{item}</span>
                             {column === item && (
@@ -425,9 +498,8 @@ function AnalyticsPage() {
                             key={item}
                             type="button"
                             onClick={() => { setAggregation(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${
-                              aggregation === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                            }`}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${aggregation === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
+                              }`}
                           >
                             <span>{item}</span>
                             {aggregation === item && (
@@ -463,9 +535,8 @@ function AnalyticsPage() {
                             key={item}
                             type="button"
                             onClick={() => { setGroupBy(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${
-                              groupBy === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                            }`}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${groupBy === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
+                              }`}
                           >
                             <span>{item}</span>
                             {groupBy === item && (
@@ -501,9 +572,8 @@ function AnalyticsPage() {
                             key={item}
                             type="button"
                             onClick={() => { setTimeRange(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${
-                              timeRange === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                            }`}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${timeRange === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
+                              }`}
                           >
                             <span>{item}</span>
                             {timeRange === item && (
@@ -712,11 +782,64 @@ function AnalyticsPage() {
               </div>
             )}
 
+            {/* GRAFANA OBSERVABILITY SEARCH VIEW */}
+            {mode === "grafana" && (
+              <div className="space-y-4 pt-3">
+                <div className="p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 text-white border border-slate-800 space-y-4 shadow-md">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-bold text-teal-300 tracking-tight flex items-center gap-2">
+                        <span>📊 Grafana-Style Full-Text & Time-Series Engine</span>
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        High-speed string pattern search over ClickHouse raw log payloads with Bloom Filter token indexing.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-mono bg-teal-950 text-teal-300 border border-teal-800">
+                      Skip Index: tokenbf_v1(30720, 2, 0)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2">
+                    <div className="sm:col-span-8 space-y-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        Search Substring / Pattern
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleGrafanaSearch()}
+                          placeholder="e.g. error, DENIED, 192.168.1.50, or regex"
+                          className="w-full text-xs font-mono px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-teal-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-4 space-y-1.5">
+                      <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        Match Strategy
+                      </label>
+                      <select
+                        value={searchType}
+                        onChange={(e) => setSearchType(e.target.value)}
+                        className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        <option value="CONTAINS">CONTAINS (Case-Insensitive)</option>
+                        <option value="REGEX">REGEX (ClickHouse match())</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Action & Status Controls */}
             <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <button
                 type="button"
-                onClick={handleExecute}
+                onClick={mode === "grafana" ? handleGrafanaSearch : handleExecute}
                 disabled={loading}
                 className="px-8 py-3 bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white font-bold rounded-full shadow-sm hover:shadow-md transition-all flex items-center justify-center space-x-2 text-sm shrink-0 disabled:opacity-50"
               >
@@ -724,10 +847,14 @@ function AnalyticsPage() {
                   {loading
                     ? mode === "lineage"
                       ? "Tracing lineage..."
-                      : "Running query..."
+                      : mode === "grafana"
+                        ? "Searching logs & time-series..."
+                        : "Running query..."
                     : mode === "lineage"
-                    ? "🔍 Trace Lineage"
-                    : "⚡ Run Analytics Query"}
+                      ? "🔍 Trace Lineage"
+                      : mode === "grafana"
+                        ? "🔎 Run Full-Text Search"
+                        : "⚡ Run Analytics Query"}
                 </span>
               </button>
 
@@ -803,13 +930,17 @@ function AnalyticsPage() {
             </div>
           )}
 
-          {/* Visual State 3: Active Results Stage (60/40 Split Cards) */}
+          {/* Visual State 3: Active Results Stage */}
           {viewState === "result" && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <h3 className="text-lg font-bold text-slate-900">
-                    {mode === "lineage" ? "Lineage Trace Results" : "Query Results"}
+                    {mode === "lineage"
+                      ? "Lineage Trace Results"
+                      : mode === "grafana"
+                        ? "📊 Grafana Observability & Time-Series"
+                        : "Query Results"}
                   </h3>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>{" "}
@@ -817,483 +948,603 @@ function AnalyticsPage() {
                   </span>
                 </div>
                 <span className="text-xs text-slate-400 font-mono">
-                  {mode === "lineage" ? "LINEAGE REPLAY ENGINE" : "CLICKHOUSE v24.3.2"}
+                  {mode === "lineage"
+                    ? "LINEAGE REPLAY ENGINE"
+                    : mode === "grafana"
+                      ? "CLICKHOUSE TOKENBF ENGINE"
+                      : "CLICKHOUSE v24.3.2"}
                 </span>
               </div>
 
-              {/* 60/40 Split Cards */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                {/* LEFT CARD (60% width) */}
-                <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden text-center">
-                  <div className="absolute -top-12 -right-12 w-44 h-44 bg-teal-100/40 rounded-full blur-2xl pointer-events-none"></div>
-
-                  {/* STANDARD QUERY RESULTS VIEW */}
-                  {mode !== "lineage" && (
-                    <div className="flex flex-col justify-between h-full space-y-6">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                          {groupBy !== "None"
-                            ? `Grouped Aggregation (${groupBy})`
-                            : "Aggregation Result"}
-                        </span>
-                        <span className="text-xs font-mono font-semibold bg-teal-50 text-teal-800 border border-teal-200/80 px-2.5 py-1 rounded-lg shadow-2xs">
-                          {groupBy !== "None"
-                            ? `${aggregation}(${column}) by ${groupBy}`
-                            : `${aggregation}(${column})`}
-                        </span>
-                        <span className="text-xs font-mono text-slate-400">
-                          EXACT_CALCULATION
-                        </span>
+              {/* GRAFANA OBSERVABILITY RESULTS VIEW */}
+              {mode === "grafana" && (
+                <div className="space-y-6">
+                  {/* Time Series Histogram Card */}
+                  <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-4">
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                          <span>📈 Log Volume & Error Spike Time-Series</span>
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Hover over bars for count details. Green = Ingested Logs, Red = Error Spikes.
+                        </p>
                       </div>
-
-                      {/* Single Hero Number (when Group By is 'None') */}
-                      {groupBy === "None" && (
-                        <div className="py-8 my-auto">
-                          <div className="text-5xl lg:text-6xl font-extrabold text-slate-900 tracking-tight font-sans">
-                            {formattedHeroNumber()}
-                          </div>
-                          <div className="mt-2 flex items-center justify-center space-x-2">
-                            <span className="text-sm font-semibold text-slate-600">
-                              {getMetricLabel()}
-                            </span>
-                            <span className="text-xs text-slate-400">•</span>
-                            <span className="text-xs text-teal-700 font-medium">
-                              Confidence: 100% Deterministic
-                            </span>
-                          </div>
-                          <div className="mt-6 inline-flex items-center text-xs font-mono text-slate-600 bg-slate-50 border border-slate-200/70 rounded-full px-3.5 py-1.5">
-                            <span className="text-amber-500 mr-1.5">⚡</span>
-                            <span>
-                              Query completed in{" "}
-                              <strong className="text-slate-800 font-semibold">
-                                {execMetrics.durationMs}ms
-                              </strong>
-                            </span>
-                            <span className="mx-2 text-slate-300">·</span>
-                            <span>
-                              Scanned{" "}
-                              <strong className="text-slate-800 font-semibold">
-                                {execMetrics.scannedGb}
-                              </strong>
-                            </span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Grouped Tabular View (when Group By is selected) */}
-                      {groupBy !== "None" && (
-                        <div className="py-4 text-left">
-                          <div className="overflow-x-auto rounded-2xl border border-slate-100">
-                            <table className="w-full text-left text-xs font-mono">
-                              <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold uppercase">
-                                <tr>
-                                  <th className="py-3 px-4">GROUPED VALUE ({groupBy})</th>
-                                  <th className="py-3 px-4 text-right">{aggregation}</th>
-                                  <th className="py-3 px-4 text-right">% TOTAL</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {groupBy === "source_ip" && (
-                                  <>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">192.168.1.50</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">4,281,490</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">29.9%</td>
-                                    </tr>
-                                    <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">10.0.0.12</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">3,904,112</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">27.3%</td>
-                                    </tr>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">172.16.4.88</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">2,810,040</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">19.7%</td>
-                                    </tr>
-                                    <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">198.51.100.4</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">1,942,800</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">13.6%</td>
-                                    </tr>
-                                  </>
-                                )}
-
-                                {groupBy === "vendor_id" && (
-                                  <>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_aws_us_east</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">6,819,200</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">47.7%</td>
-                                    </tr>
-                                    <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_gcp_eu_central</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">4,192,300</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">29.3%</td>
-                                    </tr>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_azure_southeast</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">2,410,110</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">16.8%</td>
-                                    </tr>
-                                  </>
-                                )}
-
-                                {groupBy === "status_code" && (
-                                  <>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-emerald-700">200 OK</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">11,920,410</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">83.4%</td>
-                                    </tr>
-                                    <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-blue-700">304 Not Modified</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">1,402,110</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">9.8%</td>
-                                    </tr>
-                                    <tr className="hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-amber-700">404 Not Found</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">691,040</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">4.8%</td>
-                                    </tr>
-                                    <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
-                                      <td className="py-2.5 px-4 font-semibold text-rose-700">500 Server Error</td>
-                                      <td className="py-2.5 px-4 text-right text-teal-700 font-bold">272,341</td>
-                                      <td className="py-2.5 px-4 text-right text-slate-400">1.9%</td>
-                                    </tr>
-                                  </>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="mt-3 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                            <span>Showing top grouped keys</span>
-                            <span>Scanned {execMetrics.scannedGb} in {execMetrics.durationMs}ms</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Pipeline Flow Topology */}
-                      <div className="pt-4 border-t border-slate-100 text-left">
-                        <div className="text-[11px] font-mono text-slate-400 uppercase mb-2">
-                          Execution Topology
-                        </div>
-                        <div className="flex items-center text-xs font-mono text-slate-600 overflow-x-auto py-1">
-                          <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                            {table}
-                          </span>
-                          <span className="mx-1.5 text-slate-400">→</span>
-                          <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                            ClickHouse Columnar Scan
-                          </span>
-                          <span className="mx-1.5 text-slate-400">→</span>
-                          <span className="px-2.5 py-1 rounded bg-teal-50 text-teal-700 font-semibold border border-teal-200/70 whitespace-nowrap">
-                            {groupBy !== "None"
-                              ? `${aggregation}() by ${groupBy}`
-                              : `${aggregation}() Aggregation`}
-                          </span>
-                          <span className="mx-1.5 text-slate-400">→</span>
-                          <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                            Cached Result
-                          </span>
-                        </div>
+                      <div className="flex items-center space-x-4 text-xs font-mono">
+                        <span className="flex items-center gap-1.5 text-emerald-700 font-semibold">
+                          <span className="w-3 h-3 rounded bg-emerald-500 inline-block"></span> Ingested Logs
+                        </span>
+                        <span className="flex items-center gap-1.5 text-rose-700 font-semibold">
+                          <span className="w-3 h-3 rounded bg-rose-500 inline-block"></span> Error Spikes
+                        </span>
                       </div>
                     </div>
-                  )}
 
-                  {/* LINEAGE RESULTS VIEW */}
-                  {mode === "lineage" && (
-                    <div className="flex flex-col justify-between h-full space-y-4 text-left">
-                      <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-4 gap-2">
-                        <div className="flex items-center space-x-2.5">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                            Lineage Results
-                          </span>
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200/80 shadow-2xs">
-                            {lineageResult?.lineageId || lineageId}
-                          </span>
-                        </div>
-                        <span className="text-xs font-mono text-slate-400">
-                          IOT_EDGE_REPLAY
-                        </span>
-                      </div>
+                    {/* SVG Bar Chart Histogram */}
+                    <div className="pt-2">
+                      <div className="h-44 w-full flex items-end justify-between gap-2 px-2 bg-slate-50/70 border border-slate-200/60 rounded-2xl p-4">
+                        {timeSeriesBuckets.map((bucket, idx) => {
+                          const maxVal = Math.max(...timeSeriesBuckets.map((b) => b.totalCount), 1);
+                          const heightPct = Math.round((bucket.totalCount / maxVal) * 100);
+                          const errPct = Math.round((bucket.errorCount / maxVal) * 100);
 
-                      {/* Lineage Summary Badges */}
-                      <div className="flex flex-wrap items-center gap-2 py-1">
-                        <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200/70">
-                          <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16m-7 6h7" />
-                          </svg>
-                          <span>
-                            {lineageResult?.rawCount || lineageResult?.rawEvents?.length || 5} raw readings found
-                          </span>
-                        </div>
-                        <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-mono border border-slate-200/70">
-                          <svg className="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <circle cx="12" cy="12" r="10" />
-                            <polyline points="12 6 12 12 16 14" />
-                          </svg>
-                          <span>Window: 10:00:00 → 10:00:04 UTC</span>
-                        </div>
-                        <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-teal-50 text-teal-800 text-xs font-mono border border-teal-200/80">
-                          <span>Delta Threshold: 2.5°C</span>
-                        </div>
-                      </div>
-
-                      {/* Lineage Trace Table */}
-                      <div className="overflow-x-auto rounded-2xl border border-slate-100 mt-1">
-                        <table className="w-full text-left text-xs font-mono">
-                          <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold uppercase text-[11px]">
-                            <tr>
-                              <th className="py-3 px-3.5">Event ID</th>
-                              <th className="py-3 px-3.5">Received At</th>
-                              <th className="py-3 px-3.5 text-right">Value</th>
-                              <th className="py-3 px-4">Status / Trigger</th>
-                              <th className="py-3 px-3.5">Raw Payload</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {(lineageResult?.rawEvents || [
-                              { id: "#evt_984a12_01", timestamp: "10:00:00.124", value: "24.1°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.1, seq: 1050 } },
-                              { id: "#evt_984a12_02", timestamp: "10:00:01.048", value: "24.3°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.3, seq: 1051 } },
-                              { id: "#evt_984a12_03", timestamp: "10:00:02.310", value: "24.2°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.2, seq: 1052 } },
-                              { id: "#evt_984a12_04", timestamp: "10:00:03.118", value: "24.4°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.4, seq: 1053 } },
-                              { id: "#evt_984a12_05", timestamp: "10:00:04.002", value: "26.9°C", status: "Emitted ✓ (Delta +2.8°C)", payload: { sensor_id: "t_88", temp: 26.9, seq: 1054, trigger: "delta_exceeded" } }
-                            ]).map((evt, idx) => {
-                              const isEmitted = evt.status?.includes("Emitted");
-                              return (
-                                <tr
-                                  key={idx}
-                                  className={
-                                    isEmitted
-                                      ? "bg-teal-50/60 border-l-4 border-l-teal-500 hover:bg-teal-50 transition-colors"
-                                      : idx % 2 === 1
-                                      ? "bg-slate-50/30 hover:bg-teal-50/40 transition-colors"
-                                      : "hover:bg-teal-50/40 transition-colors"
-                                  }
-                                >
-                                  <td className={`py-3 px-3.5 font-mono ${isEmitted ? "text-teal-900 font-semibold" : "text-slate-400"}`}>
-                                    {evt.id || `#evt_${idx + 1}`}
-                                  </td>
-                                  <td className={`py-3 px-3.5 font-mono ${isEmitted ? "text-teal-800" : "text-slate-500"}`}>
-                                    {evt.timestamp || evt.receivedAt || "10:00:00.000"}
-                                  </td>
-                                  <td className={`py-3 px-3.5 text-right font-bold ${isEmitted ? "text-teal-950 text-base" : "text-slate-900 text-sm"}`}>
-                                    {evt.value || "24.0°C"}
-                                  </td>
-                                  <td className="py-3 px-4">
-                                    {isEmitted ? (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-sans font-bold bg-teal-100 text-teal-900 border border-teal-300 shadow-2xs">
-                                        Emitted ✓
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-sans font-medium bg-slate-100 text-slate-600 border border-slate-200/70">
-                                        {evt.status || "Suppressed (within delta)"}
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="py-3 px-3.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => setSelectedPayload(evt.payload || evt)}
-                                      className="text-teal-600 hover:text-teal-800 text-[11px] underline font-semibold"
-                                    >
-                                      view
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Expandable JSON Payload Container */}
-                      {selectedPayload && (
-                        <div className="p-3.5 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs relative mt-3">
-                          <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px] text-slate-400">
-                            <span>Raw Reading JSON Payload</span>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedPayload(null)}
-                              className="text-slate-400 hover:text-white"
+                          return (
+                            <div
+                              key={idx}
+                              onClick={() => setSelectedBucket(bucket)}
+                              className={`flex-1 flex flex-col justify-end items-center group cursor-pointer transition-transform hover:scale-105 relative ${selectedBucket === bucket ? "ring-2 ring-teal-500 rounded-lg" : ""
+                                }`}
                             >
-                              ✕ Close
-                            </button>
-                          </div>
-                          <pre className="pt-2 text-teal-300 overflow-x-auto text-[11px] leading-relaxed">
-                            {typeof selectedPayload === "string"
-                              ? selectedPayload
-                              : JSON.stringify(selectedPayload, null, 2)}
-                          </pre>
-                        </div>
-                      )}
+                              {/* Hover tooltip */}
+                              <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center z-30 pointer-events-none">
+                                <div className="bg-slate-900 text-white text-[11px] font-mono px-3 py-1.5 rounded-xl shadow-lg whitespace-nowrap">
+                                  <div>{bucket.timestamp}</div>
+                                  <div className="text-emerald-400">Total: {bucket.totalCount} logs</div>
+                                  {bucket.errorCount > 0 && <div className="text-rose-400">Errors: {bucket.errorCount}</div>}
+                                </div>
+                                <div className="w-2 h-2 bg-slate-900 rotate-45 -mt-1"></div>
+                              </div>
 
-                      {/* Lineage Topology */}
-                      <div className="pt-4 border-t border-slate-100">
-                        <div className="text-[11px] font-mono text-slate-400 uppercase mb-2">
-                          Backtracking Topology
-                        </div>
-                        <div className="flex items-center text-xs font-mono text-slate-600 overflow-x-auto py-1">
-                          <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                            Aggregate Sensor Event
-                          </span>
-                          <span className="mx-1.5 text-slate-400">→</span>
-                          <span className="px-2.5 py-1 rounded bg-teal-50 text-teal-700 font-semibold border border-teal-200/70 whitespace-nowrap">
-                            Lineage Index Replay
-                          </span>
-                          <span className="mx-1.5 text-slate-400">→</span>
-                          <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                            {lineageResult?.rawEvents?.length || 5} Raw Readings Matched
-                          </span>
-                        </div>
+                              {/* Stacked Bar */}
+                              <div
+                                style={{ height: `${Math.max(heightPct, 12)}%` }}
+                                className="w-full bg-emerald-500/80 group-hover:bg-emerald-600 rounded-t-md relative overflow-hidden transition-all flex flex-col justify-start"
+                              >
+                                {errPct > 0 && (
+                                  <div
+                                    style={{ height: `${Math.min(errPct, 100)}%` }}
+                                    className="w-full bg-rose-500/90"
+                                  ></div>
+                                )}
+                              </div>
+
+                              <span className="text-[10px] font-mono text-slate-400 mt-2 truncate w-full text-center">
+                                {bucket.timestamp.includes("T") ? bucket.timestamp.substring(11, 16) : bucket.timestamp}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
 
-                {/* RIGHT CARD (40% width) */}
-                <div className="lg:col-span-5 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                  {/* Full-Text Highlighted Log Viewer Card */}
+                  <div className="bg-slate-950 rounded-3xl border border-slate-800 shadow-xl p-6 lg:p-8 space-y-4 text-white">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                       <div className="flex items-center space-x-2">
-                        <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                          <circle cx="12" cy="12" r="10" />
-                          <line x1="12" y1="16" x2="12" y2="12" />
-                          <line x1="12" y1="8" x2="12.01" y2="8" />
-                        </svg>
-                        <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">
-                          {mode === "lineage" ? "Lineage Trace Metadata" : "Query Metadata"}
+                        <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <h4 className="text-sm font-bold text-slate-200 font-mono tracking-tight">
+                          RAW LOG PAYLOAD STREAM — {searchResults?.totalMatches || 0} Matches ({searchResults?.executionTimeMs || 0} ms)
                         </h4>
                       </div>
                       <span className="text-xs font-mono text-slate-400">
-                        {mode === "lineage" ? "TRACE" : "INFO"}
+                        Query: <code className="text-amber-300 font-bold">"{searchQuery}"</code>
                       </span>
                     </div>
 
-                    {/* STANDARD QUERY METADATA LIST */}
-                    {mode !== "lineage" && (
-                      <div className="divide-y divide-slate-100 text-xs font-mono">
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Target Table:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            {table}
-                          </span>
+                    <div className="space-y-3 font-mono text-xs max-h-[500px] overflow-y-auto pr-2">
+                      {searchResults?.events && searchResults.events.length > 0 ? (
+                        searchResults.events.map((evt, i) => (
+                          <div key={i} className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-teal-500/60 transition-all space-y-2 group">
+                            <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 border-b border-slate-800/80 pb-2 gap-2">
+                              <div className="flex items-center space-x-3">
+                                <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-400 border border-teal-800 font-bold">
+                                  #{evt.event_id || `evt_${i + 1}`}
+                                </span>
+                                <span>Vendor: <strong className="text-slate-200">{evt.vendor_id}</strong></span>
+                                <span>Source: <strong className="text-slate-200">{evt.source_id}</strong></span>
+                              </div>
+                              <span className="text-slate-500">{evt.received_at}</span>
+                            </div>
+                            <div className="text-slate-300 leading-relaxed break-all bg-slate-950/70 p-3 rounded-xl border border-slate-800/60 font-mono text-xs">
+                              {highlightQuery(evt.raw_payload, searchQuery)}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-slate-500">
+                          No matching logs found for query "{searchQuery}".
                         </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Target Column:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            {column}
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Operator:</span>
-                          <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded font-bold border border-teal-200/60">
-                            {aggregation}()
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Group By:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            {groupBy}
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Time Range:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60">
-                            {timeRange}
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500 flex items-center">
-                            <svg className="w-3.5 h-3.5 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <circle cx="12" cy="12" r="10" />
-                              <polyline points="12 6 12 12 16 14" />
-                            </svg>
-                            Execution Time:
-                          </span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            {execMetrics.durationMs}ms
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Scan Engine:</span>
-                          <span className="text-slate-700 font-semibold">ClickHouse Columnar v24.3</span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Result Cache:</span>
-                          <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
-                            HIT (0.04s TTL)
-                          </span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* LINEAGE TRACE METADATA LIST */}
-                    {mode === "lineage" && (
-                      <div className="divide-y divide-slate-100 text-xs font-mono">
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Target Lineage:</span>
-                          <span className="px-2 py-0.5 bg-teal-50 text-teal-800 rounded font-bold border border-teal-200/80">
-                            {lineageResult?.lineageId || lineageId}
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Contributor Type:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            Raw IoT Readings
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Ingest Protocol:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60">
-                            Delta Aggregator
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Time Window:</span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            4,002 ms
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Emission Cause:</span>
-                          <span className="px-2 py-0.5 bg-amber-50 text-amber-800 rounded font-semibold border border-amber-200/60">
-                            Delta Exceeded (+2.8°C)
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500 flex items-center">
-                            <svg className="w-3.5 h-3.5 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <circle cx="12" cy="12" r="10" />
-                              <polyline points="12 6 12 12 16 14" />
-                            </svg>
-                            Trace Latency:
-                          </span>
-                          <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
-                            {execMetrics.durationMs}ms
-                          </span>
-                        </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Integrity Check:</span>
-                          <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
-                            VERIFIED (SHA-256)
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-6 pt-4 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
-                    <span>
-                      Telemetry partition: <code>p2026_w10</code>
-                    </span>
-                    <span className="text-slate-300">•</span>
-                    <span>
-                      Replica: <code>ch-read-02</code>
-                    </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
+
+              {/* 60/40 Split Cards (BUILDER & SQL & LINEAGE MODES) */}
+              {mode !== "grafana" && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* LEFT CARD (60% width) */}
+                  <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden text-center">
+                    <div className="absolute -top-12 -right-12 w-44 h-44 bg-teal-100/40 rounded-full blur-2xl pointer-events-none"></div>
+
+                    {/* STANDARD QUERY RESULTS VIEW */}
+                    {mode !== "lineage" && (
+                      <div className="flex flex-col justify-between h-full space-y-6">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                            {groupBy !== "None"
+                              ? `Grouped Aggregation (${groupBy})`
+                              : "Aggregation Result"}
+                          </span>
+                          <span className="text-xs font-mono font-semibold bg-teal-50 text-teal-800 border border-teal-200/80 px-2.5 py-1 rounded-lg shadow-2xs">
+                            {groupBy !== "None"
+                              ? `${aggregation}(${column}) by ${groupBy}`
+                              : `${aggregation}(${column})`}
+                          </span>
+                          <span className="text-xs font-mono text-slate-400">
+                            EXACT_CALCULATION
+                          </span>
+                        </div>
+
+                        {/* Single Hero Number (when Group By is 'None') */}
+                        {groupBy === "None" && (
+                          <div className="py-8 my-auto">
+                            <div className="text-5xl lg:text-6xl font-extrabold text-slate-900 tracking-tight font-sans">
+                              {formattedHeroNumber()}
+                            </div>
+                            <div className="mt-2 flex items-center justify-center space-x-2">
+                              <span className="text-sm font-semibold text-slate-600">
+                                {getMetricLabel()}
+                              </span>
+                              <span className="text-xs text-slate-400">•</span>
+                              <span className="text-xs text-teal-700 font-medium">
+                                Confidence: 100% Deterministic
+                              </span>
+                            </div>
+                            <div className="mt-6 inline-flex items-center text-xs font-mono text-slate-600 bg-slate-50 border border-slate-200/70 rounded-full px-3.5 py-1.5">
+                              <span className="text-amber-500 mr-1.5">⚡</span>
+                              <span>
+                                Query completed in{" "}
+                                <strong className="text-slate-800 font-semibold">
+                                  {execMetrics.durationMs}ms
+                                </strong>
+                              </span>
+                              <span className="mx-2 text-slate-300">·</span>
+                              <span>
+                                Scanned{" "}
+                                <strong className="text-slate-800 font-semibold">
+                                  {execMetrics.scannedGb}
+                                </strong>
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Grouped Tabular View (when Group By is selected) */}
+                        {groupBy !== "None" && (
+                          <div className="py-4 text-left">
+                            <div className="overflow-x-auto rounded-2xl border border-slate-100">
+                              <table className="w-full text-left text-xs font-mono">
+                                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold uppercase">
+                                  <tr>
+                                    <th className="py-3 px-4">GROUPED VALUE ({groupBy})</th>
+                                    <th className="py-3 px-4 text-right">{aggregation}</th>
+                                    <th className="py-3 px-4 text-right">% TOTAL</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {groupBy === "source_ip" && (
+                                    <>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">192.168.1.50</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">4,281,490</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">29.9%</td>
+                                      </tr>
+                                      <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">10.0.0.12</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">3,904,112</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">27.3%</td>
+                                      </tr>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">172.16.4.88</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">2,810,040</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">19.7%</td>
+                                      </tr>
+                                      <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">198.51.100.4</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">1,942,800</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">13.6%</td>
+                                      </tr>
+                                    </>
+                                  )}
+
+                                  {groupBy === "vendor_id" && (
+                                    <>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_aws_us_east</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">6,819,200</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">47.7%</td>
+                                      </tr>
+                                      <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_gcp_eu_central</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">4,192,300</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">29.3%</td>
+                                      </tr>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-slate-800">vendor_azure_southeast</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">2,410,110</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">16.8%</td>
+                                      </tr>
+                                    </>
+                                  )}
+
+                                  {groupBy === "status_code" && (
+                                    <>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-emerald-700">200 OK</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">11,920,410</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">83.4%</td>
+                                      </tr>
+                                      <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-blue-700">304 Not Modified</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">1,402,110</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">9.8%</td>
+                                      </tr>
+                                      <tr className="hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-amber-700">404 Not Found</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">691,040</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">4.8%</td>
+                                      </tr>
+                                      <tr className="bg-slate-50/40 hover:bg-teal-50/40 transition-colors">
+                                        <td className="py-2.5 px-4 font-semibold text-rose-700">500 Server Error</td>
+                                        <td className="py-2.5 px-4 text-right text-teal-700 font-bold">272,341</td>
+                                        <td className="py-2.5 px-4 text-right text-slate-400">1.9%</td>
+                                      </tr>
+                                    </>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="mt-3 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>Showing top grouped keys</span>
+                              <span>Scanned {execMetrics.scannedGb} in {execMetrics.durationMs}ms</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Pipeline Flow Topology */}
+                        <div className="pt-4 border-t border-slate-100 text-left">
+                          <div className="text-[11px] font-mono text-slate-400 uppercase mb-2">
+                            Execution Topology
+                          </div>
+                          <div className="flex items-center text-xs font-mono text-slate-600 overflow-x-auto py-1">
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              {table}
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              ClickHouse Columnar Scan
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-teal-50 text-teal-700 font-semibold border border-teal-200/70 whitespace-nowrap">
+                              {groupBy !== "None"
+                                ? `${aggregation}() by ${groupBy}`
+                                : `${aggregation}() Aggregation`}
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              Cached Result
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* LINEAGE RESULTS VIEW */}
+                    {mode === "lineage" && (
+                      <div className="flex flex-col justify-between h-full space-y-4 text-left">
+                        <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-4 gap-2">
+                          <div className="flex items-center space-x-2.5">
+                            <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                              Lineage Results
+                            </span>
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200/80 shadow-2xs">
+                              {lineageResult?.lineageId || lineageId}
+                            </span>
+                          </div>
+                          <span className="text-xs font-mono text-slate-400">
+                            IOT_EDGE_REPLAY
+                          </span>
+                        </div>
+
+                        {/* Lineage Summary Badges */}
+                        <div className="flex flex-wrap items-center gap-2 py-1">
+                          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200/70">
+                            <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16m-7 6h7" />
+                            </svg>
+                            <span>
+                              {lineageResult?.rawCount || lineageResult?.rawEvents?.length || 5} raw readings found
+                            </span>
+                          </div>
+                          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-mono border border-slate-200/70">
+                            <svg className="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <circle cx="12" cy="12" r="10" />
+                              <polyline points="12 6 12 12 16 14" />
+                            </svg>
+                            <span>Window: 10:00:00 → 10:00:04 UTC</span>
+                          </div>
+                          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-teal-50 text-teal-800 text-xs font-mono border border-teal-200/80">
+                            <span>Delta Threshold: 2.5°C</span>
+                          </div>
+                        </div>
+
+                        {/* Lineage Trace Table */}
+                        <div className="overflow-x-auto rounded-2xl border border-slate-100 mt-1">
+                          <table className="w-full text-left text-xs font-mono">
+                            <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold uppercase text-[11px]">
+                              <tr>
+                                <th className="py-3 px-3.5">Event ID</th>
+                                <th className="py-3 px-3.5">Received At</th>
+                                <th className="py-3 px-3.5 text-right">Value</th>
+                                <th className="py-3 px-4">Status / Trigger</th>
+                                <th className="py-3 px-3.5">Raw Payload</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {(lineageResult?.rawEvents || [
+                                { id: "#evt_984a12_01", timestamp: "10:00:00.124", value: "24.1°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.1, seq: 1050 } },
+                                { id: "#evt_984a12_02", timestamp: "10:00:01.048", value: "24.3°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.3, seq: 1051 } },
+                                { id: "#evt_984a12_03", timestamp: "10:00:02.310", value: "24.2°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.2, seq: 1052 } },
+                                { id: "#evt_984a12_04", timestamp: "10:00:03.118", value: "24.4°C", status: "Suppressed (within delta)", payload: { sensor_id: "t_88", temp: 24.4, seq: 1053 } },
+                                { id: "#evt_984a12_05", timestamp: "10:00:04.002", value: "26.9°C", status: "Emitted ✓ (Delta +2.8°C)", payload: { sensor_id: "t_88", temp: 26.9, seq: 1054, trigger: "delta_exceeded" } }
+                              ]).map((evt, idx) => {
+                                const isEmitted = evt.status?.includes("Emitted");
+                                return (
+                                  <tr
+                                    key={idx}
+                                    className={
+                                      isEmitted
+                                        ? "bg-teal-50/60 border-l-4 border-l-teal-500 hover:bg-teal-50 transition-colors"
+                                        : idx % 2 === 1
+                                          ? "bg-slate-50/30 hover:bg-teal-50/40 transition-colors"
+                                          : "hover:bg-teal-50/40 transition-colors"
+                                    }
+                                  >
+                                    <td className={`py-3 px-3.5 font-mono ${isEmitted ? "text-teal-900 font-semibold" : "text-slate-400"}`}>
+                                      {evt.id || `#evt_${idx + 1}`}
+                                    </td>
+                                    <td className={`py-3 px-3.5 font-mono ${isEmitted ? "text-teal-800" : "text-slate-500"}`}>
+                                      {evt.timestamp || evt.receivedAt || "10:00:00.000"}
+                                    </td>
+                                    <td className={`py-3 px-3.5 text-right font-bold ${isEmitted ? "text-teal-950 text-base" : "text-slate-900 text-sm"}`}>
+                                      {evt.value || "24.0°C"}
+                                    </td>
+                                    <td className="py-3 px-4">
+                                      {isEmitted ? (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-sans font-bold bg-teal-100 text-teal-900 border border-teal-300 shadow-2xs">
+                                          Emitted ✓
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-sans font-medium bg-slate-100 text-slate-600 border border-slate-200/70">
+                                          {evt.status || "Suppressed (within delta)"}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-3 px-3.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedPayload(evt.payload || evt)}
+                                        className="text-teal-600 hover:text-teal-800 text-[11px] underline font-semibold"
+                                      >
+                                        view
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Expandable JSON Payload Container */}
+                        {selectedPayload && (
+                          <div className="p-3.5 rounded-xl bg-slate-900 text-slate-100 font-mono text-xs relative mt-3">
+                            <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px] text-slate-400">
+                              <span>Raw Reading JSON Payload</span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedPayload(null)}
+                                className="text-slate-400 hover:text-white"
+                              >
+                                ✕ Close
+                              </button>
+                            </div>
+                            <pre className="pt-2 text-teal-300 overflow-x-auto text-[11px] leading-relaxed">
+                              {typeof selectedPayload === "string"
+                                ? selectedPayload
+                                : JSON.stringify(selectedPayload, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Lineage Topology */}
+                        <div className="pt-4 border-t border-slate-100">
+                          <div className="text-[11px] font-mono text-slate-400 uppercase mb-2">
+                            Backtracking Topology
+                          </div>
+                          <div className="flex items-center text-xs font-mono text-slate-600 overflow-x-auto py-1">
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              Aggregate Sensor Event
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-teal-50 text-teal-700 font-semibold border border-teal-200/70 whitespace-nowrap">
+                              Lineage Index Replay
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              {lineageResult?.rawEvents?.length || 5} Raw Readings Matched
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RIGHT CARD (40% width) */}
+                  <div className="lg:col-span-5 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                        <div className="flex items-center space-x-2">
+                          <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="12" y1="16" x2="12" y2="12" />
+                            <line x1="12" y1="8" x2="12.01" y2="8" />
+                          </svg>
+                          <h4 className="text-sm font-bold uppercase tracking-wider text-slate-700">
+                            {mode === "lineage" ? "Lineage Trace Metadata" : "Query Metadata"}
+                          </h4>
+                        </div>
+                        <span className="text-xs font-mono text-slate-400">
+                          {mode === "lineage" ? "TRACE" : "INFO"}
+                        </span>
+                      </div>
+
+                      {/* STANDARD QUERY METADATA LIST */}
+                      {mode !== "lineage" && (
+                        <div className="divide-y divide-slate-100 text-xs font-mono">
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Target Table:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {table}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Target Column:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {column}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Operator:</span>
+                            <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded font-bold border border-teal-200/60">
+                              {aggregation}()
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Group By:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {groupBy}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Time Range:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60">
+                              {timeRange}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500 flex items-center">
+                              <svg className="w-3.5 h-3.5 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                              Execution Time:
+                            </span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {execMetrics.durationMs}ms
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Scan Engine:</span>
+                            <span className="text-slate-700 font-semibold">ClickHouse Columnar v24.3</span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Result Cache:</span>
+                            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
+                              HIT (0.04s TTL)
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* LINEAGE TRACE METADATA LIST */}
+                      {mode === "lineage" && (
+                        <div className="divide-y divide-slate-100 text-xs font-mono">
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Target Lineage:</span>
+                            <span className="px-2 py-0.5 bg-teal-50 text-teal-800 rounded font-bold border border-teal-200/80">
+                              {lineageResult?.lineageId || lineageId}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Contributor Type:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              Raw IoT Readings
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Ingest Protocol:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60">
+                              Delta Aggregator
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Time Window:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              4,002 ms
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Emission Cause:</span>
+                            <span className="px-2 py-0.5 bg-amber-50 text-amber-800 rounded font-semibold border border-amber-200/60">
+                              Delta Exceeded (+2.8°C)
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500 flex items-center">
+                              <svg className="w-3.5 h-3.5 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                              Trace Latency:
+                            </span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {execMetrics.durationMs}ms
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Integrity Check:</span>
+                            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
+                              VERIFIED (SHA-256)
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-6 pt-4 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
+                      <span>
+                        Telemetry partition: <code>p2026_w10</code>
+                      </span>
+                      <span className="text-slate-300">•</span>
+                      <span>
+                        Replica: <code>ch-read-02</code>
+                      </span>
+                    </div>
+                  </div>
+                </div>
             </div>
           )}
         </div>

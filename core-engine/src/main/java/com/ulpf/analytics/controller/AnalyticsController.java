@@ -88,6 +88,35 @@ public class AnalyticsController {
                 .body(parquetData);
     }
 
+    @GetMapping("/analytics/search")
+    public ResponseEntity<?> searchLogs(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false, defaultValue = "CONTAINS") String searchType,
+            @RequestParam(required = false) String vendorId,
+            @RequestParam(required = false) String sourceId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false, defaultValue = "200") Integer limit
+    ) {
+        var result = analyticsService.searchLogs(query, searchType, vendorId, sourceId, from, to, limit);
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/analytics/timeseries")
+    public ResponseEntity<?> getTimeSeries(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false, defaultValue = "5m") String interval,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to
+    ) {
+        var buckets = analyticsService.getTimeSeries(query, interval, from, to);
+        return ResponseEntity.ok(Map.of(
+                "interval", interval,
+                "totalBuckets", buckets.size(),
+                "buckets", buckets
+        ));
+    }
+
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
     }
