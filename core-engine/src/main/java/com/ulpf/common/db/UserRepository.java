@@ -75,4 +75,9 @@ public class UserRepository {
         String sql = "SELECT user_id, username, name, password_hash, role, created_at FROM users WHERE role = ?";
         return jdbcTemplate.query(sql, ROW_MAPPER, role.name());
     }
+
+    public void updatePasswordAndRole(String userId, String passwordHash, Role role) {
+        String sql = "UPDATE users SET password_hash = ?, role = ? WHERE user_id = ?";
+        jdbcTemplate.update(sql, passwordHash, role.name(), userId);
+    }
 }

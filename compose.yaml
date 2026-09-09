@@ -10,7 +10,9 @@ services:
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ulpf_raw}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-Clickhouse123!}
+      CLICKHOUSE_DEFAULT_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_DEFAULT_PASSWORD: ${CLICKHOUSE_PASSWORD:-Clickhouse123!}
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     ulimits:
@@ -36,8 +38,12 @@ services:
     environment:
       - SQLITE_DB_PATH=/app/data/control-plane.db
       - CLICKHOUSE_URL=http://clickhouse:8123
-      - JWT_SECRET=${JWT_SECRET:-super-secret-key-for-dev-environment-12345}
-      - API_KEY_HASH_SALT=${API_KEY_HASH_SALT:-dev-salt-key-12345}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-Clickhouse123!}
+      - ULPF_ADMIN_USERNAME=${ULPF_ADMIN_USERNAME:-admin}
+      - ULPF_ADMIN_PASSWORD=${ULPF_ADMIN_PASSWORD:-Admin@12345}
+      - JWT_SECRET=${JWT_SECRET:-super-secret-jwt-signing-key-for-ulpf-dev-12345}
+      - API_KEY_HASH_SALT=${API_KEY_HASH_SALT:-dev-salt-key-for-api-hash-12345}
     volumes:
       - sqlite-data:/app/data
     healthcheck:
