@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
@@ -12,6 +12,9 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Default Root Redirect */}
+        <Route path="/" element={<Navigate to="/login" replace />} />
+
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -57,6 +60,9 @@ function App() {
             </ProtectedRoute>
           }
         />
+
+        {/* Catch-all Wildcard Redirect */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   );
