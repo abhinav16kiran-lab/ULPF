@@ -96,12 +96,15 @@ podman compose up --build -d
 To run pre-packaged production container images published directly from GitHub Actions without building source code:
 
 ```bash
-# Pull published images from GHCR
+# 1. Create .env from template (or customize credentials)
+cp .env.example .env
+
+# 2. Pull published images from GHCR
 docker pull ghcr.io/abhinav16kiran-lab/ulpf/core-engine:latest
 docker pull ghcr.io/abhinav16kiran-lab/ulpf/frontend:latest
 docker pull ghcr.io/abhinav16kiran-lab/ulpf/clickhouse:latest
 
-# Launch container stack
+# 3. Launch container stack
 docker compose up -d
 ```
 
