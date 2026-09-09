@@ -47,4 +47,17 @@ class AnalyticsControllerTest {
                         .param("aggregation", "AVG"))
                 .andExpect(status().isOk());
     }
+
+    @Test
+    void testExportParquet_ReturnsBinaryContent() throws Exception {
+        byte[] mockParquet = new byte[] {0x50, 0x41, 0x52, 0x31, 0x00, 0x00, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
+        when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(mockParquet);
+
+        mockMvc.perform(get("/v1/analytics/export/parquet")
+                        .param("vendorId", "vendor-1"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, org.hamcrest.Matchers.containsString("attachment; filename=\"ulpf_export_vendor-1_")));
+    }
 }
