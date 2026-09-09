@@ -96,6 +96,8 @@ ONE ClickHouse CONTAINER
 
 Two logical databases do not create resource isolation.
 
+Detailed enterprise scaling mechanics (Partitioning, `Distributed` engine sharding, `ReplicatedMergeTree` high-availability failover, and NVMe $\rightarrow$ S3 hot/cold storage tiering) are documented in [SCALABILITY_AND_CLUSTER_GUIDE.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md).
+
 ## 6. Canonical Schema
 
 Canonical classes are stable concepts, not vendor-specific tables by default.

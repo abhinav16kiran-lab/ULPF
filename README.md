@@ -284,6 +284,7 @@ The Analytics Console (`/analytics`) features Grafana-style log stream observabi
 - **Log Stream Viewer (`GET /v1/analytics/search`)**: Real-time substring and regex matching with client-side keyword string highlighting.
 - **Time-Series Histogram (`GET /v1/analytics/timeseries`)**: Dual-color bar chart visualizer tracking total log volume alongside stacked error/failure spikes.
 - **Parquet Export (`GET /v1/analytics/export/parquet`)**: Automated batch exporter outputting Snappy-compressed Apache Parquet binaries for air-gapped AI/ML data lakes.
+- **Enterprise Scalability Guide**: Details on `PARTITION BY toYYYYMM()`, `ZSTD(1) → ZSTD(15)` TTL re-compression, `Distributed` engine sharding (`sipHash64`), and NVMe $\rightarrow$ S3 tiered storage are documented in [docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md).
 
 ---
 
