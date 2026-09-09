@@ -25,10 +25,6 @@ function AdminDashboardPage() {
   // Candidate mapping editing state
   const [isEditingMapping, setIsEditingMapping] = useState(false);
   const [editingRows, setEditingRows] = useState([]);
-  const [metaEditLogType, setMetaEditLogType] = useState("REG_LOG");
-  const [metaEditDelta, setMetaEditDelta] = useState("");
-  const [metaEditInterval, setMetaEditInterval] = useState("60000");
-  const [metaEditSensorField, setMetaEditSensorField] = useState("");
   const [saveMappingLoading, setSaveMappingLoading] = useState(false);
 
   // Action decision states
