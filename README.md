@@ -264,7 +264,17 @@ AI mapping takes place **exclusively during vendor onboarding** (`/v1/onboard`):
 
 ---
 
-## 4. Cryptographic Merkle Tree Batching
+## 4. Grafana-Style Full-Text Search & Time-Series Histogram Engine
+
+The Analytics Console (`/analytics`) features Grafana-style log stream observability backed by ClickHouse `tokenbf_v1` Bloom Filter token indexing over ZSTD-compressed payloads:
+- **Bloom Filter Skip Indexing**: `INDEX idx_raw_token raw_payload TYPE tokenbf_v1(30720, 2, 0)` allows ClickHouse to perform full-text string matching over compressed log chunks without full disk read decompression.
+- **Log Stream Viewer (`GET /v1/analytics/search`)**: Real-time substring and regex matching with client-side keyword string highlighting.
+- **Time-Series Histogram (`GET /v1/analytics/timeseries`)**: Dual-color bar chart visualizer tracking total log volume alongside stacked error/failure spikes.
+- **Parquet Export (`GET /v1/analytics/export/parquet`)**: Automated batch exporter outputting Snappy-compressed Apache Parquet binaries for air-gapped AI/ML data lakes.
+
+---
+
+## 5. Cryptographic Merkle Tree Batching
 
 Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`):
 - Merkle roots are computed for every batch flush.
@@ -298,6 +308,8 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | `POST` | `/v1/admin/onboard/{id}/approve` | Admin Token | Approve request & issue API key |
 | `POST` | `/v1/admin/onboard/{id}/reject` | Admin Token | Reject onboarding request |
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
+| `GET` | `/v1/analytics/search` | Admin Token | Full-text log substring & regex search (ClickHouse `tokenbf_v1`) |
+| `GET` | `/v1/analytics/timeseries` | Admin Token | Time-series histogram throughput & error spike aggregation |
 | `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |
 | `GET` | `/v1/integrity/blocks` | Bearer Token | List Merkle batch integrity blocks |
