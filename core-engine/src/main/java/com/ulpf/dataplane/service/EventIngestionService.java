@@ -22,6 +22,9 @@ import java.util.UUID;
  * Service orchestrating credential authentication, active mapping resolution,
  * P1 sensor optimization divergence, raw log preservation, and canonical emission buffering.
  */
+import com.ulpf.dataplane.format.FormatDetectionResult;
+import com.ulpf.dataplane.format.LogFormatDetector;
+
 @Service
 public class EventIngestionService {
 
@@ -32,6 +35,7 @@ public class EventIngestionService {
     private final ClickHouseIngestionRepository clickHouseIngestionRepository;
     private final SensorTelemetryEvaluator sensorTelemetryEvaluator;
     private final SchemaDriftNotificationService schemaDriftNotificationService;
+    private final LogFormatDetector logFormatDetector;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EventIngestionService(
@@ -40,7 +44,17 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator
     ) {
-        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null);
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null, new LogFormatDetector());
+    }
+
+    public EventIngestionService(
+            CredentialRepository credentialRepository,
+            MappingRepository mappingRepository,
+            ClickHouseIngestionRepository clickHouseIngestionRepository,
+            SensorTelemetryEvaluator sensorTelemetryEvaluator,
+            SchemaDriftNotificationService schemaDriftNotificationService
+    ) {
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, new LogFormatDetector());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -49,18 +63,23 @@ public class EventIngestionService {
             MappingRepository mappingRepository,
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) SchemaDriftNotificationService schemaDriftNotificationService
+            @org.springframework.beans.factory.annotation.Autowired(required = false) SchemaDriftNotificationService schemaDriftNotificationService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) LogFormatDetector logFormatDetector
     ) {
         this.credentialRepository = credentialRepository;
         this.mappingRepository = mappingRepository;
         this.clickHouseIngestionRepository = clickHouseIngestionRepository;
         this.sensorTelemetryEvaluator = sensorTelemetryEvaluator;
         this.schemaDriftNotificationService = schemaDriftNotificationService;
+        this.logFormatDetector = logFormatDetector != null ? logFormatDetector : new LogFormatDetector();
     }
 
-    public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId) {
+    public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId, String detectedFormat) {
+        public IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId) {
+            this(eventId, vendorId, sourceId, status, receivedAt, traceId, "JSON");
+        }
         public IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt) {
-            this(eventId, vendorId, sourceId, status, receivedAt, null);
+            this(eventId, vendorId, sourceId, status, receivedAt, null, "JSON");
         }
     }
 
@@ -92,10 +111,16 @@ public class EventIngestionService {
         String eventId = UUID.randomUUID().toString();
         LocalDateTime now = LocalDateTime.now();
 
+        // Step 1: Run O(1) Header-Based Format Autodetector on incoming payload
+        FormatDetectionResult formatResult = logFormatDetector.detect(payload);
+        java.util.Map<String, Object> parsedFields = formatResult.parsedFields();
+        String detectedFormat = formatResult.detectedFormat().name();
+        String rawJson = formatResult.rawPayload();
+
         // Extract or refine trace context from payload and MDC
         com.ulpf.common.tracing.TraceContext activeTraceContext = traceContext;
         if (activeTraceContext == null) {
-            activeTraceContext = com.ulpf.common.tracing.TraceContextExtractor.extract(null, payload);
+            activeTraceContext = com.ulpf.common.tracing.TraceContextExtractor.extract(null, parsedFields.isEmpty() ? payload : parsedFields);
         }
         com.ulpf.common.tracing.TraceMdcAdapter.put(activeTraceContext);
         String traceId = activeTraceContext != null ? activeTraceContext.traceId() : null;
@@ -140,19 +165,11 @@ public class EventIngestionService {
         SensorTelemetryEvaluator.EvaluationResult evalResult = null;
 
         if (isSensor) {
-            Double numericVal = extractNumericValue(payload, sensorField);
+            Double numericVal = extractNumericValue(parsedFields.isEmpty() ? payload : parsedFields, sensorField);
             evalResult = sensorTelemetryEvaluator.evaluate(cred.sourceId(), numericVal, delta, maxIntervalMs);
             lineageId = evalResult.lineageId();
         } else {
             lineageId = UUID.randomUUID().toString();
-        }
-
-        // Serialize raw payload to JSON
-        String rawJson;
-        try {
-            rawJson = objectMapper.writeValueAsString(payload);
-        } catch (Exception e) {
-            rawJson = String.valueOf(payload);
         }
 
         // STEP 1: Always preserve raw event reading in ClickHouse ulpf_raw.raw_events
@@ -168,7 +185,7 @@ public class EventIngestionService {
         clickHouseIngestionRepository.enqueue(rawEvent);
 
         // Extract unmapped fields into Lossless Overflow Field (raw_unmapped JSON)
-        String rawUnmappedJson = extractUnmappedFields(payload, mappingOpt, cred.sourceId());
+        String rawUnmappedJson = extractUnmappedFields(parsedFields.isEmpty() ? payload : parsedFields, mappingOpt, cred.sourceId());
 
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
@@ -202,8 +219,7 @@ public class EventIngestionService {
             clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
         }
 
-
-        return new IngestResult(eventId, cred.vendorId(), cred.sourceId(), "ACCEPTED", now, traceId);
+        return new IngestResult(eventId, cred.vendorId(), cred.sourceId(), "ACCEPTED", now, traceId, detectedFormat);
     }
 
     private Double extractNumericValue(Object payload, String sensorField) {

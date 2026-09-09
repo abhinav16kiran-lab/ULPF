@@ -15,11 +15,15 @@ import com.ulpf.common.db.UserRepository;
 import com.ulpf.common.db.VendorRepository;
 import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.model.User;
+import com.ulpf.dataplane.format.FormatDetectionResult;
+import com.ulpf.dataplane.format.LogFormatDetector;
+import com.ulpf.mapping.service.MappingEngineOrchestrator;
 import com.ulpf.mapping.model.MappingProposal;
 import com.ulpf.mapping.service.MappingLearningService;
 import com.ulpf.mapping.service.MappingProposalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -48,6 +52,8 @@ public class OnboardingService {
     private final MappingRepository mappingRepository;
     private final MappingProposalService mappingProposalService;
     private final MappingLearningService mappingLearningService;
+    private final LogFormatDetector logFormatDetector;
+    private final MappingEngineOrchestrator mappingEngineOrchestrator;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public OnboardingService(
@@ -60,6 +66,22 @@ public class OnboardingService {
             MappingProposalService mappingProposalService,
             MappingLearningService mappingLearningService
     ) {
+        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository, mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null);
+    }
+
+    @Autowired
+    public OnboardingService(
+            UserRepository userRepository,
+            VendorRepository vendorRepository,
+            SourceRepository sourceRepository,
+            CredentialRepository credentialRepository,
+            OnboardingRepository onboardingRepository,
+            MappingRepository mappingRepository,
+            MappingProposalService mappingProposalService,
+            MappingLearningService mappingLearningService,
+            LogFormatDetector logFormatDetector,
+            @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator
+    ) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -68,6 +90,8 @@ public class OnboardingService {
         this.mappingRepository = mappingRepository;
         this.mappingProposalService = mappingProposalService;
         this.mappingLearningService = mappingLearningService;
+        this.logFormatDetector = logFormatDetector;
+        this.mappingEngineOrchestrator = mappingEngineOrchestrator;
     }
 
     public record OnboardingSubmissionResult(
@@ -132,8 +156,8 @@ public class OnboardingService {
         String requestId = UUID.randomUUID().toString();
         String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType, delta, maxIntervalMs, sensorField);
 
-        // 6. Generate candidate mapping version via AI mapping engine
-        List<MappingProposal> proposals = new ArrayList<>();
+        // 6. Generate candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
         // Inject metadata block into candidate mapping_json
@@ -185,8 +209,8 @@ public class OnboardingService {
         // 2. Delete any stale candidate mapping for this source if present before generating new candidate
         mappingRepository.deleteCandidateVersions(sourceId);
 
-        // 3. Generate new candidate mapping version via AI mapping engine
-        List<MappingProposal> proposals = new ArrayList<>();
+        // 3. Generate new candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
         // 4. Inject metadata block into candidate mapping_json
@@ -392,6 +416,26 @@ public class OnboardingService {
         } catch (IOException e) {
             log.warn("Could not save onboarding sample file to disk: {}", e.getMessage());
         }
+    }
+
+    private List<MappingProposal> generateProposalsFromSample(MultipartFile sampleLogFile) {
+        if (sampleLogFile != null && !sampleLogFile.isEmpty() && mappingEngineOrchestrator != null) {
+            try {
+                String sampleSnippet = extractTopLines(sampleLogFile, 50);
+                if (logFormatDetector != null) {
+                    FormatDetectionResult formatResult = logFormatDetector.detect(sampleSnippet);
+                    if (formatResult.parsedFields() != null && !formatResult.parsedFields().isEmpty()) {
+                        List<String> rawKeys = new ArrayList<>(formatResult.parsedFields().keySet());
+                        log.info("Autodetected format '{}' for sample log file. Extracted {} vendor field keys: {}", 
+                                formatResult.detectedFormat(), rawKeys.size(), rawKeys);
+                        return mappingEngineOrchestrator.mapFields(rawKeys, false);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to generate AI mapping proposals from sample log file: {}", e.getMessage());
+            }
+        }
+        return new ArrayList<>();
     }
 
     public static String hashSha256(String raw) {
