@@ -20,6 +20,20 @@ REM Create .env from .env.example if it does not exist
 if not exist ".env" (
     echo No .env file found. Creating .env from .env.example...
     copy .env.example .env
+    echo.
+    set /p CUSTOM_CRED="Would you like to customize Admin and DB credentials now? (y/N): "
+    if /i "%CUSTOM_CRED%"=="y" (
+        set /p IN_ADMIN_USER="Enter Admin Username [admin]: "
+        set /p IN_ADMIN_PASS="Enter Admin Password [Admin@12345]: "
+        set /p IN_CH_USER="Enter ClickHouse Username [default]: "
+        set /p IN_CH_PASS="Enter ClickHouse Password [Clickhouse123!]: "
+
+        if not "%IN_ADMIN_USER%"=="" powershell -Command "(Get-Content .env) -replace '^ULPF_ADMIN_USERNAME=.*', 'ULPF_ADMIN_USERNAME=%IN_ADMIN_USER%' | Set-Content .env"
+        if not "%IN_ADMIN_PASS%"=="" powershell -Command "(Get-Content .env) -replace '^ULPF_ADMIN_PASSWORD=.*', 'ULPF_ADMIN_PASSWORD=%IN_ADMIN_PASS%' | Set-Content .env"
+        if not "%IN_CH_USER%"=="" powershell -Command "(Get-Content .env) -replace '^CLICKHOUSE_USER=.*', 'CLICKHOUSE_USER=%IN_CH_USER%' | Set-Content .env"
+        if not "%IN_CH_PASS%"=="" powershell -Command "(Get-Content .env) -replace '^CLICKHOUSE_PASSWORD=.*', 'CLICKHOUSE_PASSWORD=%IN_CH_PASS%' | Set-Content .env"
+        echo Updated .env with custom credentials!
+    )
 )
 
 REM Detect Podman Compose
