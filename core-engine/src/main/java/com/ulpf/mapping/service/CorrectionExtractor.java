@@ -49,7 +49,7 @@ public class CorrectionExtractor {
             JsonNode newRoot = objectMapper.readTree(newMappingJson);
             
             // Iterate through all fields in the new mapping
-            Iterator<Map.Entry<String, JsonNode>> fields = newRoot.fields();
+            Iterator<Map.Entry<String, JsonNode>> fields = newRoot.properties().iterator();
             
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();

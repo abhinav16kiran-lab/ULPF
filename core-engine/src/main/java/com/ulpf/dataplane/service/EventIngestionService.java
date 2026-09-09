@@ -242,7 +242,7 @@ public class EventIngestionService {
                 }
             }
             if (node.isObject()) {
-                var fields = node.fields();
+                var fields = node.properties().iterator();
                 while (fields.hasNext()) {
                     var entry = fields.next();
                     if (entry.getValue().isNumber()) {
@@ -286,7 +286,7 @@ public class EventIngestionService {
             }
 
             com.fasterxml.jackson.databind.node.ObjectNode unmappedNode = objectMapper.createObjectNode();
-            var fields = payloadNode.fields();
+            var fields = payloadNode.properties().iterator();
 
             List<HistoricalVersion> historicalVersions = null;
             java.util.Map<Integer, java.util.Set<String>> fallbackKeysByVersion = new java.util.HashMap<>();

@@ -123,12 +123,12 @@ public class AnalyticsService {
         log.info("Executing Parquet Export query against ClickHouse: {}", sql);
 
         try {
-            byte[] parquetBytes = clickhouseJdbcTemplate.query(sql, params.toArray(), rs -> {
+            byte[] parquetBytes = clickhouseJdbcTemplate.query(sql, rs -> {
                 if (rs.next()) {
                     return rs.getBytes(1);
                 }
                 return new byte[0];
-            });
+            }, params.toArray());
 
             if (parquetBytes != null && parquetBytes.length > 0) {
                 return parquetBytes;
