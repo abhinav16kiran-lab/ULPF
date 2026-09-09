@@ -35,8 +35,11 @@ function OnboardingPage() {
   const username = localStorage.getItem("username");
 
   useEffect(() => {
+    const role = localStorage.getItem("role");
     if (!username) {
       navigate("/login");
+    } else if (role === "ADMIN") {
+      navigate("/admin");
     }
   }, [username, navigate]);
 

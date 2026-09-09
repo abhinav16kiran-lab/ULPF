@@ -236,27 +236,6 @@ function AdminDashboardPage() {
           </div>
         </div>
 
-        {/* DEMO SANDBOX TOOLSTRIP */}
-        <section style={{ backgroundColor: "#f0f3ff", padding: "10px 16px", borderRadius: "12px", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", color: "#3c4947", fontWeight: "600" }}>
-            <span className="material-symbols-outlined" style={{ color: "#006b5f", fontSize: "18px" }}>tune</span>
-            <span>Review Sandbox & UI Simulation</span>
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              onClick={() => setSandboxSkeleton(!sandboxSkeleton)}
-              style={{ backgroundColor: sandboxSkeleton ? "#14b8a6" : "white", color: sandboxSkeleton ? "white" : "#111c2d", border: "none", padding: "4px 12px", borderRadius: "9999px", fontSize: "0.75rem", fontWeight: "600", cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}
-            >
-              Skeleton
-            </button>
-            <button
-              onClick={() => setSandboxEmpty(!sandboxEmpty)}
-              style={{ backgroundColor: sandboxEmpty ? "#14b8a6" : "white", color: sandboxEmpty ? "white" : "#111c2d", border: "none", padding: "4px 12px", borderRadius: "9999px", fontSize: "0.75rem", fontWeight: "600", cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}
-            >
-              Empty State
-            </button>
-          </div>
-        </section>
 
         {/* STAT SUMMARY BAR */}
         <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "20px" }}>
