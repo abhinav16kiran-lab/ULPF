@@ -60,4 +60,24 @@ class AnalyticsControllerTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, org.hamcrest.Matchers.containsString("attachment; filename=\"ulpf_export_vendor-1_")));
     }
+
+    @Test
+    void testSearchLogs_ReturnsOk() throws Exception {
+        when(analyticsService.searchLogs(anyString(), anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(new AnalyticsService.LogSearchResult(java.util.Collections.emptyList(), 0, 5, "error"));
+
+        mockMvc.perform(get("/v1/analytics/search")
+                        .param("query", "error"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void testGetTimeSeries_ReturnsOk() throws Exception {
+        when(analyticsService.getTimeSeries(org.mockito.ArgumentMatchers.any(), anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Collections.emptyList());
+
+        mockMvc.perform(get("/v1/analytics/timeseries")
+                        .param("interval", "5m"))
+                .andExpect(status().isOk());
+    }
 }

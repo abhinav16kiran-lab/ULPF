@@ -251,3 +251,59 @@ Automated batch exporter endpoint dumping ClickHouse log chunks into Snappy-comp
 - `Content-Type`: `application/vnd.apache.parquet`
 - `Content-Disposition`: `attachment; filename="ulpf_export_<vendorId>_<timestamp>.parquet"`
 
+## 13. `GET /v1/analytics/search`
+
+Full-text raw log substring and regex search engine backed by ClickHouse `tokenbf_v1` Bloom filter skip indexing over ZSTD compressed log payloads.
+
+### Query Parameters:
+- `q` (required): Substring term or regular expression pattern
+- `searchType` (optional): `CONTAINS` (case-insensitive substring search) or `REGEX` (ClickHouse `match()` regex search)
+- `vendorId` (optional): Filter logs by vendor identifier
+- `sourceId` (optional): Filter logs by source identifier
+- `limit` (optional): Max row limit (default: `200`, max: `5000`)
+
+### Response Format:
+```json
+{
+  "query": "error",
+  "totalMatches": 42,
+  "executionTimeMs": 14,
+  "events": [
+    {
+      "eventId": "evt_8941a20",
+      "lineageId": "lin_001",
+      "vendorId": "cisco",
+      "sourceId": "fw_east",
+      "mappingVersion": 1,
+      "receivedAt": "2026-09-09T10:15:00",
+      "rawPayload": "{\"level\":\"error\",\"msg\":\"Connection refused\"}"
+    }
+  ]
+}
+```
+
+## 14. `GET /v1/analytics/timeseries`
+
+Time-series histogram aggregation endpoint calculating total log throughput and error spike volume per interval for Grafana-style dashboard visual rendering.
+
+### Query Parameters:
+- `q` (optional): Substring term to filter histogram counts
+- `interval` (optional): Time bucket interval (e.g. `5m`, `1h`)
+
+### Response Format:
+```json
+[
+  {
+    "timestamp": "2026-09-09T10:00:00Z",
+    "totalCount": 450,
+    "errorCount": 12
+  },
+  {
+    "timestamp": "2026-09-09T10:05:00Z",
+    "totalCount": 510,
+    "errorCount": 48
+  }
+]
+```
+
+

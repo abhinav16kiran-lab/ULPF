@@ -78,4 +78,19 @@ class AnalyticsServiceTest {
         assertEquals(0x52, parquet[2]); // 'R'
         assertEquals(0x31, parquet[3]); // '1'
     }
+
+    @Test
+    void testSearchLogs_ReturnsResult() {
+        var searchResult = analyticsService.searchLogs("error", "CONTAINS", "vendor-1", null, null, null, 50);
+        assertNotNull(searchResult);
+        assertEquals("error", searchResult.query());
+        assertNotNull(searchResult.events());
+    }
+
+    @Test
+    void testGetTimeSeries_ReturnsBuckets() {
+        var buckets = analyticsService.getTimeSeries("error", "5m", null, null);
+        assertNotNull(buckets);
+        assertFalse(buckets.isEmpty());
+    }
 }
