@@ -21,10 +21,10 @@ public class EventController {
         this.eventIngestionService = eventIngestionService;
     }
 
-    @PostMapping("/events")
+    @PostMapping(value = "/events", consumes = {"application/json", "text/plain", "application/x-www-form-urlencoded", "*/*"})
     public ResponseEntity<?> ingest(
             @RequestHeader(value = "X-API-Key", required = false) String apiKey,
-            @RequestBody(required = false) Map<String, Object> payload,
+            @RequestBody(required = false) Object payload,
             jakarta.servlet.http.HttpServletRequest request
     ) {
         if (apiKey == null || apiKey.isBlank()) {
@@ -36,8 +36,8 @@ public class EventController {
             return ResponseEntity.status(401).body(Map.of("error", "invalid API key"));
         }
 
-        if (payload == null || payload.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "request body must be a valid JSON object"));
+        if (payload == null || (payload instanceof String s && s.isBlank()) || (payload instanceof Map<?,?> m && m.isEmpty())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "request body must not be empty"));
         }
 
         com.ulpf.common.tracing.TraceContext traceCtx = null;
@@ -50,6 +50,9 @@ public class EventController {
         java.util.Map<String, Object> responseMap = new java.util.HashMap<>();
         responseMap.put("eventId", result.eventId());
         responseMap.put("status", result.status());
+        if (result.detectedFormat() != null) {
+            responseMap.put("detectedFormat", result.detectedFormat());
+        }
         if (result.traceId() != null) {
             responseMap.put("traceId", result.traceId());
         }
