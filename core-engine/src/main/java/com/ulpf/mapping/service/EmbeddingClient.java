@@ -5,7 +5,7 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
 import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
+// import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -14,13 +14,13 @@ import java.util.Map;
  */
 @Service
 public class EmbeddingClient {
-    
+
     private final ModelLifecycleManager modelLifecycleManager;
-    
+
     public EmbeddingClient(ModelLifecycleManager modelLifecycleManager) {
         this.modelLifecycleManager = modelLifecycleManager;
     }
-    
+
     /**
      * Generate embedding vector for the given text.
      * Automatically loads the model if not already loaded.
@@ -32,29 +32,29 @@ public class EmbeddingClient {
         try {
             // Ensure model is loaded (idempotent, updates last accessed time)
             modelLifecycleManager.ensureLoaded();
-            
+
             // Get the active session
             OrtSession session = modelLifecycleManager.getSession();
             OrtEnvironment env = OrtEnvironment.getEnvironment();
-            
-            // Tokenize and prepare input (simplified - real tokenization would be more complex)
+
+            // Tokenize and prepare input (simplified - real tokenization would be more
+            // complex)
             // For MiniLM, we need input_ids, attention_mask, token_type_ids
             // This is a simplified version - in production, use a proper tokenizer
             long[][] inputIds = tokenizeText(text);
             long[][] attentionMask = createAttentionMask(inputIds[0].length);
             long[][] tokenTypeIds = createTokenTypeIds(inputIds[0].length);
-            
+
             // Create tensors inside try-with-resources to prevent native C++ memory leaks
             try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(env, inputIds);
-                 OnnxTensor attentionMaskTensor = OnnxTensor.createTensor(env, attentionMask);
-                 OnnxTensor tokenTypeIdsTensor = OnnxTensor.createTensor(env, tokenTypeIds)) {
-                
+                    OnnxTensor attentionMaskTensor = OnnxTensor.createTensor(env, attentionMask);
+                    OnnxTensor tokenTypeIdsTensor = OnnxTensor.createTensor(env, tokenTypeIds)) {
+
                 Map<String, OnnxTensor> inputs = Map.of(
-                    "input_ids", inputIdsTensor,
-                    "attention_mask", attentionMaskTensor,
-                    "token_type_ids", tokenTypeIdsTensor
-                );
-                
+                        "input_ids", inputIdsTensor,
+                        "attention_mask", attentionMaskTensor,
+                        "token_type_ids", tokenTypeIdsTensor);
+
                 // Run inference inside try-with-resources to auto-close OrtSession.Result
                 try (OrtSession.Result results = session.run(inputs)) {
                     float[][] output = (float[][]) results.get(0).getValue();
@@ -65,39 +65,42 @@ public class EmbeddingClient {
                     return embedding;
                 }
             }
-            
+
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate embedding for text: " + text, e);
         }
     }
-    
+
     /**
-     * Simple tokenization (placeholder - real implementation would use proper tokenizer).
-     * In production, this should use the same tokenizer that was used to train MiniLM.
+     * Simple tokenization (placeholder - real implementation would use proper
+     * tokenizer).
+     * In production, this should use the same tokenizer that was used to train
+     * MiniLM.
      */
     private long[][] tokenizeText(String text) {
         // Simplified: just convert characters to token IDs
         // Real tokenizer would handle subword tokenization, special tokens, etc.
         String[] tokens = text.toLowerCase().split("\\s+");
-        
+
         // Add [CLS] at start, [SEP] at end, pad to 128 tokens
         int maxLength = 128;
         long[] tokenIds = new long[maxLength];
-        
+
         tokenIds[0] = 101; // [CLS]
         int pos = 1;
-        
+
         for (String token : tokens) {
-            if (pos >= maxLength - 1) break;
+            if (pos >= maxLength - 1)
+                break;
             // Simple hash-based token ID (placeholder)
             tokenIds[pos++] = Math.abs(token.hashCode() % 30000) + 1000;
         }
-        
+
         tokenIds[pos] = 102; // [SEP]
-        
+
         return new long[][] { tokenIds };
     }
-    
+
     /**
      * Create attention mask (1 for real tokens, 0 for padding).
      */
@@ -108,7 +111,7 @@ public class EmbeddingClient {
         }
         return new long[][] { mask };
     }
-    
+
     /**
      * Create token type IDs (all 0s for single sentence).
      */

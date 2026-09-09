@@ -3,25 +3,28 @@ package com.ulpf.dataplane.format;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+// import org.slf4j.Logger;
+// import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
+// import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Deterministic Header-Based Format Autodetector operating at the Data Plane entry point.
- * Performs constant-time O(1) prefix inspection to detect JSON, Syslog, CEF, LEEF, or RAW_TEXT
+ * Deterministic Header-Based Format Autodetector operating at the Data Plane
+ * entry point.
+ * Performs constant-time O(1) prefix inspection to detect JSON, Syslog, CEF,
+ * LEEF, or RAW_TEXT
  * with zero AI/LLM overhead.
  */
 @Component
 public class LogFormatDetector {
 
-    private static final Logger log = LoggerFactory.getLogger(LogFormatDetector.class);
+    // private static final Logger log =
+    // LoggerFactory.getLogger(LogFormatDetector.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Pattern FALLBACK_KV_PATTERN = Pattern.compile("([a-zA-Z0-9_.-]+)=([^\\s\"]+|\"[^\"]*\")");
 
@@ -47,9 +50,12 @@ public class LogFormatDetector {
 
         if (payload instanceof JsonNode nodePayload) {
             try {
-                Map<String, Object> converted = MAPPER.convertValue(nodePayload, new TypeReference<Map<String, Object>>() {});
+                Map<String, Object> converted = MAPPER.convertValue(nodePayload,
+                        new TypeReference<Map<String, Object>>() {
+                        });
                 String rawJson = MAPPER.writeValueAsString(nodePayload);
-                return new FormatDetectionResult(LogFormat.JSON, converted != null ? converted : Map.of(), rawJson, "JSON_NODE");
+                return new FormatDetectionResult(LogFormat.JSON, converted != null ? converted : Map.of(), rawJson,
+                        "JSON_NODE");
             } catch (Exception e) {
                 return new FormatDetectionResult(LogFormat.JSON, Map.of(), nodePayload.toString(), "JSON_NODE");
             }
@@ -69,21 +75,24 @@ public class LogFormatDetector {
         // 1. Syslog RFC 3164 / 5424 Detection (<PRI> prefix)
         if (trimmed.startsWith("<")) {
             Map<String, Object> fields = SyslogParser.parse(trimmed);
-            String headerInfo = fields.containsKey("syslog_pri") ? "Syslog PRI=" + fields.get("syslog_pri") : "Syslog Header";
+            String headerInfo = fields.containsKey("syslog_pri") ? "Syslog PRI=" + fields.get("syslog_pri")
+                    : "Syslog Header";
             return new FormatDetectionResult(LogFormat.SYSLOG, fields, rawPayload, headerInfo);
         }
 
         // 2. ArcSight CEF Detection (CEF: prefix)
         if (trimmed.startsWith("CEF:")) {
             Map<String, Object> fields = CefParser.parse(trimmed);
-            String headerInfo = "CEF v=" + fields.getOrDefault("cef_version", "0") + " Vendor=" + fields.getOrDefault("device_vendor", "unknown");
+            String headerInfo = "CEF v=" + fields.getOrDefault("cef_version", "0") + " Vendor="
+                    + fields.getOrDefault("device_vendor", "unknown");
             return new FormatDetectionResult(LogFormat.CEF, fields, rawPayload, headerInfo);
         }
 
         // 3. IBM QRadar LEEF Detection (LEEF: prefix)
         if (trimmed.startsWith("LEEF:")) {
             Map<String, Object> fields = LeefParser.parse(trimmed);
-            String headerInfo = "LEEF v=" + fields.getOrDefault("leef_version", "1.0") + " Vendor=" + fields.getOrDefault("vendor", "unknown");
+            String headerInfo = "LEEF v=" + fields.getOrDefault("leef_version", "1.0") + " Vendor="
+                    + fields.getOrDefault("vendor", "unknown");
             return new FormatDetectionResult(LogFormat.LEEF, fields, rawPayload, headerInfo);
         }
 
@@ -92,8 +101,10 @@ public class LogFormatDetector {
             try {
                 JsonNode root = MAPPER.readTree(trimmed);
                 if (root.isObject()) {
-                    Map<String, Object> fields = MAPPER.convertValue(root, new TypeReference<Map<String, Object>>() {});
-                    return new FormatDetectionResult(LogFormat.JSON, fields != null ? fields : Map.of(), rawPayload, "JSON_OBJECT");
+                    Map<String, Object> fields = MAPPER.convertValue(root, new TypeReference<Map<String, Object>>() {
+                    });
+                    return new FormatDetectionResult(LogFormat.JSON, fields != null ? fields : Map.of(), rawPayload,
+                            "JSON_OBJECT");
                 } else if (root.isArray()) {
                     Map<String, Object> fields = new LinkedHashMap<>();
                     fields.put("json_array_size", root.size());

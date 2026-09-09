@@ -1,6 +1,6 @@
 package com.ulpf.integrity.service;
 
-import com.ulpf.common.db.ClickHouseIngestionRepository;
+// import com.ulpf.common.db.ClickHouseIngestionRepository;
 import com.ulpf.common.db.ClickHouseIngestionRepository.RawEventRecord;
 import com.ulpf.integrity.repository.IntegrityRepository;
 import com.ulpf.integrity.repository.IntegrityRepository.IntegrityBlockRecord;
@@ -18,7 +18,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * Core orchestration service for Merkle Tree batch tamper-evidence and forensic log verification.
+ * Core orchestration service for Merkle Tree batch tamper-evidence and forensic
+ * log verification.
  */
 @Service
 public class BatchIntegrityService {
@@ -32,8 +33,7 @@ public class BatchIntegrityService {
     public BatchIntegrityService(
             MerkleTreeCalculator merkleTreeCalculator,
             IntegrityRepository integrityRepository,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) @Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate
-    ) {
+            @org.springframework.beans.factory.annotation.Autowired(required = false) @Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.merkleTreeCalculator = merkleTreeCalculator;
         this.integrityRepository = integrityRepository;
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
@@ -47,11 +47,12 @@ public class BatchIntegrityService {
             String computedMerkleRoot,
             Integer eventCount,
             boolean isTampered,
-            String message
-    ) {}
+            String message) {
+    }
 
     /**
-     * Processes a batch of raw log events, computes Merkle Root per source, and chains block hashes.
+     * Processes a batch of raw log events, computes Merkle Root per source, and
+     * chains block hashes.
      */
     public List<IntegrityBlockRecord> processRawBatch(List<RawEventRecord> batch) {
         if (batch == null || batch.isEmpty()) {
@@ -69,7 +70,8 @@ public class BatchIntegrityService {
             String sourceId = entry.getKey();
             List<RawEventRecord> sourceBatch = entry.getValue();
 
-            if (sourceBatch.isEmpty()) continue;
+            if (sourceBatch.isEmpty())
+                continue;
 
             // 1. Calculate SHA-256 for each raw payload
             List<String> leafHashes = sourceBatch.stream()
@@ -93,27 +95,30 @@ public class BatchIntegrityService {
                     lastEventId,
                     merkleRoot,
                     previousBlockHash,
-                    LocalDateTime.now()
-            );
+                    LocalDateTime.now());
 
             IntegrityBlockRecord savedBlock = integrityRepository.saveBlock(blockToSave);
             createdBlocks.add(savedBlock);
 
             log.info("Generated Merkle Integrity Block #{} for source {}: Root={} (prev={})",
-                    savedBlock.blockId(), sourceId, merkleRoot.substring(0, 12) + "...", previousBlockHash.substring(0, 12) + "...");
+                    savedBlock.blockId(), sourceId, merkleRoot.substring(0, 12) + "...",
+                    previousBlockHash.substring(0, 12) + "...");
         }
 
         return createdBlocks;
     }
 
     /**
-     * Verifies the cryptographic integrity of a batch by re-querying raw logs from ClickHouse
-     * and comparing the dynamic Merkle Root against the stored block record in SQLite.
+     * Verifies the cryptographic integrity of a batch by re-querying raw logs from
+     * ClickHouse
+     * and comparing the dynamic Merkle Root against the stored block record in
+     * SQLite.
      */
     public VerificationResult verifyBlockIntegrity(Long blockId) {
         Optional<IntegrityBlockRecord> blockOpt = integrityRepository.findBlockById(blockId);
         if (blockOpt.isEmpty()) {
-            return new VerificationResult(blockId, null, "NOT_FOUND", null, null, 0, true, "Integrity block #" + blockId + " not found");
+            return new VerificationResult(blockId, null, "NOT_FOUND", null, null, 0, true,
+                    "Integrity block #" + blockId + " not found");
         }
 
         IntegrityBlockRecord block = blockOpt.get();
@@ -129,8 +134,7 @@ public class BatchIntegrityService {
                     null,
                     block.eventCount(),
                     true,
-                    "No raw events found in ClickHouse storage for block verification"
-            );
+                    "No raw events found in ClickHouse storage for block verification");
         }
 
         List<String> leafHashes = rawPayloads.stream()
@@ -150,8 +154,7 @@ public class BatchIntegrityService {
                     computedMerkleRoot,
                     rawPayloads.size(),
                     false,
-                    "Cryptographic Merkle Proof verified successfully! Log payloads match 100%."
-            );
+                    "Cryptographic Merkle Proof verified successfully! Log payloads match 100%.");
         } else {
             return new VerificationResult(
                     blockId,
@@ -161,8 +164,7 @@ public class BatchIntegrityService {
                     computedMerkleRoot,
                     rawPayloads.size(),
                     true,
-                    "WARNING: Cryptographic mismatch detected! Log payloads have been modified or tampered with."
-            );
+                    "WARNING: Cryptographic mismatch detected! Log payloads have been modified or tampered with.");
         }
     }
 
@@ -172,12 +174,12 @@ public class BatchIntegrityService {
         }
         try {
             String sql = """
-                SELECT raw_payload
-                FROM ulpf_raw.raw_events
-                WHERE source_id = ?
-                ORDER BY received_at DESC
-                LIMIT ?
-                """;
+                    SELECT raw_payload
+                    FROM ulpf_raw.raw_events
+                    WHERE source_id = ?
+                    ORDER BY received_at DESC
+                    LIMIT ?
+                    """;
             return clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, limit);
         } catch (Exception e) {
             log.warn("Could not fetch raw log payloads from ClickHouse for verification: {}", e.getMessage());

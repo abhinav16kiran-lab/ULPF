@@ -14,11 +14,11 @@ import java.util.List;
  */
 @Service
 public class EmbeddingMatchingService {
-    
+
     private final EmbeddingClient embeddingClient;
     private final EmbeddingRepository embeddingRepository;
-    private final MappingConfig config;
-    
+    // private final MappingConfig config;
+
     public EmbeddingMatchingService(
             EmbeddingClient embeddingClient,
             EmbeddingRepository embeddingRepository,
@@ -27,12 +27,13 @@ public class EmbeddingMatchingService {
         this.embeddingRepository = embeddingRepository;
         this.config = config;
     }
-    
+
     /**
      * Match a raw field name using semantic similarity with fallback blending.
      * 
-     * @param rawFieldName the raw vendor field name
-     * @param bestPriorScore the best score from Layer 2/3, or 0.0 if neither found anything
+     * @param rawFieldName   the raw vendor field name
+     * @param bestPriorScore the best score from Layer 2/3, or 0.0 if neither found
+     *                       anything
      * @return mapping candidate with blended score
      */
     public MappingCandidate matchWithFallback(String rawFieldName, double bestPriorScore) {
@@ -40,18 +41,18 @@ public class EmbeddingMatchingService {
             // Embed the raw field name (not cleaned/preprocessed per design doc)
             double[] rawFieldEmbedding = embeddingClient.getEmbedding(rawFieldName);
             double[] fieldEmbedding = normalize(rawFieldEmbedding);
-            
+
             // Find best matching canonical field by pre-normalized dot product
             List<CanonicalEmbedding> canonicalEmbeddings = embeddingRepository.findAllCanonicalEmbeddings();
-            
+
             if (canonicalEmbeddings == null || canonicalEmbeddings.isEmpty()) {
                 // No embeddings available yet - return with prior score
                 return new MappingCandidate(null, bestPriorScore, "L4_HYBRID");
             }
-            
+
             CanonicalEmbedding bestMatch = null;
             double bestRawSimilarity = -1.0;
-            
+
             for (CanonicalEmbedding candidate : canonicalEmbeddings) {
                 double similarity = fastDotProduct(fieldEmbedding, candidate.getEmbeddingVector());
                 if (similarity > bestRawSimilarity) {
@@ -59,16 +60,16 @@ public class EmbeddingMatchingService {
                     bestMatch = candidate;
                 }
             }
-            
+
             if (bestMatch == null) {
                 // No embeddings available
                 return new MappingCandidate(null, 0.0, "L4_HYBRID");
             }
-            
+
             // Scale raw similarity to 0.0-1.0 range
             // Constants from design doc: stretch narrow band to full range
             double scaledSimilarity = clamp((bestRawSimilarity - 0.12) / 0.30, 0.0, 1.0);
-            
+
             // Blend with prior layer scores
             double combined;
             if (bestPriorScore == 0.0) {
@@ -78,34 +79,36 @@ public class EmbeddingMatchingService {
                 // Blend: 30% prior layers, 70% semantic
                 combined = (0.3 * bestPriorScore) + (0.7 * scaledSimilarity);
             }
-            
+
             return new MappingCandidate(bestMatch.getCanonicalField(), combined, "L4_HYBRID");
-            
+
         } catch (Exception e) {
             // If embedding fails, return empty candidate
             throw new RuntimeException("Embedding matching failed for field: " + rawFieldName, e);
         }
     }
-    
+
     /**
      * Compute fast dot product between two L2-normalized vectors.
      * Since vectors are pre-normalized to unit length (||v|| = 1.0),
-     * cosine similarity simplifies to a tight dot product loop without square roots or norm math.
+     * cosine similarity simplifies to a tight dot product loop without square roots
+     * or norm math.
      */
     private double fastDotProduct(double[] v1, double[] v2) {
         if (v1.length != v2.length) {
             throw new IllegalArgumentException("Vectors must have same length");
         }
-        
+
         double dotProduct = 0.0;
         for (int i = 0; i < v1.length; i++) {
             dotProduct += v1[i] * v2[i];
         }
         return dotProduct;
     }
-    
+
     private double[] normalize(double[] v) {
-        if (v == null || v.length == 0) return v;
+        if (v == null || v.length == 0)
+            return v;
         double norm = 0.0;
         for (double val : v) {
             norm += val * val;
@@ -120,7 +123,7 @@ public class EmbeddingMatchingService {
         }
         return v;
     }
-    
+
     /**
      * Clamp a value between min and max.
      */

@@ -2,7 +2,7 @@ package com.ulpf.integrity.repository;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
+// import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -13,7 +13,8 @@ import java.util.Optional;
 
 /**
  * SQLite repository for managing batch_integrity_blocks records.
- * Provides block insertion, chronological hash chain retrieval, and latest root lookups.
+ * Provides block insertion, chronological hash chain retrieval, and latest root
+ * lookups.
  */
 @Repository
 public class IntegrityRepository {
@@ -35,14 +36,14 @@ public class IntegrityRepository {
             String lastEventId,
             String merkleRoot,
             String previousBlockHash,
-            LocalDateTime createdAt
-    ) {}
+            LocalDateTime createdAt) {
+    }
 
     public IntegrityBlockRecord saveBlock(IntegrityBlockRecord record) {
         String sql = """
-            INSERT INTO batch_integrity_blocks (source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """;
+                INSERT INTO batch_integrity_blocks (source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """;
 
         LocalDateTime now = record.createdAt() != null ? record.createdAt() : LocalDateTime.now();
 
@@ -54,8 +55,7 @@ public class IntegrityRepository {
                 record.lastEventId(),
                 record.merkleRoot(),
                 record.previousBlockHash(),
-                Timestamp.valueOf(now)
-        );
+                Timestamp.valueOf(now));
 
         Long newId = jdbcTemplate.queryForObject("SELECT last_insert_rowid()", Long.class);
 
@@ -67,19 +67,18 @@ public class IntegrityRepository {
                 record.lastEventId(),
                 record.merkleRoot(),
                 record.previousBlockHash(),
-                now
-        );
+                now);
     }
 
     public String findLatestBlockHash(String sourceId) {
         try {
             String sql = """
-                SELECT merkle_root 
-                FROM batch_integrity_blocks 
-                WHERE source_id = ? 
-                ORDER BY block_id DESC 
-                LIMIT 1
-                """;
+                    SELECT merkle_root
+                    FROM batch_integrity_blocks
+                    WHERE source_id = ?
+                    ORDER BY block_id DESC
+                    LIMIT 1
+                    """;
             List<String> results = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("merkle_root"), sourceId);
             if (!results.isEmpty()) {
                 return results.get(0);
@@ -93,10 +92,10 @@ public class IntegrityRepository {
     public Optional<IntegrityBlockRecord> findBlockById(Long blockId) {
         try {
             String sql = """
-                SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
-                FROM batch_integrity_blocks
-                WHERE block_id = ?
-                """;
+                    SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
+                    FROM batch_integrity_blocks
+                    WHERE block_id = ?
+                    """;
             List<IntegrityBlockRecord> list = jdbcTemplate.query(sql, (rs, rowNum) -> new IntegrityBlockRecord(
                     rs.getLong("block_id"),
                     rs.getString("source_id"),
@@ -105,8 +104,8 @@ public class IntegrityRepository {
                     rs.getString("last_event_id"),
                     rs.getString("merkle_root"),
                     rs.getString("previous_block_hash"),
-                    rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null
-            ), blockId);
+                    rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null),
+                    blockId);
 
             return list.stream().findFirst();
         } catch (Exception e) {
@@ -117,11 +116,11 @@ public class IntegrityRepository {
 
     public List<IntegrityBlockRecord> findAllBlocks(int limit) {
         String sql = """
-            SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
-            FROM batch_integrity_blocks
-            ORDER BY block_id DESC
-            LIMIT ?
-            """;
+                SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
+                FROM batch_integrity_blocks
+                ORDER BY block_id DESC
+                LIMIT ?
+                """;
         return jdbcTemplate.query(sql, (rs, rowNum) -> new IntegrityBlockRecord(
                 rs.getLong("block_id"),
                 rs.getString("source_id"),
@@ -130,18 +129,17 @@ public class IntegrityRepository {
                 rs.getString("last_event_id"),
                 rs.getString("merkle_root"),
                 rs.getString("previous_block_hash"),
-                rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null
-        ), limit);
+                rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null), limit);
     }
 
     public List<IntegrityBlockRecord> findBlocksBySourceId(String sourceId, int limit) {
         String sql = """
-            SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
-            FROM batch_integrity_blocks
-            WHERE source_id = ?
-            ORDER BY block_id DESC
-            LIMIT ?
-            """;
+                SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
+                FROM batch_integrity_blocks
+                WHERE source_id = ?
+                ORDER BY block_id DESC
+                LIMIT ?
+                """;
         return jdbcTemplate.query(sql, (rs, rowNum) -> new IntegrityBlockRecord(
                 rs.getLong("block_id"),
                 rs.getString("source_id"),
@@ -150,7 +148,7 @@ public class IntegrityRepository {
                 rs.getString("last_event_id"),
                 rs.getString("merkle_root"),
                 rs.getString("previous_block_hash"),
-                rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null
-        ), sourceId, limit);
+                rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null),
+                sourceId, limit);
     }
 }

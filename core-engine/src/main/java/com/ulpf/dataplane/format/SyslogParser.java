@@ -1,6 +1,6 @@
 package com.ulpf.dataplane.format;
 
-import java.util.HashMap;
+// import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -8,7 +8,8 @@ import java.util.regex.Pattern;
 
 /**
  * Parser for Syslog RFC 3164 (BSD Syslog) and RFC 5424 log messages.
- * Extracts priority, facility, severity, timestamp, hostname, app name, and key-value payload attributes.
+ * Extracts priority, facility, severity, timestamp, hostname, app name, and
+ * key-value payload attributes.
  */
 public class SyslogParser {
 
@@ -24,7 +25,8 @@ public class SyslogParser {
 
     // Matcher for PRI: <134> or <34>
     private static final Pattern PRI_PATTERN = Pattern.compile("^<(\\d{1,3})>");
-    // Key-value matcher inside Syslog payload (e.g., src=1.2.3.4 dst=10.0.0.1 action=ALLOW)
+    // Key-value matcher inside Syslog payload (e.g., src=1.2.3.4 dst=10.0.0.1
+    // action=ALLOW)
     private static final Pattern KV_PATTERN = Pattern.compile("([a-zA-Z0-9_.-]+)=([^\\s\"]+|\"[^\"]*\")");
 
     public static Map<String, Object> parse(String payload) {
@@ -50,7 +52,8 @@ public class SyslogParser {
 
                 // Strip PRI prefix from message
                 message = message.substring(priMatcher.end()).trim();
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
 
         // Check if message starts with RFC 5424 version indicator (e.g. "1 ")
@@ -80,16 +83,20 @@ public class SyslogParser {
     }
 
     private static Object parseTypedValue(String val) {
-        if (val == null) return null;
-        if ("true".equalsIgnoreCase(val)) return true;
-        if ("false".equalsIgnoreCase(val)) return false;
+        if (val == null)
+            return null;
+        if ("true".equalsIgnoreCase(val))
+            return true;
+        if ("false".equalsIgnoreCase(val))
+            return false;
         try {
             if (!val.contains(".")) {
                 return Long.parseLong(val);
             } else {
                 return Double.parseDouble(val);
             }
-        } catch (NumberFormatException ignored) {}
+        } catch (NumberFormatException ignored) {
+        }
         return val;
     }
 }

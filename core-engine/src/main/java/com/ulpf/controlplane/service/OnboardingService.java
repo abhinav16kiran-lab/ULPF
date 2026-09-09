@@ -1,6 +1,6 @@
 package com.ulpf.controlplane.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+// import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ulpf.common.db.CredentialRepository;
@@ -64,9 +64,9 @@ public class OnboardingService {
             OnboardingRepository onboardingRepository,
             MappingRepository mappingRepository,
             MappingProposalService mappingProposalService,
-            MappingLearningService mappingLearningService
-    ) {
-        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository, mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null);
+            MappingLearningService mappingLearningService) {
+        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository,
+                mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null);
     }
 
     @Autowired
@@ -80,8 +80,7 @@ public class OnboardingService {
             MappingProposalService mappingProposalService,
             MappingLearningService mappingLearningService,
             LogFormatDetector logFormatDetector,
-            @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator
-    ) {
+            @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -100,8 +99,8 @@ public class OnboardingService {
             String vendorId,
             String rawApiKey,
             String status,
-            String message
-    ) {}
+            String message) {
+    }
 
     public OnboardingSubmissionResult submitRequest(
             String username,
@@ -109,9 +108,9 @@ public class OnboardingService {
             String sourceName,
             String sourceType,
             MultipartFile sampleLogFile,
-            MultipartFile schemaFile
-    ) {
-        return submitRequest(username, vendorName, sourceName, sourceType, "REG_LOG", null, null, null, sampleLogFile, schemaFile);
+            MultipartFile schemaFile) {
+        return submitRequest(username, vendorName, sourceName, sourceType, "REG_LOG", null, null, null, sampleLogFile,
+                schemaFile);
     }
 
     public OnboardingSubmissionResult submitRequest(
@@ -124,8 +123,7 @@ public class OnboardingService {
             Long maxIntervalMs,
             String sensorField,
             MultipartFile sampleLogFile,
-            MultipartFile schemaFile
-    ) {
+            MultipartFile schemaFile) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
 
@@ -136,27 +134,29 @@ public class OnboardingService {
 
         // 1. Resolve or create vendor record for user
         VendorRecord vendor = vendorRepository.findByOwnerUserId(user.userId())
-                .orElseGet(() -> vendorRepository.save(new VendorRecord(null, user.userId(), vendorName, "ACTIVE", null)));
+                .orElseGet(
+                        () -> vendorRepository.save(new VendorRecord(null, user.userId(), vendorName, "ACTIVE", null)));
 
         // 2. Create source record with status PENDING_APPROVAL
         SourceRecord source = sourceRepository.save(new SourceRecord(
-                null, vendor.vendorId(), sourceName, sourceType, "PENDING_APPROVAL", null
-        ));
+                null, vendor.vendorId(), sourceName, sourceType, "PENDING_APPROVAL", null));
 
         // 3. Generate raw API Key (e.g., ulpf_live_...) & SHA-256 key hash
-        String rawApiKey = "ulpf_live_" + UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        String rawApiKey = "ulpf_live_" + UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String keyHash = hashSha256(rawApiKey);
 
         // 4. Save credential record with status PENDING_APPROVAL
         credentialRepository.save(new CredentialRecord(
-                null, source.sourceId(), vendor.vendorId(), keyHash, "PENDING_APPROVAL", null
-        ));
+                null, source.sourceId(), vendor.vendorId(), keyHash, "PENDING_APPROVAL", null));
 
         // 5. Extract sample snippet & save files to disk
         String requestId = UUID.randomUUID().toString();
-        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType, delta, maxIntervalMs, sensorField);
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
+                delta, maxIntervalMs, sensorField);
 
-        // 6. Generate candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        // 6. Generate candidate mapping version via AI mapping engine using format
+        // autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
@@ -165,10 +165,11 @@ public class OnboardingService {
 
         // 7. Save onboarding request record
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
-                requestId, user.userId(), source.sourceId(), "NEW_SOURCE", sampleMetadataJson, "SUBMITTED", LocalDateTime.now()
-        ));
+                requestId, user.userId(), source.sourceId(), "NEW_SOURCE", sampleMetadataJson, "SUBMITTED",
+                LocalDateTime.now()));
 
-        log.info("Onboarding request {} submitted for source {} with raw API key generated and metadata injected", requestId, source.sourceId());
+        log.info("Onboarding request {} submitted for source {} with raw API key generated and metadata injected",
+                requestId, source.sourceId());
 
         return new OnboardingSubmissionResult(
                 req.requestId(),
@@ -176,8 +177,7 @@ public class OnboardingService {
                 vendor.vendorId(),
                 rawApiKey,
                 req.status(),
-                "Onboarding request submitted successfully. Please save your API key now — for security reasons, it will not be displayed again. The key will become ACTIVE once approved by an administrator."
-        );
+                "Onboarding request submitted successfully. Please save your API key now — for security reasons, it will not be displayed again. The key will become ACTIVE once approved by an administrator.");
     }
 
     public OnboardingSubmissionResult submitUpdateRequest(
@@ -189,8 +189,7 @@ public class OnboardingService {
             Long maxIntervalMs,
             String sensorField,
             MultipartFile sampleLogFile,
-            MultipartFile schemaFile
-    ) {
+            MultipartFile schemaFile) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
 
@@ -204,12 +203,15 @@ public class OnboardingService {
 
         // 1. Extract sample snippet & store files
         String requestId = UUID.randomUUID().toString();
-        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType, delta, maxIntervalMs, sensorField);
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
+                delta, maxIntervalMs, sensorField);
 
-        // 2. Delete any stale candidate mapping for this source if present before generating new candidate
+        // 2. Delete any stale candidate mapping for this source if present before
+        // generating new candidate
         mappingRepository.deleteCandidateVersions(sourceId);
 
-        // 3. Generate new candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        // 3. Generate new candidate mapping version via AI mapping engine using format
+        // autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
@@ -218,8 +220,8 @@ public class OnboardingService {
 
         // 5. Save onboarding request record with request_type = "UPDATE_SOURCE"
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
-                requestId, user.userId(), source.sourceId(), "UPDATE_SOURCE", sampleMetadataJson, "SUBMITTED", LocalDateTime.now()
-        ));
+                requestId, user.userId(), source.sourceId(), "UPDATE_SOURCE", sampleMetadataJson, "SUBMITTED",
+                LocalDateTime.now()));
 
         log.info("Schema update request {} submitted for existing source {}", requestId, source.sourceId());
 
@@ -229,11 +231,11 @@ public class OnboardingService {
                 source.vendorId(),
                 null,
                 req.status(),
-                "Schema update request submitted successfully. Your existing API key remains active. The proposed candidate mapping version will take effect once approved by an administrator."
-        );
+                "Schema update request submitted successfully. Your existing API key remains active. The proposed candidate mapping version will take effect once approved by an administrator.");
     }
 
-    private void injectMetadataIntoCandidateMapping(String sourceId, String logType, Double delta, Long maxIntervalMs, String sensorField) {
+    private void injectMetadataIntoCandidateMapping(String sourceId, String logType, Double delta, Long maxIntervalMs,
+            String sensorField) {
         Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {
             try {
@@ -255,7 +257,8 @@ public class OnboardingService {
                 String updatedJson = objectMapper.writeValueAsString(rootNode);
                 mappingRepository.updateCandidateMappingJson(sourceId, updatedJson);
             } catch (Exception e) {
-                log.warn("Could not inject metadata into candidate mapping for sourceId {}: {}", sourceId, e.getMessage());
+                log.warn("Could not inject metadata into candidate mapping for sourceId {}: {}", sourceId,
+                        e.getMessage());
             }
         }
     }
@@ -298,8 +301,8 @@ public class OnboardingService {
                 onboardingRepository.saveNotification(
                         req.userId(),
                         "Onboarding Request Approved",
-                        "Your onboarding request (ID: " + requestId + ") for log source has been APPROVED! Your API key is now ACTIVE."
-                );
+                        "Your onboarding request (ID: " + requestId
+                                + ") for log source has been APPROVED! Your API key is now ACTIVE.");
             } else {
                 sourceRepository.revokeSource(req.sourceId());
                 // Drop unapproved candidate mapping records immediately on rejection
@@ -308,8 +311,7 @@ public class OnboardingService {
                 onboardingRepository.saveNotification(
                         req.userId(),
                         "Onboarding Request Rejected",
-                        "Your onboarding request (ID: " + requestId + ") was REJECTED."
-                );
+                        "Your onboarding request (ID: " + requestId + ") was REJECTED.");
             }
         }
 
@@ -328,38 +330,38 @@ public class OnboardingService {
     public void updateCandidateMapping(String requestId, String newMappingJson) {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
-        
+
         if (req.sourceId() != null) {
             // Get the OLD (AI-proposed) mapping before updating
             Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(req.sourceId());
-            
+
             if (candidateOpt.isPresent()) {
                 String oldMappingJson = candidateOpt.get().mappingJson();
-                
+
                 // LEARNING STEP: Extract and learn from human corrections
                 try {
                     int aliasesLearned = mappingLearningService.learnFromCorrections(oldMappingJson, newMappingJson);
-                    log.info("Learned {} new aliases from mapping corrections for request {}", aliasesLearned, requestId);
+                    log.info("Learned {} new aliases from mapping corrections for request {}", aliasesLearned,
+                            requestId);
                 } catch (Exception e) {
                     // Don't fail the update if learning fails - just log it
                     log.warn("Failed to learn from corrections for request {}: {}", requestId, e.getMessage());
                 }
             }
-            
+
             // Update the candidate mapping (original behavior)
             mappingRepository.updateCandidateMappingJson(req.sourceId(), newMappingJson);
         }
     }
 
     private String processAndStoreSampleFiles(
-            String requestId, 
-            MultipartFile sampleLogFile, 
+            String requestId,
+            MultipartFile sampleLogFile,
             MultipartFile schemaFile,
             String logType,
             Double delta,
             Long maxIntervalMs,
-            String sensorField
-    ) {
+            String sensorField) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("log_type", logType);
         metadata.put("delta", delta);
@@ -426,7 +428,7 @@ public class OnboardingService {
                     FormatDetectionResult formatResult = logFormatDetector.detect(sampleSnippet);
                     if (formatResult.parsedFields() != null && !formatResult.parsedFields().isEmpty()) {
                         List<String> rawKeys = new ArrayList<>(formatResult.parsedFields().keySet());
-                        log.info("Autodetected format '{}' for sample log file. Extracted {} vendor field keys: {}", 
+                        log.info("Autodetected format '{}' for sample log file. Extracted {} vendor field keys: {}",
                                 formatResult.detectedFormat(), rawKeys.size(), rawKeys);
                         return mappingEngineOrchestrator.mapFields(rawKeys, false);
                     }
@@ -445,7 +447,8 @@ public class OnboardingService {
             StringBuilder hexString = new StringBuilder();
             for (byte b : hash) {
                 String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) hexString.append('0');
+                if (hex.length() == 1)
+                    hexString.append('0');
                 hexString.append(hex);
             }
             return hexString.toString();
