@@ -43,6 +43,12 @@ if %ERRORLEVEL% EQU 0 (
     GOTO LAUNCH
 )
 
+WHERE podman >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    SET COMPOSE_CMD=podman compose
+    GOTO LAUNCH
+)
+
 REM Detect Docker
 WHERE docker >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
@@ -50,8 +56,21 @@ if %ERRORLEVEL% EQU 0 (
     GOTO LAUNCH
 )
 
-echo Error: Neither Podman Compose nor Docker Compose was found in PATH.
-echo Please install Podman Desktop or Docker Desktop.
+WHERE docker-compose >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    SET COMPOSE_CMD=docker-compose
+    GOTO LAUNCH
+)
+
+echo.
+echo ==========================================================================
+echo ERROR: Neither Podman nor Docker container orchestrator was found!
+echo --------------------------------------------------------------------------
+echo Please install one of the following to run ULPF:
+echo   - Docker Desktop: https://www.docker.com/products/docker-desktop/
+echo   - Podman Desktop: https://podman-desktop.io/
+echo ==========================================================================
+echo.
 pause
 exit /b 1
 

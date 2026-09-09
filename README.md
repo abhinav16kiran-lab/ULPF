@@ -21,17 +21,27 @@ This section provides the fastest methods to get ULPF running on your local syst
 
 ---
 
-## 1. Prerequisites
+## 1. Clone the Repository
+
+Clone the project repository to your local machine:
+```bash
+git clone https://github.com/abhinav16kiran-lab/ULPF.git
+cd ULPF
+```
+
+---
+
+## 2. Prerequisites & Container Runtime Detection
 
 Ensure you have one of the following container orchestrators installed:
-* **Docker** (20.10+) & **Docker Compose** (`docker compose`)
 * **Podman** & **Podman Compose** (`podman-compose` or `podman compose`)
+* **Docker** & **Docker Compose** (`docker compose` or `docker-compose`)
 
 *(If running services natively without containers, Java 21 LTS, Maven 3.9+, and Node.js 21+ are required).*
 
 ---
 
-## 2. Fast Startup Methods
+## 3. Fast Startup Methods
 
 Choose the startup option that best fits your workflow:
 
@@ -50,11 +60,17 @@ Run the automated platform launcher for your operating system:
   ```
 
 #### What `start.sh` & `start.bat` do automatically:
-1. Creates required storage directories (`core-engine/data`, `core-engine/storage`).
-2. Checks for `.env`. If missing, copies `.env.example` to `.env`.
-3. **Interactive Setup**: Prompts you if you'd like to set custom Admin & ClickHouse credentials on first launch.
-4. Auto-detects Docker or Podman and launches all 3 containerized services (`ulpf-clickhouse`, `ulpf-core-engine`, `ulpf-frontend`).
-5. Polls backend health endpoints and displays system ready status once live.
+1. Creates required local storage directories (`core-engine/data`, `core-engine/storage`).
+2. Checks for `.env`. If missing, automatically copies `.env.example` $\rightarrow$ `.env`.
+3. **Interactive Credentials Setup**: Prompts you if you would like to customize Admin & ClickHouse credentials on first launch.
+4. **Smart Container Runtime Auto-Detection**: Checks for container engines in optimal order:
+   - `podman-compose`
+   - `podman compose`
+   - `docker compose`
+   - `docker-compose`
+   - *If neither Podman nor Docker is installed*, the script outputs a clear error message directing you to download Docker Desktop or Podman Desktop, and exits cleanly.
+5. Launches all 3 containerized services (`ulpf-clickhouse`, `ulpf-core-engine`, `ulpf-frontend`).
+6. Polls backend health endpoints and displays final service URLs once live.
 
 ---
 

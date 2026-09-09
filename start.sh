@@ -39,8 +39,13 @@ elif docker compose version &> /dev/null; then
 elif command -v docker-compose &> /dev/null; then
     COMPOSE_CMD="docker-compose"
 else
-    echo "Error: Neither Podman Compose nor Docker Compose was found."
-    echo "Please install Podman or Docker."
+    echo "=========================================================================="
+    echo "ERROR: Neither Podman nor Docker container orchestrator was found!"
+    echo "--------------------------------------------------------------------------"
+    echo "Please install one of the following to run ULPF:"
+    echo "  - Docker Engine / Desktop: https://docs.docker.com/get-docker/"
+    echo "  - Podman / Podman Desktop: https://podman.io/"
+    echo "=========================================================================="
     exit 1
 fi
 
