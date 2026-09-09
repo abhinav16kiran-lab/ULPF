@@ -282,7 +282,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | **Analytics Engine**| ClickHouse Server 26.3 | High-throughput columnar storage & async insert |
 | **AI Model** | ONNX Runtime | Local `all-MiniLM-L6-v2` embedding model |
 | **Frontend UI** | React 19 + Vite 6 | Modern design system, Lucide icons, Tailwind CSS |
-| **CI/CD & Containers**| Docker / Podman + GitHub Actions | Automated build, unit tests (142/142 passing), GHCR publish |
+| **CI/CD & Containers**| Docker / Podman + GitHub Actions | Automated build, unit tests (144/144 passing), GHCR publish |
 
 ---
 
@@ -298,6 +298,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | `POST` | `/v1/admin/onboard/{id}/approve` | Admin Token | Approve request & issue API key |
 | `POST` | `/v1/admin/onboard/{id}/reject` | Admin Token | Reject onboarding request |
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
+| `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |
 | `GET` | `/v1/integrity/blocks` | Bearer Token | List Merkle batch integrity blocks |
 | `POST` | `/v1/integrity/verify/{id}` | Bearer Token | Execute cryptographic forensic audit |
