@@ -130,3 +130,15 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}
+
+      # Build & Push ClickHouse Container
+      - name: Build & Push ClickHouse Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./infra
+          file: ./infra/Containerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/clickhouse:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/clickhouse:${{ github.sha }}
+
