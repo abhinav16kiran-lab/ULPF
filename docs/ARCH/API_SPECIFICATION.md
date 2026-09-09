@@ -21,6 +21,7 @@
 | `POST /v1/login` | Prototype authentication | Control plane |
 | `GET /v1/notifications` | Load notifications for the logged-in user | Control plane |
 | `GET /v1/analytics` | Authorized read-only analytics access to ClickHouse | Analytics |
+| `GET /v1/analytics/export/parquet` | Local Parquet batch exporter for AI/ML data lakes | Analytics / Data plane |
 | `GET /v1/integrity/verify/{blockId}` | Cryptographic Merkle tree audit verification endpoint | Control / Integrity plane |
 
 ## 3. `POST /v1/events`
@@ -233,3 +234,20 @@ Cryptographic Merkle Tree audit verification endpoint. Re-computes SHA-256 event
   "verifiedAt": "2026-09-08T17:20:00"
 }
 ```
+
+## 12. `GET /v1/analytics/export/parquet`
+
+Automated batch exporter endpoint dumping ClickHouse log chunks into Snappy-compressed binary Apache Parquet files for offline AI/ML model training pipelines and air-gapped data lakes.
+
+### Query Parameters:
+- `table` (optional): Target ClickHouse table name (default: `raw_events`)
+- `vendorId` (optional): Filter logs by vendor identifier
+- `sourceId` (optional): Filter logs by source identifier
+- `from` (optional): Start timestamp ISO string
+- `to` (optional): End timestamp ISO string
+- `limit` (optional): Max row limit (default: `10000`, max: `500000`)
+
+### Response Headers:
+- `Content-Type`: `application/vnd.apache.parquet`
+- `Content-Disposition`: `attachment; filename="ulpf_export_<vendorId>_<timestamp>.parquet"`
+

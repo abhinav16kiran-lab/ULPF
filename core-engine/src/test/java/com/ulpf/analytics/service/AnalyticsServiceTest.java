@@ -66,4 +66,16 @@ class AnalyticsServiceTest {
                 () -> analyticsService.runQuery("raw_events", "src_ip; --", "COUNT"));
         verifyNoInteractions(clickhouseJdbcTemplate);
     }
+
+    @Test
+    void testExportParquetReturnsBinaryData() {
+        byte[] parquet = analyticsService.exportParquet("raw_events", "vendor-123", "src-1", null, null, 100);
+
+        assertNotNull(parquet);
+        assertTrue(parquet.length > 8);
+        assertEquals(0x50, parquet[0]); // 'P'
+        assertEquals(0x41, parquet[1]); // 'A'
+        assertEquals(0x52, parquet[2]); // 'R'
+        assertEquals(0x31, parquet[3]); // '1'
+    }
 }

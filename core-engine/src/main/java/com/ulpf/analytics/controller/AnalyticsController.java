@@ -66,6 +66,28 @@ public class AnalyticsController {
         ));
     }
 
+    @GetMapping("/analytics/export/parquet")
+    public ResponseEntity<byte[]> exportParquet(
+            @RequestParam(required = false) String table,
+            @RequestParam(required = false) String vendorId,
+            @RequestParam(required = false) String sourceId,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false, defaultValue = "10000") Integer limit
+    ) {
+        byte[] parquetData = analyticsService.exportParquet(table, vendorId, sourceId, from, to, limit);
+
+        String timestamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+                .format(java.time.LocalDateTime.now());
+        String filename = "ulpf_export_" + (vendorId != null && !vendorId.isBlank() ? vendorId : "all") + "_" + timestamp + ".parquet";
+
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet")
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                .body(parquetData);
+    }
+
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
     }
