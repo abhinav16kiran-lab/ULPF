@@ -208,6 +208,19 @@ curl -X POST http://localhost:8080/v1/events \
 
 ---
 
+## 6. Enterprise Log Migration Guide
+
+Migrating from existing enterprise log infrastructure (Elasticsearch, OpenSearch, Splunk, AWS S3, Apache Kafka)? ULPF supports 4 zero-downtime migration strategies:
+
+1. **Strategy 1: Dual-Write Proxy Bridge (Zero Downtime)**: Add ULPF `POST /v1/events` as a secondary HTTP sink in Fluentbit, Logstash, Vector, or Rsyslog.
+2. **Strategy 2: Bulk Historical Import**: Upload log archives (`.json`, `.json.gz`, `.log`) via `POST /v1/analytics/import/file` or ClickHouse native S3 functions.
+3. **Strategy 3: AI-Powered Field Mapping**: Paste a sample log snippet into `/onboard` to automatically map legacy field names without code changes.
+4. **Strategy 4: Direct Event Bus Connection**: Ingest Kafka / RabbitMQ streams directly via ClickHouse Kafka engine tables.
+
+👉 **Read the complete guide**: [Enterprise Log Migration Guide (docs/MIGRATION.md)](file:///home/venzz/Work/Projects/ULPF/docs/MIGRATION.md)
+
+---
+
 # SECTION 2: TECHNICAL ARCHITECTURE & CORE SPECIFICATIONS
 
 ---
