@@ -17,7 +17,7 @@ public class EmbeddingMatchingService {
 
     private final EmbeddingClient embeddingClient;
     private final EmbeddingRepository embeddingRepository;
-    // private final MappingConfig config;
+    private final MappingConfig config;
 
     public EmbeddingMatchingService(
             EmbeddingClient embeddingClient,
