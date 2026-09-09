@@ -52,19 +52,8 @@ fi
 echo "Using container orchestrator: $COMPOSE_CMD"
 
 echo "Building and launching container services..."
-$COMPOSE_CMD up --build -d > /dev/null 2>&1 &
-BUILD_PID=$!
-
-# Clean progress spinner while containers build
-SPINNER=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-i=0
-while kill -0 $BUILD_PID 2>/dev/null; do
-    i=$(( (i + 1) % 10 ))
-    printf "\r[%s] Compiling and starting containers... Please wait..." "${SPINNER[$i]}"
-    sleep 0.2
-done
-wait $BUILD_PID
-printf "\r[✓] Container build and launch complete!               \n"
+$COMPOSE_CMD up --build -d
+echo "[✓] Container build and launch complete!"
 
 echo "Verifying service readiness..."
 
