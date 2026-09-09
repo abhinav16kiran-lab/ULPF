@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import client from "../api/client";
+import UlpfLogo from "../components/UlpfLogo";
 import "./AuthLayout.css";
 
 function SignupPage() {
@@ -101,16 +102,7 @@ function SignupPage() {
           
           {/* Header & Logo */}
           <div className="auth-brand-header">
-            <div className="auth-brand-logo">
-              <div className="brand-icon-box">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 6h16M4 12h16M4 18h10" />
-                </svg>
-              </div>
-              <span className="brand-title">
-                ULPF <span className="brand-dot"></span>
-              </span>
-            </div>
+            <UlpfLogo className="h-9 w-auto" />
             <span className="version-badge">• V0.2 PROTOTYPE</span>
           </div>
 

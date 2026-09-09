@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import client from "../api/client";
 import Navbar from "../components/Navbar";
+import EmptyState from "../components/EmptyState";
 
 function NotificationsPage() {
   const [notifications, setNotifications] = useState([]);
@@ -285,19 +286,10 @@ function NotificationsPage() {
 
         {/* Empty State View */}
         {!loading && filteredNotifications.length === 0 && (
-          <div className="bg-white rounded-3xl border border-slate-200/80 p-12 text-center shadow-sm my-4">
-            <div className="w-16 h-16 rounded-2xl bg-teal-50 border border-teal-200 text-teal-600 flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-bold text-slate-900 mb-1">
-              All Caught Up!
-            </h3>
-            <p className="text-slate-500 text-sm max-w-md mx-auto">
-              There are no {activeTab !== "ALL" ? activeTab.toLowerCase() : ""} notifications or system alerts matching your filter.
-            </p>
-          </div>
+          <EmptyState
+            title="All Caught Up!"
+            description={`There are no ${activeTab !== "ALL" ? activeTab.toLowerCase() : ""} notifications or system alerts matching your current filter.`}
+          />
         )}
 
         {/* Notifications Feed List */}

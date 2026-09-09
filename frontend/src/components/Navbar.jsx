@@ -1,4 +1,5 @@
 import { useNavigate, Link, useLocation } from "react-router-dom";
+import UlpfLogo from "./UlpfLogo";
 
 function Navbar() {
   const navigate = useNavigate();
@@ -23,15 +24,8 @@ function Navbar() {
       <div className="max-w-7xl mx-auto px-6 lg:px-12 h-16 flex items-center justify-between">
         <div className="flex items-center space-x-8">
           {/* Brand Logo */}
-          <Link to={role === "ADMIN" ? "/admin" : "/onboard"} className="flex items-center space-x-2 group">
-            <div className="w-8 h-8 rounded-xl bg-slate-900 flex items-center justify-center text-white shadow-sm group-hover:scale-105 transition-transform">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 6h16M4 12h16M4 18h10" />
-              </svg>
-            </div>
-            <span className="font-extrabold text-lg text-slate-900 tracking-tight">
-              ULPF <span className="text-teal-500">•</span>
-            </span>
+          <Link to={role === "ADMIN" ? "/admin" : "/onboard"} className="flex items-center space-x-2 group hover:opacity-90 transition-opacity">
+            <UlpfLogo className="h-8 w-auto" />
           </Link>
 
           {/* Navigation Links */}

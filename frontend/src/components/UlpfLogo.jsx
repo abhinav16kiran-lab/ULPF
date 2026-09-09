@@ -1,0 +1,36 @@
+export default function UlpfLogo({ className = "h-8 w-auto", textColor = "#1E293B", dotColor = "#FF6B6B" }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 140 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect x="4" y="6" width="28" height="28" rx="8" fill="#14B8A6" />
+      <path
+        d="M12 15C12 13.8954 12.8954 13 14 13H22C23.1046 13 24 13.8954 24 15V22C24 24.7614 21.7614 27 19 27H17C14.2386 27 12 24.7614 12 22V15Z"
+        fill="white"
+      />
+      <circle cx="16" cy="18" r="1.5" fill="#14B8A6" />
+      <circle cx="20" cy="18" r="1.5" fill="#14B8A6" />
+      <path
+        d="M16 22C16.8 23 19.2 23 20 22"
+        stroke="#14B8A6"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <text
+        x="38"
+        y="26"
+        fontFamily="sans-serif"
+        fontWeight="800"
+        fontSize="20"
+        fill={textColor}
+        letterSpacing="-0.5px"
+      >
+        ULPF
+      </text>
+      <circle cx="98" cy="16" r="3.5" fill={dotColor} />
+    </svg>
+  );
+}
