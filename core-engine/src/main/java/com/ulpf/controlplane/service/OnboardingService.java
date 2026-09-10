@@ -54,6 +54,7 @@ public class OnboardingService {
     private final MappingLearningService mappingLearningService;
     private final LogFormatDetector logFormatDetector;
     private final MappingEngineOrchestrator mappingEngineOrchestrator;
+    private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public record AdminStats(int pendingReviewCount, int activeVendorsCount) {}
@@ -92,7 +93,7 @@ public class OnboardingService {
             MappingProposalService mappingProposalService,
             MappingLearningService mappingLearningService) {
         this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository,
-                mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null);
+                mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null, null);
     }
 
     @Autowired
@@ -106,7 +107,8 @@ public class OnboardingService {
             MappingProposalService mappingProposalService,
             MappingLearningService mappingLearningService,
             LogFormatDetector logFormatDetector,
-            @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator) {
+            @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator,
+            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -117,6 +119,7 @@ public class OnboardingService {
         this.mappingLearningService = mappingLearningService;
         this.logFormatDetector = logFormatDetector;
         this.mappingEngineOrchestrator = mappingEngineOrchestrator;
+        this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
     }
 
     public record OnboardingSubmissionResult(
@@ -359,7 +362,14 @@ public class OnboardingService {
     private void activateCandidateMappingForSource(String sourceId) {
         Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {
-            mappingRepository.activateVersion(candidateOpt.get().mappingId(), sourceId);
+            MappingVersionRecord candidate = candidateOpt.get();
+            mappingRepository.activateVersion(candidate.mappingId(), sourceId);
+
+            if (dynamicSchemaProvisioningService != null) {
+                Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
+                String sourceName = srcOpt.map(SourceRecord::sourceName).orElse("stream_" + sourceId);
+                dynamicSchemaProvisioningService.provisionSchemaForSource(sourceName, candidate.mappingJson());
+            }
         }
     }
 
