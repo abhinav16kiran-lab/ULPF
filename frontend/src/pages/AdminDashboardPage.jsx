@@ -59,10 +59,6 @@ function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState("inspector");
   const [inspectorTab, setInspectorTab] = useState("current"); // "current" | "diff"
 
-  // Sandbox demo toggles
-  const [sandboxSkeleton, setSandboxSkeleton] = useState(false);
-  const [sandboxEmpty, setSandboxEmpty] = useState(false);
-
   // Candidate mapping editing state
   const [isEditingMapping, setIsEditingMapping] = useState(false);
   const [editingRows, setEditingRows] = useState([]);
@@ -281,26 +277,6 @@ function AdminDashboardPage() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            {/* SANDBOX CONTROLS */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.75rem", color: "#64748b" }}>
-              <button
-                type="button"
-                onClick={() => setSandboxSkeleton(!sandboxSkeleton)}
-                className="admin-pill-tag"
-                style={{ cursor: "pointer", backgroundColor: sandboxSkeleton ? "#ccfbf1" : "#f1f5f9" }}
-              >
-                Skeleton View
-              </button>
-              <button
-                type="button"
-                onClick={() => setSandboxEmpty(!sandboxEmpty)}
-                className="admin-pill-tag"
-                style={{ cursor: "pointer", backgroundColor: sandboxEmpty ? "#ccfbf1" : "#f1f5f9" }}
-              >
-                Empty State
-              </button>
-            </div>
-
             <Link
               to="/integrity"
               style={{
@@ -372,28 +348,8 @@ function AdminDashboardPage() {
           </button>
         </div>
 
-        {/* SKELETON STATE SIMULATION */}
-        {sandboxSkeleton && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", opacity: 0.6 }}>
-            <div style={{ height: "120px", backgroundColor: "#e2e8f0", borderRadius: "20px" }}></div>
-            <div style={{ height: "300px", backgroundColor: "#e2e8f0", borderRadius: "20px" }}></div>
-          </div>
-        )}
-
-        {/* EMPTY STATE SIMULATION */}
-        {sandboxEmpty && (
-          <div className="admin-inspector-card" style={{ textAlign: "center", padding: "60px 20px" }}>
-            <EmptyState
-              title="All caught up!"
-              description="No pending requests in the review queue. All incoming vendor streams are mapped and active."
-              transparent={true}
-            />
-          </div>
-        )}
-
         {/* MAIN REVIEW WORKSPACE */}
-        {!sandboxSkeleton && !sandboxEmpty && (
-          loading ? (
+        {loading ? (
             <div style={{ padding: "60px 0", textAlign: "center", color: "#64748b" }}>
               Loading review sandbox…
             </div>
@@ -948,7 +904,7 @@ function AdminDashboardPage() {
               })()}
             </div>
           )
-        )}
+        }
 
         {/* REJECTION REASON OVERLAY MODAL */}
         {showRejectModal && (
