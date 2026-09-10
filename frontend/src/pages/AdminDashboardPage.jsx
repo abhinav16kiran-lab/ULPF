@@ -471,6 +471,25 @@ function AdminDashboardPage() {
                 {/* TAB 1: CURRENT MAPPING TABLE */}
                 {inspectorTab === "current" && (
                   <div className="admin-candidate-section">
+                    {/* TARGET CLICKHOUSE SCHEMA BANNER */}
+                    <div style={{ backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", padding: "12px 16px", borderRadius: "12px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ fontSize: "1.1rem" }}>⚡</span>
+                        <div>
+                          <div style={{ fontSize: "0.8125rem", fontWeight: "700", color: "#166534" }}>
+                            ClickHouse Ingestion Target Schema
+                          </div>
+                          <div style={{ fontSize: "0.75rem", color: "#15803d" }}>
+                            Target Table: <code style={{ backgroundColor: "#dcfce7", padding: "2px 6px", borderRadius: "4px", fontWeight: "700", color: "#14532d" }}>ulpf_events.canonical_events</code>
+                            <span style={{ marginLeft: "8px", color: "#166534" }}>(Re-using compatible ECS schema. Zero runtime ALTER TABLE required.)</span>
+                          </div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: "0.6875rem", backgroundColor: "#166534", color: "white", padding: "3px 10px", borderRadius: "9999px", fontWeight: "600" }}>
+                        Schema Re-used
+                      </span>
+                    </div>
+
                     <div className="admin-candidate-header">
                       <div className="admin-candidate-title-group">
                         <span style={{ color: "#0d9488" }}>✨</span>
@@ -530,7 +549,14 @@ function AdminDashboardPage() {
                                 style={{ width: "95%", padding: "4px 8px", borderRadius: "6px", border: "1.5px solid #0d9488", fontSize: "0.8rem", fontFamily: "var(--font-mono, monospace)" }}
                               />
                             ) : (
-                              <span className="admin-mapped-field">{row.mapped}</span>
+                              <span className="admin-mapped-field" style={{ color: row.mapped === "unmapped" ? "#94a3b8" : "inherit" }}>
+                                {row.mapped}
+                                {row.mapped === "unmapped" && (
+                                  <span style={{ fontSize: "0.6875rem", marginLeft: "8px", padding: "2px 8px", borderRadius: "4px", backgroundColor: "#f1f5f9", color: "#475569", fontWeight: "500" }}>
+                                    📦 → raw_unmapped column
+                                  </span>
+                                )}
+                              </span>
                             )}
                           </div>
                           <div className="admin-ai-layer-cell">
@@ -541,6 +567,16 @@ function AdminDashboardPage() {
                           </div>
                         </div>
                       ))}
+                    </div>
+
+                    {/* RAW UNMAPPED FIELD EXPLANATORY BOX */}
+                    <div style={{ marginTop: "16px", padding: "14px 18px", borderRadius: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.8rem", color: "#475569" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "600", color: "#0f172a", marginBottom: "4px" }}>
+                        <span>📦 Unmapped Attributes & Zero Data Loss Guarantee</span>
+                      </div>
+                      <p style={{ margin: 0, lineHeight: "1.5" }}>
+                        Any fields marked as <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px", color: "#0d9488" }}>unmapped</code> or extra payload attributes are captured as JSON key-value pairs (e.g. <code style={{ color: "#0f172a" }}>{"{\"user.attempt_count\": 5}"}</code>) inside the <code style={{ fontWeight: "600", color: "#0f172a" }}>raw_unmapped</code> column upon ingestion.
+                      </p>
                     </div>
                   </div>
                 )}
