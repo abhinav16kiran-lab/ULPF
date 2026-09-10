@@ -166,6 +166,54 @@ public class DynamicSchemaProvisioningService {
         return fields;
     }
 
+    @jakarta.annotation.PostConstruct
+    public void initDefaultClickHouseDatabasesAndTables() {
+        if (clickhouseJdbcTemplate == null) return;
+        try {
+            log.info("Verifying baseline ClickHouse databases and tables (ulpf_raw & ulpf_events)...");
+            clickhouseJdbcTemplate.execute("CREATE DATABASE IF NOT EXISTS ulpf_raw");
+            clickhouseJdbcTemplate.execute("CREATE DATABASE IF NOT EXISTS ulpf_events");
+
+            clickhouseJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS ulpf_raw.raw_events
+                (
+                    event_id         String,
+                    lineage_id       String,
+                    vendor_id        String,
+                    source_id        String,
+                    mapping_version  Nullable(UInt32),
+                    received_at      DateTime64(3) DEFAULT now64(3),
+                    raw_payload      String CODEC(ZSTD(1))
+                )
+                ENGINE = MergeTree
+                PARTITION BY toYYYYMM(received_at)
+                ORDER BY (vendor_id, source_id, received_at, event_id)
+            """);
+
+            clickhouseJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS ulpf_events.canonical_events
+                (
+                    event_id          String,
+                    lineage_id        String,
+                    vendor_id         String,
+                    source_id         String,
+                    mapping_version   Nullable(UInt32),
+                    timestamp         DateTime64(3) DEFAULT now64(3),
+                    numeric_value     Nullable(Float64),
+                    canonical_payload String CODEC(ZSTD(1)),
+                    raw_unmapped      String CODEC(ZSTD(1))
+                )
+                ENGINE = MergeTree
+                PARTITION BY toYYYYMM(timestamp)
+                ORDER BY (vendor_id, source_id, timestamp, event_id)
+            """);
+
+            log.info("Baseline ClickHouse schemas (ulpf_raw.raw_events & ulpf_events.canonical_events) verified successfully.");
+        } catch (Exception e) {
+            log.warn("ClickHouse baseline initialization warning: {}", e.getMessage());
+        }
+    }
+
     public record ColumnMeta(String name, String type) {}
     public record TableMeta(String name, long totalRows, List<ColumnMeta> columns) {}
     public record DatabaseMeta(String databaseName, List<TableMeta> tables) {}
@@ -175,21 +223,25 @@ public class DynamicSchemaProvisioningService {
             return List.of();
         }
 
+        // Guarantee baseline databases & tables exist before querying catalog
+        initDefaultClickHouseDatabasesAndTables();
+
         List<DatabaseMeta> result = new ArrayList<>();
         List<String> dbs = List.of("ulpf_events", "ulpf_raw");
 
         for (String db : dbs) {
             try {
+                // Query system.tables catalog for 100% reliable table retrieval
                 List<String> tables = clickhouseJdbcTemplate.query(
-                        "SHOW TABLES FROM " + db,
-                        (rs, rowNum) -> rs.getString(1)
+                        "SELECT name FROM system.tables WHERE database = '" + db + "' AND name NOT LIKE '.inner%' ORDER BY name ASC",
+                        (rs, rowNum) -> rs.getString("name")
                 );
 
                 List<TableMeta> tableMetas = new ArrayList<>();
                 for (String table : tables) {
                     try {
                         List<ColumnMeta> cols = clickhouseJdbcTemplate.query(
-                                "DESCRIBE TABLE " + db + "." + table,
+                                "SELECT name, type FROM system.columns WHERE database = '" + db + "' AND table = '" + table + "' ORDER BY position ASC",
                                 (rs, rowNum) -> new ColumnMeta(rs.getString("name"), rs.getString("type"))
                         );
                         Long rowCount = 0L;
@@ -205,6 +257,7 @@ public class DynamicSchemaProvisioningService {
                 result.add(new DatabaseMeta(db, tableMetas));
             } catch (Exception e) {
                 log.warn("Could not list tables from database {}: {}", db, e.getMessage());
+                result.add(new DatabaseMeta(db, List.of()));
             }
         }
         return result;

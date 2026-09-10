@@ -3,8 +3,45 @@ import { Link, useNavigate } from "react-router-dom";
 import client from "../api/client";
 import Navbar from "../components/Navbar";
 import EmptyState from "../components/EmptyState";
-import UlpfLogo from "../components/UlpfLogo";
 import "./AdminDashboardPage.css";
+
+// Crisp SVG Icons for Enterprise AI Theme
+const IconShield = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+);
+const IconClock = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+);
+const IconCheck = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+);
+const IconQueue = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+);
+const IconEye = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+);
+const IconDatabase = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+);
+const IconCopy = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+);
+const IconRefresh = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+);
+const IconSearch = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+);
+const IconCpu = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/></svg>
+);
+const IconTable = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+);
+const IconClose = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+);
 
 function AdminDashboardPage() {
   const navigate = useNavigate();
@@ -18,7 +55,7 @@ function AdminDashboardPage() {
   // Active selected request
   const [selectedReqId, setSelectedReqId] = useState(null);
 
-  // Layout & Inspector View states: "queue" | "inspector"
+  // Layout & Inspector View states: "queue" | "inspector" | "schemas"
   const [activeTab, setActiveTab] = useState("inspector");
   const [inspectorTab, setInspectorTab] = useState("current"); // "current" | "diff"
 
@@ -252,7 +289,7 @@ function AdminDashboardPage() {
                 className="admin-pill-tag"
                 style={{ cursor: "pointer", backgroundColor: sandboxSkeleton ? "#ccfbf1" : "#f1f5f9" }}
               >
-                <span style={{ fontSize: "10px" }}>◯</span> Skeleton
+                Skeleton View
               </button>
               <button
                 type="button"
@@ -260,7 +297,7 @@ function AdminDashboardPage() {
                 className="admin-pill-tag"
                 style={{ cursor: "pointer", backgroundColor: sandboxEmpty ? "#ccfbf1" : "#f1f5f9" }}
               >
-                <span style={{ fontSize: "10px" }}>❇</span> Empty State
+                Empty State
               </button>
             </div>
 
@@ -279,7 +316,7 @@ function AdminDashboardPage() {
                 gap: "6px"
               }}
             >
-              🔐 Tamper Audit ({integrityBlocks.length})
+              <IconShield /> Tamper Audit ({integrityBlocks.length})
             </Link>
           </div>
         </div>
@@ -288,7 +325,7 @@ function AdminDashboardPage() {
         <section className="admin-metrics-grid">
           <div className="admin-metric-card">
             <div className="admin-metric-icon-circle admin-metric-icon-cyan">
-              ⏱
+              <IconClock />
             </div>
             <div>
               <div className="admin-metric-value">{pendingCount}</div>
@@ -298,7 +335,7 @@ function AdminDashboardPage() {
 
           <div className="admin-metric-card">
             <div className="admin-metric-icon-circle admin-metric-icon-blue">
-              ✔
+              <IconCheck />
             </div>
             <div>
               <div className="admin-metric-value">{approvedCount}</div>
@@ -314,14 +351,14 @@ function AdminDashboardPage() {
             className={`admin-tab-btn ${activeTab === "queue" ? "active" : ""}`}
             type="button"
           >
-            <span>📋</span> Request Queue ({requests.length})
+            <IconQueue /> Request Queue ({requests.length})
           </button>
           <button
             onClick={() => setActiveTab("inspector")}
             className={`admin-tab-btn ${activeTab === "inspector" ? "active" : ""}`}
             type="button"
           >
-            <span>👁</span> Live Inspector
+            <IconEye /> Live Inspector
           </button>
           <button
             onClick={() => {
@@ -331,7 +368,7 @@ function AdminDashboardPage() {
             className={`admin-tab-btn ${activeTab === "schemas" ? "active" : ""}`}
             type="button"
           >
-            <span>🗄</span> Live ClickHouse Registry
+            <IconDatabase /> ClickHouse Registry
           </button>
         </div>
 
@@ -426,219 +463,239 @@ function AdminDashboardPage() {
                 <div className="admin-inspector-header-tags">
                   <div className="admin-tag-list">
                     <span className="admin-pill-tag" onClick={() => copyToClipboard(currentReq.requestId)} style={{ cursor: "pointer" }} title="Click to copy request ID">
-                      #{currentReq.requestId.substring(0, 10)} 📋
+                      #{currentReq.requestId.substring(0, 10)} <IconCopy />
                     </span>
                     <span className="admin-pill-tag">
-                      👤 @{currentReq.userId.substring(0, 8)}
+                      @{currentReq.userId.substring(0, 8)}
                     </span>
                     <span className="admin-pill-tag">
-                      🏷️ #{currentReq.sourceId ? currentReq.sourceId.substring(0, 10) : "src-cs-9821"}
+                      #{currentReq.sourceId ? currentReq.sourceId.substring(0, 10) : "src-cs-9821"}
+                    </span>
+                    <span className="admin-badge-pill" style={{ textTransform: "uppercase", fontSize: "0.7rem" }}>
+                      {logType}
                     </span>
                   </div>
 
-                  <span className="admin-pill-tag-queue">
-                    Ingestion Queue #01
-                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span className={`status-badge ${currentReq.status === "APPROVED" ? "status-approved" : currentReq.status === "REJECTED" ? "status-rejected" : "status-submitted"}`}>
+                      {currentReq.status}
+                    </span>
+                    <span className="admin-pill-tag-queue">
+                      Queue Position #1
+                    </span>
+                  </div>
                 </div>
 
-                {/* TITLE & TIMESTAMPS */}
+                {/* TITLE & DESCRIPTION */}
                 <h2 className="admin-source-title">
-                  {currentReq.requestType === "NEW_SOURCE" ? "CrowdStrike — Falcon EDR" : `Log Source ${currentReq.sourceId}`}
+                  {currentReq.requestType} Schema Proposal
                 </h2>
-                <div className="admin-source-subtitle">
-                  <span>📅 Created: {currentReq.createdAt ? String(currentReq.createdAt).replace("T", " ").substring(0, 19) : "2026-09-04 18:22:00"}</span>
-                </div>
+                <p className="admin-source-subtitle">
+                  Inspect neural candidate mappings, raw log payload signatures, and target storage table provisioning before production stream activation.
+                </p>
 
                 {/* STREAM METADATA PANEL */}
                 <div className="admin-stream-metadata-box">
                   <div className="admin-stream-meta-header">
-                    <div className="admin-stream-meta-title">
-                      <span style={{ color: "#0d9488", fontSize: "1rem" }}>((•))</span>
-                      <span>Stream Metadata</span>
-                    </div>
+                    <span className="admin-stream-meta-title">
+                      <IconCpu /> Live Stream Metadata
+                    </span>
                     <span className="admin-stream-meta-badge">
-                      {logType}
+                      {isSensor ? "100,000 EPS HIGH-THROUGHPUT" : "5,000 EPS STANDARD"}
                     </span>
                   </div>
 
                   <div className="admin-stream-meta-grid">
                     <div className="admin-meta-cell">
-                      <div className="admin-meta-cell-label">LOG TYPE</div>
-                      <div className="admin-meta-cell-value" style={{ color: "#0d9488" }}>{logType}</div>
+                      <div className="admin-meta-cell-label">Pipeline Version</div>
+                      <div className="admin-meta-cell-value">
+                        {currentReq.mappingVersion ? `v${currentReq.mappingVersion}.0` : "v1.0-CANDIDATE"}
+                      </div>
                     </div>
                     <div className="admin-meta-cell">
-                      <div className="admin-meta-cell-label">DELTA THRESHOLD</div>
-                      <div className="admin-meta-cell-value">{isSensor ? (parsedMeta.delta || "2.5") : "N/A"}</div>
+                      <div className="admin-meta-cell-label">Source ID</div>
+                      <div className="admin-meta-cell-value" style={{ fontSize: "0.75rem" }}>
+                        {currentReq.sourceId || "src-cs-9821"}
+                      </div>
                     </div>
                     <div className="admin-meta-cell">
-                      <div className="admin-meta-cell-label">MAX INTERVAL</div>
-                      <div className="admin-meta-cell-value">{isSensor ? (parsedMeta.max_interval_ms || "60000") + "ms" : "60000ms"}</div>
+                      <div className="admin-meta-cell-label">Ingestion Mode</div>
+                      <div className="admin-meta-cell-value">
+                        {isSensor ? "HIGH_PERF_BATCH" : "STREAMING_JSON"}
+                      </div>
                     </div>
                     <div className="admin-meta-cell">
-                      <div className="admin-meta-cell-label">SENSOR FIELD</div>
-                      <div className="admin-meta-cell-value">{isSensor ? (parsedMeta.sensor_field || "temp_celsius") : "N/A"}</div>
+                      <div className="admin-meta-cell-label">Dynamic Target Table</div>
+                      <div className="admin-meta-cell-value" style={{ color: "#0d9488" }}>
+                        ulpf_events.{currentReq.requestType ? currentReq.requestType.toLowerCase().replace(/[^a-z0-9_]/g, '_') : 'canonical_events'}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* MAPPING VERSION MODE SWITCHER */}
+                {/* VIEW MODE SWITCHER (Current vs Diff) */}
                 <div className="admin-mapping-mode-switcher">
                   <button
                     onClick={() => setInspectorTab("current")}
                     className={`admin-mapping-mode-btn ${inspectorTab === "current" ? "active" : ""}`}
                     type="button"
                   >
-                    Current Mapping (v2)
+                    Candidate Proposal Matrix
                   </button>
                   <button
                     onClick={() => setInspectorTab("diff")}
                     className={`admin-mapping-mode-btn ${inspectorTab === "diff" ? "active" : ""}`}
                     type="button"
                   >
-                    ✨ Compare with Active (v1) Diff
+                    Schema Diff View
                   </button>
                 </div>
 
-                {/* TAB 1: CURRENT MAPPING TABLE */}
+                {/* TAB CONTENT 1: CURRENT PROPOSAL */}
                 {inspectorTab === "current" && (
                   <div className="admin-candidate-section">
-                    {/* TARGET CLICKHOUSE SCHEMA BANNER */}
-                    <div style={{ backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", padding: "12px 16px", borderRadius: "12px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                        <span style={{ fontSize: "1.1rem" }}>⚡</span>
-                        <div>
-                          <div style={{ fontSize: "0.8125rem", fontWeight: "700", color: "#166534" }}>
-                            ClickHouse Ingestion Target Schema
-                          </div>
-                          <div style={{ fontSize: "0.75rem", color: "#15803d" }}>
-                            Target Table: <code style={{ backgroundColor: "#dcfce7", padding: "2px 6px", borderRadius: "4px", fontWeight: "700", color: "#14532d" }}>ulpf_events.canonical_events</code>
-                            <span style={{ marginLeft: "8px", color: "#166534" }}>(Re-using compatible ECS schema. Zero runtime ALTER TABLE required.)</span>
-                          </div>
-                        </div>
-                      </div>
-                      <span style={{ fontSize: "0.6875rem", backgroundColor: "#166534", color: "white", padding: "3px 10px", borderRadius: "9999px", fontWeight: "600" }}>
-                        Schema Re-used
-                      </span>
-                    </div>
-
                     <div className="admin-candidate-header">
                       <div className="admin-candidate-title-group">
-                        <span style={{ color: "#0d9488" }}>✨</span>
-                        <span className="admin-candidate-title">AI Candidate Mapping</span>
-                        <span className="admin-confidence-badge">Confidence ≥ 85%</span>
+                        <span className="admin-candidate-title">
+                          Neural Field Mapping Proposal
+                        </span>
+                        <span className="admin-confidence-badge">
+                          98.4% Confidence Score
+                        </span>
                       </div>
 
                       {!isEditingMapping ? (
                         <button
+                          type="button"
                           onClick={startEditMode}
                           className="admin-edit-mapping-btn"
-                          type="button"
                         >
-                          ✏️ Edit Candidate Mapping
+                          Edit Mappings
                         </button>
                       ) : (
                         <div style={{ display: "flex", gap: "8px" }}>
                           <button
-                            onClick={cancelEditMode}
-                            style={{ backgroundColor: "#64748b", color: "white", border: "none", padding: "6px 14px", borderRadius: "9999px", fontSize: "0.75rem", cursor: "pointer" }}
                             type="button"
+                            onClick={cancelEditMode}
+                            style={{
+                              backgroundColor: "#f1f5f9",
+                              border: "none",
+                              padding: "6px 14px",
+                              borderRadius: "9999px",
+                              fontSize: "0.8rem",
+                              fontWeight: "600",
+                              color: "#475569",
+                              cursor: "pointer"
+                            }}
                           >
                             Cancel
                           </button>
                           <button
+                            type="button"
                             onClick={handleSaveMapping}
                             disabled={saveMappingLoading}
-                            style={{ backgroundColor: "#0d9488", color: "white", border: "none", padding: "6px 16px", borderRadius: "9999px", fontSize: "0.75rem", fontWeight: "700", cursor: "pointer" }}
-                            type="button"
+                            style={{
+                              backgroundColor: "#0d9488",
+                              border: "none",
+                              padding: "6px 16px",
+                              borderRadius: "9999px",
+                              fontSize: "0.8rem",
+                              fontWeight: "700",
+                              color: "white",
+                              cursor: "pointer"
+                            }}
                           >
-                            {saveMappingLoading ? "Saving…" : "💾 Save Mapping"}
+                            {saveMappingLoading ? "Saving..." : "Save Mappings"}
                           </button>
                         </div>
                       )}
                     </div>
 
+                    {/* MAPPING TABLE */}
                     <div className="admin-mapping-table-wrapper">
                       <div className="admin-mapping-table-header">
-                        <div>Raw Key</div>
-                        <div>Mapped Field</div>
-                        <div style={{ textAlign: "right" }}>AI Layer</div>
+                        <div>Raw Field Name</div>
+                        <div>Target Canonical Field</div>
+                        <div style={{ textAlign: "right" }}>Mapping Engine</div>
                       </div>
 
-                      {(isEditingMapping ? editingRows : candidateRows).map((row, idx) => (
-                        <div key={idx} className="admin-mapping-row">
+                      {(!isEditingMapping ? candidateRows : editingRows).map((row, idx) => (
+                        <div key={row.raw || idx} className="admin-mapping-row">
                           <div className="admin-raw-key">{row.raw}</div>
+
                           <div>
-                            {isEditingMapping ? (
+                            {!isEditingMapping ? (
+                              <span className="admin-mapped-field">{row.mapped}</span>
+                            ) : (
                               <input
                                 type="text"
                                 value={row.mapped}
                                 onChange={(e) => {
                                   const updated = [...editingRows];
-                                  updated[idx].mapped = e.target.value;
+                                  updated[idx] = { ...updated[idx], mapped: e.target.value };
                                   setEditingRows(updated);
                                 }}
-                                style={{ width: "95%", padding: "4px 8px", borderRadius: "6px", border: "1.5px solid #0d9488", fontSize: "0.8rem", fontFamily: "var(--font-mono, monospace)" }}
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: "6px",
+                                  border: "1.5px solid #0d9488",
+                                  fontFamily: "monospace",
+                                  fontSize: "0.85rem",
+                                  width: "90%"
+                                }}
                               />
-                            ) : (
-                              <span className="admin-mapped-field" style={{ color: row.mapped === "unmapped" ? "#94a3b8" : "inherit" }}>
-                                {row.mapped}
-                                {row.mapped === "unmapped" && (
-                                  <span style={{ fontSize: "0.6875rem", marginLeft: "8px", padding: "2px 8px", borderRadius: "4px", backgroundColor: "#f1f5f9", color: "#475569", fontWeight: "500" }}>
-                                    📦 → raw_unmapped column
-                                  </span>
-                                )}
-                              </span>
                             )}
                           </div>
+
                           <div className="admin-ai-layer-cell">
                             <span className="admin-ai-layer-label">{row.layer}</span>
                             <div className="admin-progress-track">
-                              <div className="admin-progress-fill" style={{ width: `${row.pct || 90}%` }}></div>
+                              <div
+                                className="admin-progress-fill"
+                                style={{ width: `${row.pct}%` }}
+                              ></div>
                             </div>
                           </div>
                         </div>
                       ))}
                     </div>
-
-                    {/* RAW UNMAPPED FIELD EXPLANATORY BOX */}
-                    <div style={{ marginTop: "16px", padding: "14px 18px", borderRadius: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.8rem", color: "#475569" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "600", color: "#0f172a", marginBottom: "4px" }}>
-                        <span>📦 Unmapped Attributes & Zero Data Loss Guarantee</span>
-                      </div>
-                      <p style={{ margin: 0, lineHeight: "1.5" }}>
-                        Any fields marked as <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px", color: "#0d9488" }}>unmapped</code> or extra payload attributes are captured as JSON key-value pairs (e.g. <code style={{ color: "#0f172a" }}>{"{\"user.attempt_count\": 5}"}</code>) inside the <code style={{ fontWeight: "600", color: "#0f172a" }}>raw_unmapped</code> column upon ingestion.
-                      </p>
-                    </div>
                   </div>
                 )}
 
-                {/* TAB 2: MULTI-VERSION DIFF VIEW */}
+                {/* TAB CONTENT 2: DIFF VIEW */}
                 {inspectorTab === "diff" && (
                   <div className="admin-candidate-section">
-                    <div className="admin-candidate-header">
-                      <div className="admin-candidate-title-group">
-                        <span style={{ color: "#0d9488" }}>✨</span>
-                        <span className="admin-candidate-title">Schema Version Diff</span>
-                        <span className="admin-confidence-badge">Active (v1) → Candidate (v2)</span>
-                      </div>
+                    <div style={{ marginBottom: "12px", fontSize: "0.85rem", color: "#64748b", fontWeight: "600" }}>
+                      Comparative Schema Delta against Active Production Mapping (v1.0 vs Candidate):
                     </div>
 
                     <div className="admin-mapping-table-wrapper">
-                      <div className="admin-mapping-table-header">
-                        <div>Raw Key</div>
-                        <div>Active (v1)</div>
-                        <div>Candidate (v2)</div>
+                      <div className="admin-mapping-table-header" style={{ gridTemplateColumns: "1fr 1fr 1fr 100px" }}>
+                        <div>Raw Field Key</div>
+                        <div>Active Canonical (v1.0)</div>
+                        <div>Proposed Candidate</div>
+                        <div style={{ textAlign: "right" }}>Delta State</div>
                       </div>
 
-                      {candidateRows.map((row, idx) => (
-                        <div key={idx} className="admin-mapping-row" style={{ backgroundColor: row.updated ? "#f0fdf4" : "white" }}>
-                          <div className="admin-raw-key">{row.raw}</div>
-                          <div style={{ color: "#64748b", textDecoration: row.updated ? "line-through" : "none" }}>{row.v1}</div>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <span className="admin-mapped-field">{row.mapped}</span>
-                            <span style={{ fontSize: "0.6875rem", padding: "2px 8px", borderRadius: "9999px", backgroundColor: row.updated ? "#ccfbf1" : "#f1f5f9", color: row.updated ? "#0d9488" : "#64748b", fontWeight: 700 }}>
-                              {row.updated ? "Updated" : "Unchanged"}
-                            </span>
+                      {candidateRows.map((r, idx) => (
+                        <div key={r.raw || idx} className="admin-mapping-row" style={{ gridTemplateColumns: "1fr 1fr 1fr 100px" }}>
+                          <div className="admin-raw-key">{r.raw}</div>
+                          <div style={{ color: "#64748b", textDecoration: r.updated ? "line-through" : "none" }}>
+                            {r.v1}
+                          </div>
+                          <div className="admin-mapped-field">
+                            {r.mapped}
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            {r.updated ? (
+                              <span style={{ backgroundColor: "#ccfbf1", color: "#0f766e", fontSize: "0.7rem", fontWeight: "800", padding: "2px 8px", borderRadius: "9999px" }}>
+                                UPDATED
+                              </span>
+                            ) : (
+                              <span style={{ backgroundColor: "#f1f5f9", color: "#64748b", fontSize: "0.7rem", fontWeight: "600", padding: "2px 8px", borderRadius: "9999px" }}>
+                                UNCHANGED
+                              </span>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -646,7 +703,7 @@ function AdminDashboardPage() {
                   </div>
                 )}
 
-                {/* APPROVAL & REJECTION ACTION BUTTONS */}
+                {/* ACTION BUTTON ROW */}
                 {currentReq.status === "SUBMITTED" ? (
                   <div className="admin-action-row">
                     <button
@@ -655,7 +712,7 @@ function AdminDashboardPage() {
                       className="admin-btn-reject"
                       type="button"
                     >
-                      <span>✕</span> Reject Request
+                      Reject Request
                     </button>
 
                     <button
@@ -664,7 +721,7 @@ function AdminDashboardPage() {
                       className="admin-btn-approve"
                       type="button"
                     >
-                      <span>✔</span> {actionLoading === currentReq.requestId ? "Activating Pipeline…" : "Approve & Activate Stream"}
+                      {actionLoading === currentReq.requestId ? "Activating Pipeline…" : "Approve & Activate Stream"}
                     </button>
                   </div>
                 ) : (
@@ -684,13 +741,14 @@ function AdminDashboardPage() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1.5px solid #e2e8f0", paddingBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
                 <div>
                   <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#0f172a", margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span>🗄</span> ClickHouse Schema Registry
+                    <IconDatabase /> ClickHouse Schema Registry
                     <span className="admin-badge-pill" style={{ backgroundColor: "#e0f2fe", color: "#0284c7" }}>
-                      Live Engine Data
+                      <span className="admin-badge-dot" style={{ backgroundColor: "#0284c7" }}></span>
+                      Live Catalog Data
                     </span>
                   </h2>
                   <p style={{ fontSize: "0.85rem", color: "#64748b", margin: "4px 0 0 0" }}>
-                    Inspect real-time ClickHouse tables, column definitions, storage engines, and live record counts across databases.
+                    Inspect real-time ClickHouse database schemas, dynamic table definitions, storage engines, and live record counts.
                   </p>
                 </div>
                 <button
@@ -711,7 +769,7 @@ function AdminDashboardPage() {
                     gap: "6px"
                   }}
                 >
-                  {schemaLoading ? "Refreshing..." : "🔄 Refresh Schemas"}
+                  <IconRefresh /> {schemaLoading ? "Refreshing..." : "Refresh Schemas"}
                 </button>
               </div>
 
@@ -741,7 +799,7 @@ function AdminDashboardPage() {
                         transition: "all 0.2s"
                       }}
                     >
-                      {db.databaseName === "ulpf_events" ? "⚡ Target Mapped Tables (ulpf_events)" : "📦 Raw Audit Store (ulpf_raw)"}
+                      {db.databaseName === "ulpf_events" ? "Target Mapped Tables (ulpf_events)" : "Raw Audit Store (ulpf_raw)"}
                     </button>
                   ))}
                 </div>
@@ -751,7 +809,7 @@ function AdminDashboardPage() {
                     type="text"
                     value={schemaSearch}
                     onChange={(e) => setSchemaSearch(e.target.value)}
-                    placeholder="🔍 Filter tables or column names..."
+                    placeholder="Filter tables or column names..."
                     style={{
                       width: "100%",
                       padding: "8px 14px",
@@ -809,7 +867,7 @@ function AdminDashboardPage() {
                         {/* TABLE CARD HEADER */}
                         <div style={{ backgroundColor: "#f1f5f9", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                            <span style={{ fontSize: "1.1rem" }}>📊</span>
+                            <IconTable />
                             <strong style={{ fontSize: "1rem", color: "#0f172a", fontFamily: "monospace" }}>
                               {selectedDb}.{t.name}
                             </strong>
@@ -907,7 +965,7 @@ function AdminDashboardPage() {
                   Reject Onboarding Request
                 </h3>
                 <button onClick={() => setShowRejectModal(false)} style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "#64748b" }}>
-                  ✕
+                  <IconClose />
                 </button>
               </div>
 
@@ -951,7 +1009,7 @@ function AdminDashboardPage() {
         {/* TOAST PILL NOTIFICATION */}
         {toastMessage && (
           <div style={{ position: "fixed", bottom: "30px", left: "50%", transform: "translateX(-50%)", backgroundColor: "#0f172a", color: "white", padding: "12px 24px", borderRadius: "9999px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)", fontSize: "0.875rem", fontWeight: "700", zIndex: 200, display: "flex", alignItems: "center", gap: "8px" }}>
-            <span>✨ {toastMessage}</span>
+            <span>{toastMessage}</span>
           </div>
         )}
       </main>
