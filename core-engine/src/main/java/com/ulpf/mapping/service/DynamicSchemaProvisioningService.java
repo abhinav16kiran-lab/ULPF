@@ -128,7 +128,7 @@ public class DynamicSchemaProvisioningService {
 
         } catch (Exception e) {
             log.error("Failed to dynamically provision schema for source '{}': {}", sourceName, e.getMessage(), e);
-            return "canonical_events";
+            throw new IllegalStateException("Failed to provision ClickHouse database schema for source '" + sourceName + "': " + e.getMessage(), e);
         }
     }
 

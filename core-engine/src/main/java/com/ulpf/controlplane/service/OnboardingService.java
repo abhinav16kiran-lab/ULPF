@@ -319,17 +319,25 @@ public class OnboardingService {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
 
-        String finalStatus = "APPROVED".equalsIgnoreCase(decision) ? "APPROVED" : "REJECTED";
-        onboardingRepository.updateRequestStatus(requestId, finalStatus);
+        if (!"APPROVED".equalsIgnoreCase(decision) && !"REJECTED".equalsIgnoreCase(decision)) {
+            throw new IllegalArgumentException("Decision must be APPROVED or REJECTED");
+        }
 
-        if (req.sourceId() != null) {
-            if ("APPROVED".equals(finalStatus)) {
+        boolean isApproved = "APPROVED".equalsIgnoreCase(decision);
+
+        if (isApproved) {
+            if (req.sourceId() != null) {
+                // 1. Provision ClickHouse database schema & activate candidate mapping FIRST
+                // If ClickHouse schema provisioning fails, an exception is thrown and approval halts cleanly here.
+                activateCandidateMappingForSource(req.sourceId());
+
+                // 2. Activate source, API key credentials, and upgrade user role ONLY after ClickHouse schema succeeds
                 sourceRepository.activateSource(req.sourceId());
                 credentialRepository.activateCredentialForSource(req.sourceId());
                 userRepository.updateUserRole(req.userId(), com.ulpf.controlplane.model.Role.VENDOR);
 
-                // Activate candidate mapping version
-                activateCandidateMappingForSource(req.sourceId());
+                // 3. Mark request as APPROVED only after all credentials, roles, and schemas are active
+                onboardingRepository.updateRequestStatus(requestId, "APPROVED");
 
                 onboardingRepository.saveNotification(
                         req.userId(),
@@ -337,8 +345,13 @@ public class OnboardingService {
                         "Your onboarding request (ID: " + requestId
                                 + ") for log source has been APPROVED! Your API key is now ACTIVE.");
             } else {
+                onboardingRepository.updateRequestStatus(requestId, "APPROVED");
+            }
+        } else {
+            // REJECTED flow
+            onboardingRepository.updateRequestStatus(requestId, "REJECTED");
+            if (req.sourceId() != null) {
                 sourceRepository.revokeSource(req.sourceId());
-                // Drop unapproved candidate mapping records immediately on rejection
                 mappingRepository.deleteCandidateVersions(req.sourceId());
 
                 String notifMsg = "Your onboarding request (ID: " + requestId + ") was REJECTED.";
@@ -363,13 +376,16 @@ public class OnboardingService {
         Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {
             MappingVersionRecord candidate = candidateOpt.get();
-            mappingRepository.activateVersion(candidate.mappingId(), sourceId);
 
+            // 1. Provision ClickHouse schema FIRST
             if (dynamicSchemaProvisioningService != null) {
                 Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
                 String sourceName = srcOpt.map(SourceRecord::sourceName).orElse("stream_" + sourceId);
                 dynamicSchemaProvisioningService.provisionSchemaForSource(sourceName, candidate.mappingJson());
             }
+
+            // 2. Activate mapping version record in SQLite ONLY after ClickHouse schema provisioning succeeds
+            mappingRepository.activateVersion(candidate.mappingId(), sourceId);
         }
     }
 
