@@ -166,6 +166,50 @@ public class DynamicSchemaProvisioningService {
         return fields;
     }
 
+    public record ColumnMeta(String name, String type) {}
+    public record TableMeta(String name, long totalRows, List<ColumnMeta> columns) {}
+    public record DatabaseMeta(String databaseName, List<TableMeta> tables) {}
+
+    public List<DatabaseMeta> getClickHouseSchemaMetadata() {
+        if (clickhouseJdbcTemplate == null) {
+            return List.of();
+        }
+
+        List<DatabaseMeta> result = new ArrayList<>();
+        List<String> dbs = List.of("ulpf_events", "ulpf_raw");
+
+        for (String db : dbs) {
+            try {
+                List<String> tables = clickhouseJdbcTemplate.query(
+                        "SHOW TABLES FROM " + db,
+                        (rs, rowNum) -> rs.getString(1)
+                );
+
+                List<TableMeta> tableMetas = new ArrayList<>();
+                for (String table : tables) {
+                    try {
+                        List<ColumnMeta> cols = clickhouseJdbcTemplate.query(
+                                "DESCRIBE TABLE " + db + "." + table,
+                                (rs, rowNum) -> new ColumnMeta(rs.getString("name"), rs.getString("type"))
+                        );
+                        Long rowCount = 0L;
+                        try {
+                            rowCount = clickhouseJdbcTemplate.queryForObject("SELECT count() FROM " + db + "." + table, Long.class);
+                        } catch (Exception ignored) {}
+
+                        tableMetas.add(new TableMeta(table, rowCount != null ? rowCount : 0L, cols));
+                    } catch (Exception e) {
+                        log.warn("Could not describe table {}.{}: {}", db, table, e.getMessage());
+                    }
+                }
+                result.add(new DatabaseMeta(db, tableMetas));
+            } catch (Exception e) {
+                log.warn("Could not list tables from database {}: {}", db, e.getMessage());
+            }
+        }
+        return result;
+    }
+
     private String normalizeColumnName(String canonicalField) {
         return canonicalField.replace('.', '_').replace('-', '_').toLowerCase();
     }

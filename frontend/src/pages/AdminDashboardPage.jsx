@@ -39,6 +39,26 @@ function AdminDashboardPage() {
   // Toast message state
   const [toastMessage, setToastMessage] = useState(null);
 
+  // ClickHouse Schema Registry state
+  const [clickhouseSchemas, setClickhouseSchemas] = useState([]);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaError, setSchemaError] = useState(null);
+  const [selectedDb, setSelectedDb] = useState("ulpf_events");
+  const [schemaSearch, setSchemaSearch] = useState("");
+
+  const fetchClickHouseSchemas = useCallback(async () => {
+    setSchemaLoading(true);
+    setSchemaError(null);
+    try {
+      const res = await client.get("/v1/admin/clickhouse/schemas");
+      setClickhouseSchemas(res.data || []);
+    } catch (err) {
+      setSchemaError("Failed to fetch ClickHouse schemas: " + (err.response?.data?.error || err.message));
+    } finally {
+      setSchemaLoading(false);
+    }
+  }, []);
+
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -76,7 +96,8 @@ function AdminDashboardPage() {
 
   useEffect(() => {
     fetchRequests();
-  }, [fetchRequests]);
+    fetchClickHouseSchemas();
+  }, [fetchRequests, fetchClickHouseSchemas]);
 
   // Selected request record
   const currentReq = requests.find((r) => r.requestId === selectedReqId) || requests[0] || null;
@@ -302,6 +323,16 @@ function AdminDashboardPage() {
           >
             <span>👁</span> Live Inspector
           </button>
+          <button
+            onClick={() => {
+              setActiveTab("schemas");
+              fetchClickHouseSchemas();
+            }}
+            className={`admin-tab-btn ${activeTab === "schemas" ? "active" : ""}`}
+            type="button"
+          >
+            <span>🗄</span> Live ClickHouse Registry
+          </button>
         </div>
 
         {/* SKELETON STATE SIMULATION */}
@@ -387,7 +418,7 @@ function AdminDashboardPage() {
                 );
               })}
             </div>
-          ) : (
+          ) : activeTab === "inspector" ? (
             /* LIVE INSPECTOR VIEW CARD */
             currentReq ? (
               <div className="admin-inspector-card">
@@ -647,6 +678,217 @@ function AdminDashboardPage() {
                 Select an onboarding request from the queue to inspect schema mappings.
               </div>
             )
+          ) : (
+            /* CLICKHOUSE LIVE SCHEMA REGISTRY VIEW */
+            <div className="admin-inspector-card" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1.5px solid #e2e8f0", paddingBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
+                <div>
+                  <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#0f172a", margin: 0, display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span>🗄</span> ClickHouse Schema Registry
+                    <span className="admin-badge-pill" style={{ backgroundColor: "#e0f2fe", color: "#0284c7" }}>
+                      Live Engine Data
+                    </span>
+                  </h2>
+                  <p style={{ fontSize: "0.85rem", color: "#64748b", margin: "4px 0 0 0" }}>
+                    Inspect real-time ClickHouse tables, column definitions, storage engines, and live record counts across databases.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchClickHouseSchemas}
+                  disabled={schemaLoading}
+                  style={{
+                    backgroundColor: "#f1f5f9",
+                    border: "1px solid #cbd5e1",
+                    padding: "8px 16px",
+                    borderRadius: "9999px",
+                    cursor: "pointer",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    color: "#475569",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px"
+                  }}
+                >
+                  {schemaLoading ? "Refreshing..." : "🔄 Refresh Schemas"}
+                </button>
+              </div>
+
+              {schemaError && (
+                <div style={{ padding: "16px", backgroundColor: "#fff1f2", border: "1px solid #fecdd3", color: "#e11d48", borderRadius: "12px", fontSize: "0.875rem" }}>
+                  {schemaError}
+                </div>
+              )}
+
+              {/* DATABASE PICKER & FILTER ROW */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  {(clickhouseSchemas.length > 0 ? clickhouseSchemas : [{ databaseName: "ulpf_events" }, { databaseName: "ulpf_raw" }]).map((db) => (
+                    <button
+                      key={db.databaseName}
+                      type="button"
+                      onClick={() => setSelectedDb(db.databaseName)}
+                      style={{
+                        padding: "8px 18px",
+                        borderRadius: "9999px",
+                        fontWeight: 700,
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                        border: selectedDb === db.databaseName ? "2px solid #0d9488" : "1.5px solid #cbd5e1",
+                        backgroundColor: selectedDb === db.databaseName ? "#ccfbf1" : "white",
+                        color: selectedDb === db.databaseName ? "#0f766e" : "#64748b",
+                        transition: "all 0.2s"
+                      }}
+                    >
+                      {db.databaseName === "ulpf_events" ? "⚡ Target Mapped Tables (ulpf_events)" : "📦 Raw Audit Store (ulpf_raw)"}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ minWidth: "260px" }}>
+                  <input
+                    type="text"
+                    value={schemaSearch}
+                    onChange={(e) => setSchemaSearch(e.target.value)}
+                    placeholder="🔍 Filter tables or column names..."
+                    style={{
+                      width: "100%",
+                      padding: "8px 14px",
+                      borderRadius: "12px",
+                      border: "1.5px solid #cbd5e1",
+                      fontSize: "0.85rem",
+                      fontFamily: "inherit"
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* TABLE LIST DISPLAY */}
+              {(() => {
+                const currentDbMeta = clickhouseSchemas.find((d) => d.databaseName === selectedDb);
+                const tables = currentDbMeta?.tables || [];
+
+                const filteredTables = tables.filter((t) => {
+                  if (!schemaSearch) return true;
+                  const q = schemaSearch.toLowerCase();
+                  if (t.name.toLowerCase().includes(q)) return true;
+                  return t.columns?.some((c) => c.name.toLowerCase().includes(q) || c.type.toLowerCase().includes(q));
+                });
+
+                if (schemaLoading) {
+                  return (
+                    <div style={{ textAlign: "center", padding: "40px", color: "#64748b" }}>
+                      Fetching ClickHouse table metadata...
+                    </div>
+                  );
+                }
+
+                if (filteredTables.length === 0) {
+                  return (
+                    <div style={{ padding: "40px 20px", textAlign: "center", backgroundColor: "#f8fafc", borderRadius: "16px", border: "1px dashed #cbd5e1" }}>
+                      <p style={{ margin: 0, fontWeight: 600, color: "#64748b" }}>
+                        {schemaSearch ? `No tables matching "${schemaSearch}" in ${selectedDb}` : `No tables found in ${selectedDb}`}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                    {filteredTables.map((t) => (
+                      <div
+                        key={t.name}
+                        style={{
+                          backgroundColor: "#f8fafc",
+                          border: "1.5px solid #e2e8f0",
+                          borderRadius: "16px",
+                          overflow: "hidden"
+                        }}
+                      >
+                        {/* TABLE CARD HEADER */}
+                        <div style={{ backgroundColor: "#f1f5f9", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <span style={{ fontSize: "1.1rem" }}>📊</span>
+                            <strong style={{ fontSize: "1rem", color: "#0f172a", fontFamily: "monospace" }}>
+                              {selectedDb}.{t.name}
+                            </strong>
+                            {t.name === "canonical_events" && (
+                              <span className="admin-badge-pill" style={{ backgroundColor: "#fef3c7", color: "#b45309" }}>
+                                System Fallback Target
+                              </span>
+                            )}
+                            {t.name === "raw_events" && (
+                              <span className="admin-badge-pill" style={{ backgroundColor: "#ede9fe", color: "#6d28d9" }}>
+                                Immutable Raw Store
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <span style={{ fontSize: "0.75rem", backgroundColor: "#e2e8f0", padding: "3px 10px", borderRadius: "9999px", color: "#475569", fontWeight: 700 }}>
+                              MergeTree
+                            </span>
+                            <span style={{ fontSize: "0.8rem", backgroundColor: "#ccfbf1", color: "#0f766e", padding: "4px 12px", borderRadius: "9999px", fontWeight: 800 }}>
+                              {t.totalRows ? t.totalRows.toLocaleString() : 0} rows
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* COLUMN SPECIFICATION TABLE */}
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.825rem" }}>
+                            <thead>
+                              <tr style={{ borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em", backgroundColor: "white" }}>
+                                <th style={{ padding: "10px 20px" }}>Column Name</th>
+                                <th style={{ padding: "10px 20px" }}>ClickHouse Type</th>
+                                <th style={{ padding: "10px 20px" }}>Ingestion Role</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {t.columns?.map((col) => {
+                                const isUnmapped = col.name === "raw_unmapped";
+                                const isRawJson = col.name === "raw_json" || col.name === "raw_payload";
+                                const isTime = col.name.includes("time") || col.name.includes("timestamp");
+
+                                return (
+                                  <tr key={col.name} style={{ borderBottom: "1px solid #f1f5f9", backgroundColor: isUnmapped ? "#fffbebe6" : "white" }}>
+                                    <td style={{ padding: "10px 20px", fontWeight: 700, color: "#0f172a", fontFamily: "monospace" }}>
+                                      {col.name}
+                                    </td>
+                                    <td style={{ padding: "10px 20px", color: "#2563eb", fontFamily: "monospace" }}>
+                                      {col.type}
+                                    </td>
+                                    <td style={{ padding: "10px 20px" }}>
+                                      {isUnmapped ? (
+                                        <span style={{ fontSize: "0.75rem", color: "#b45309", backgroundColor: "#fef3c7", padding: "2px 8px", borderRadius: "6px", fontWeight: 600 }}>
+                                          Dynamic Unmapped Fields Store (JSON)
+                                        </span>
+                                      ) : isRawJson ? (
+                                        <span style={{ fontSize: "0.75rem", color: "#6d28d9", backgroundColor: "#ede9fe", padding: "2px 8px", borderRadius: "6px", fontWeight: 600 }}>
+                                          Full Raw Payload Audit Text
+                                        </span>
+                                      ) : isTime ? (
+                                        <span style={{ fontSize: "0.75rem", color: "#0284c7", backgroundColor: "#e0f2fe", padding: "2px 8px", borderRadius: "6px", fontWeight: 600 }}>
+                                          Index Partition Time
+                                        </span>
+                                      ) : (
+                                        <span style={{ fontSize: "0.75rem", color: "#475569", backgroundColor: "#f1f5f9", padding: "2px 8px", borderRadius: "6px" }}>
+                                          Normalized ECS Field
+                                        </span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
           )
         )}
 

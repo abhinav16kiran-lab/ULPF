@@ -26,10 +26,19 @@ public class AdminController {
     private static final Set<String> VALID_DECISIONS = Set.of("APPROVED", "REJECTED");
 
     private final OnboardingService onboardingService;
+    private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public AdminController(OnboardingService onboardingService) {
+    public AdminController(
+            OnboardingService onboardingService,
+            com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
         this.onboardingService = onboardingService;
+        this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
+    }
+
+    @GetMapping("/clickhouse/schemas")
+    public ResponseEntity<?> getClickHouseSchemas() {
+        return ResponseEntity.ok(dynamicSchemaProvisioningService.getClickHouseSchemaMetadata());
     }
 
     @GetMapping("/onboard")
