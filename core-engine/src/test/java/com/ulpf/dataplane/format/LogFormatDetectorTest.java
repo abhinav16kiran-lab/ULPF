@@ -102,7 +102,7 @@ class LogFormatDetectorTest {
         Map<String, Object> fields = result.parsedFields();
 
         assertEquals("192.168.1.50", fields.get("src_ip"));
-        assertEquals(200, fields.get("status_code"));
+        assertEquals("200", fields.get("status_code").toString());
         assertEquals("ALLOW", fields.get("action"));
     }
 }

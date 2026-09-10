@@ -80,4 +80,9 @@ public class UserRepository {
         String sql = "UPDATE users SET password_hash = ?, role = ? WHERE user_id = ?";
         jdbcTemplate.update(sql, passwordHash, role.name(), userId);
     }
+
+    public void updateUserRole(String userId, Role role) {
+        String sql = "UPDATE users SET role = ? WHERE user_id = ?";
+        jdbcTemplate.update(sql, role.name(), userId);
+    }
 }

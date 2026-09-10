@@ -35,7 +35,16 @@ public class AdminController {
     @GetMapping("/onboard")
     public ResponseEntity<?> listRequests() {
         List<OnboardingRequestRecord> requests = onboardingService.getAllRequests();
-        return ResponseEntity.ok(Map.of("requests", requests));
+        OnboardingService.AdminStats stats = onboardingService.getAdminStats();
+        return ResponseEntity.ok(Map.of(
+                "requests", requests,
+                "stats", stats
+        ));
+    }
+
+    @GetMapping("/stats")
+    public ResponseEntity<?> getStats() {
+        return ResponseEntity.ok(onboardingService.getAdminStats());
     }
 
     @PutMapping("/onboard/{requestId}")
@@ -50,7 +59,7 @@ public class AdminController {
         }
 
         try {
-            OnboardingRequestRecord updated = onboardingService.processAdminDecision(requestId, body.decision());
+            OnboardingRequestRecord updated = onboardingService.processAdminDecision(requestId, body.decision(), body.feedbackNote());
             return ResponseEntity.ok(Map.of(
                     "requestId", updated.requestId(),
                     "status", updated.status()
@@ -83,4 +92,4 @@ public class AdminController {
     }
 }
 
-record DecisionRequest(String decision) {}
+record DecisionRequest(String decision, String feedbackNote) {}

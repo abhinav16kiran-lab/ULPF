@@ -103,4 +103,10 @@ public class VendorRepository {
         String sqlRevokeVendor = "UPDATE vendors SET status = 'REVOKED' WHERE vendor_id = ?";
         jdbcTemplate.update(sqlRevokeVendor, vendorId);
     }
+
+    public int countActiveVendors() {
+        String sql = "SELECT COUNT(*) FROM vendors WHERE status = 'ACTIVE'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
+        return count != null ? count : 0;
+    }
 }

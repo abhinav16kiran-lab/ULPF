@@ -52,7 +52,8 @@ Run the automated platform launcher for your operating system:
 * **Linux / macOS**:
   ```bash
   chmod +x start.sh
-  ./start.sh
+  ./start.sh              # Fast start (uses cached layers if unchanged)
+  ./start.sh --no-cache   # Clean start (forces fresh container rebuild)
   ```
 
 * **Windows (Command Prompt / PowerShell)**:
@@ -72,6 +73,12 @@ Run the automated platform launcher for your operating system:
    - *If neither Podman nor Docker is installed*, the script outputs a clear error message directing you to download Docker Desktop or Podman Desktop, and exits cleanly.
 5. Launches all 3 containerized services (`ulpf-clickhouse`, `ulpf-core-engine`, `ulpf-frontend`).
 6. Polls backend health endpoints and displays final service URLs once live.
+
+#### Stopping All Containers (One Command):
+To safely shut down and stop all platform services at once:
+* **Linux / macOS**: `chmod +x stop.sh && ./stop.sh`
+* **Windows**: `stop.bat`
+* **Or via Docker / Podman**: `docker compose down`
 
 ---
 

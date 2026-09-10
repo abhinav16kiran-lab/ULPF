@@ -14,11 +14,20 @@ import java.util.Optional;
 public class AuthService {
 
     private final UserRepository userRepository;
+    private final com.ulpf.common.db.VendorRepository vendorRepository;
+    private final com.ulpf.common.db.OnboardingRepository onboardingRepository;
     private final JwtUtil jwtUtil;
     private final BCryptPasswordEncoder passwordEncoder;
 
-    public AuthService(UserRepository userRepository, JwtUtil jwtUtil, BCryptPasswordEncoder passwordEncoder) {
+    public AuthService(
+            UserRepository userRepository,
+            com.ulpf.common.db.VendorRepository vendorRepository,
+            com.ulpf.common.db.OnboardingRepository onboardingRepository,
+            JwtUtil jwtUtil,
+            BCryptPasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.vendorRepository = vendorRepository;
+        this.onboardingRepository = onboardingRepository;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
     }
@@ -46,6 +55,17 @@ public class AuthService {
         User user = userOpt.get();
         if (!passwordEncoder.matches(password, user.passwordHash())) {
             throw new BadCredentialsException("Invalid Credentials");
+        }
+
+        // Auto-promote user to VENDOR if an APPROVED onboarding request exists in SQLite database
+        if (user.role() == Role.USER && onboardingRepository != null) {
+            boolean hasApproved = onboardingRepository.findRequestsByUserId(user.userId())
+                    .stream()
+                    .anyMatch(req -> "APPROVED".equalsIgnoreCase(req.status()));
+            if (hasApproved) {
+                userRepository.updateUserRole(user.userId(), Role.VENDOR);
+                user = new User(user.userId(), user.username(), user.name(), user.passwordHash(), Role.VENDOR, user.createdAt());
+            }
         }
 
         // Verify that the requested role is satisfied by the user's stored role in SQLite (supports role hierarchy / promotions)

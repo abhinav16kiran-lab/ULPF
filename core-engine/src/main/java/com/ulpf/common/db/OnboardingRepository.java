@@ -144,4 +144,10 @@ public class OnboardingRepository {
         String sql = "UPDATE onboarding_requests SET sample_metadata = NULL WHERE status IN ('APPROVED', 'REJECTED') AND sample_metadata IS NOT NULL AND created_at < datetime('now', '-' || ? || ' days')";
         return jdbcTemplate.update(sql, sampleClearDays);
     }
+
+    public int countPendingRequests() {
+        String sql = "SELECT COUNT(*) FROM onboarding_requests WHERE status = 'SUBMITTED'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
+        return count != null ? count : 0;
+    }
 }

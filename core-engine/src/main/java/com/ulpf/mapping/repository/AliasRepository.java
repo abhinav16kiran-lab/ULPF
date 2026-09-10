@@ -31,10 +31,74 @@ public class AliasRepository {
     @PostConstruct
     public void loadAliases() {
         String sql = "SELECT alias_key, canonical_field FROM mapping_aliases";
-        jdbcTemplate.query(sql, (rs) -> {
-            String aliasKey = rs.getString("alias_key");
-            String canonicalField = rs.getString("canonical_field");
-            aliasMap.put(aliasKey, canonicalField);
+        try {
+            jdbcTemplate.query(sql, (rs) -> {
+                String aliasKey = rs.getString("alias_key");
+                String canonicalField = rs.getString("canonical_field");
+                aliasMap.put(aliasKey, canonicalField);
+            });
+        } catch (Exception e) {
+            log.warn("Could not query mapping_aliases table: {}", e.getMessage());
+        }
+
+        if (aliasMap.isEmpty()) {
+            seedInitialAliases();
+        }
+    }
+
+    private void seedInitialAliases() {
+        log.info("Seeding initial dictionary aliases into mapping_aliases...");
+        Map<String, String> seeds = Map.ofEntries(
+            Map.entry("timestamp", "timestamp"),
+            Map.entry("time", "timestamp"),
+            Map.entry("datetime", "timestamp"),
+            Map.entry("eventtime", "timestamp"),
+            Map.entry("ts", "timestamp"),
+            Map.entry("level", "log.level"),
+            Map.entry("loglevel", "log.level"),
+            Map.entry("severity", "log.level"),
+            Map.entry("service", "service.name"),
+            Map.entry("servicename", "service.name"),
+            Map.entry("app", "service.name"),
+            Map.entry("environment", "service.environment"),
+            Map.entry("env", "service.environment"),
+            Map.entry("httpmethod", "http.request.method"),
+            Map.entry("method", "http.request.method"),
+            Map.entry("httppath", "url.path"),
+            Map.entry("path", "url.path"),
+            Map.entry("uri", "url.path"),
+            Map.entry("url", "url.path"),
+            Map.entry("httpstatuscode", "http.response.status_code"),
+            Map.entry("statuscode", "http.response.status_code"),
+            Map.entry("status", "http.response.status_code"),
+            Map.entry("httplatencyms", "event.duration"),
+            Map.entry("latencyms", "event.duration"),
+            Map.entry("duration", "event.duration"),
+            Map.entry("httpuseragent", "user_agent.original"),
+            Map.entry("useragent", "user_agent.original"),
+            Map.entry("networkclientip", "source.ip"),
+            Map.entry("clientip", "source.ip"),
+            Map.entry("srcip", "source.ip"),
+            Map.entry("srcipaddr", "source.ip"),
+            Map.entry("networkserverip", "destination.ip"),
+            Map.entry("serverip", "destination.ip"),
+            Map.entry("dstip", "destination.ip"),
+            Map.entry("dstprt", "destination.port"),
+            Map.entry("destport", "destination.port"),
+            Map.entry("userusername", "user.name"),
+            Map.entry("username", "user.name"),
+            Map.entry("user", "user.name"),
+            Map.entry("usrprincnm", "user.email"),
+            Map.entry("useremail", "user.email"),
+            Map.entry("userattemptcount", "user.attempt_count"),
+            Map.entry("evtypeid", "event.action"),
+            Map.entry("action", "event.action"),
+            Map.entry("message", "message"),
+            Map.entry("msg", "message")
+        );
+
+        seeds.forEach((aliasKey, canonicalField) -> {
+            insertAlias(canonicalField, aliasKey, "seed");
         });
     }
     

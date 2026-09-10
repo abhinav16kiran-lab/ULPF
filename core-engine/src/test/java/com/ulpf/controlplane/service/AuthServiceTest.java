@@ -24,6 +24,12 @@ class AuthServiceTest {
     private UserRepository userRepository;
 
     @Mock
+    private com.ulpf.common.db.VendorRepository vendorRepository;
+
+    @Mock
+    private com.ulpf.common.db.OnboardingRepository onboardingRepository;
+
+    @Mock
     private JwtUtil jwtUtil;
 
     @Mock
@@ -33,7 +39,7 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userRepository, jwtUtil, passwordEncoder);
+        authService = new AuthService(userRepository, vendorRepository, onboardingRepository, jwtUtil, passwordEncoder);
     }
 
     @Test

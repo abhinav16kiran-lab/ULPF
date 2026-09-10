@@ -52,7 +52,24 @@ fi
 echo "Using container orchestrator: $COMPOSE_CMD"
 
 echo "Building and launching container services..."
-$COMPOSE_CMD up --build -d
+if [[ "$*" == *"--no-cache"* ]]; then
+    echo "Force clean rebuild requested (bypassing layer cache)..."
+    if [[ "$COMPOSE_CMD" == *"podman-compose"* ]]; then
+        $COMPOSE_CMD --podman-build-args="--no-cache" build
+        $COMPOSE_CMD down
+        $COMPOSE_CMD up -d
+    else
+        $COMPOSE_CMD build --no-cache
+        $COMPOSE_CMD up --force-recreate -d
+    fi
+else
+    if [[ "$COMPOSE_CMD" == *"podman-compose"* ]]; then
+        $COMPOSE_CMD down
+        $COMPOSE_CMD up --build -d
+    else
+        $COMPOSE_CMD up --build --force-recreate -d
+    fi
+fi
 echo "[✓] Container build and launch complete!"
 
 echo "Verifying service readiness..."

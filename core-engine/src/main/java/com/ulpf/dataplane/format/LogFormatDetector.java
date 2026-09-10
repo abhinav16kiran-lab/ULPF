@@ -101,10 +101,9 @@ public class LogFormatDetector {
             try {
                 JsonNode root = MAPPER.readTree(trimmed);
                 if (root.isObject()) {
-                    Map<String, Object> fields = MAPPER.convertValue(root, new TypeReference<Map<String, Object>>() {
-                    });
-                    return new FormatDetectionResult(LogFormat.JSON, fields != null ? fields : Map.of(), rawPayload,
-                            "JSON_OBJECT");
+                    Map<String, Object> fields = new LinkedHashMap<>();
+                    flattenJsonNode("", root, fields);
+                    return new FormatDetectionResult(LogFormat.JSON, fields, rawPayload, "JSON_OBJECT");
                 } else if (root.isArray()) {
                     Map<String, Object> fields = new LinkedHashMap<>();
                     fields.put("json_array_size", root.size());
@@ -130,5 +129,18 @@ public class LogFormatDetector {
         fields.put("raw_message", trimmed);
 
         return new FormatDetectionResult(LogFormat.RAW_TEXT, fields, rawPayload, "RAW_TEXT_FALLBACK");
+    }
+
+    private void flattenJsonNode(String prefix, JsonNode node, Map<String, Object> target) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(entry -> {
+                String key = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
+                flattenJsonNode(key, entry.getValue(), target);
+            });
+        } else if (node.isValueNode()) {
+            target.put(prefix, node.asText());
+        } else {
+            target.put(prefix, node.toString());
+        }
     }
 }

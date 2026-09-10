@@ -56,6 +56,32 @@ public class OnboardingService {
     private final MappingEngineOrchestrator mappingEngineOrchestrator;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    public record AdminStats(int pendingReviewCount, int activeVendorsCount) {}
+
+    private volatile AdminStats cachedAdminStats = null;
+    private volatile long lastAdminStatsFetchTime = 0L;
+    private static final long STATS_CACHE_TTL_MS = 30_000L;
+
+    public AdminStats getAdminStats() {
+        long now = System.currentTimeMillis();
+        if (cachedAdminStats == null || (now - lastAdminStatsFetchTime) > STATS_CACHE_TTL_MS) {
+            synchronized (this) {
+                if (cachedAdminStats == null || (now - lastAdminStatsFetchTime) > STATS_CACHE_TTL_MS) {
+                    int pending = onboardingRepository.countPendingRequests();
+                    int activeVendors = vendorRepository.countActiveVendors();
+                    cachedAdminStats = new AdminStats(pending, activeVendors);
+                    lastAdminStatsFetchTime = now;
+                    log.info("Refreshed in-memory admin stats cache: pending={}, activeVendors={}", pending, activeVendors);
+                }
+            }
+        }
+        return cachedAdminStats;
+    }
+
+    public void invalidateAdminStatsCache() {
+        this.cachedAdminStats = null;
+    }
+
     public OnboardingService(
             UserRepository userRepository,
             VendorRepository vendorRepository,
@@ -150,24 +176,24 @@ public class OnboardingService {
         credentialRepository.save(new CredentialRecord(
                 null, source.sourceId(), vendor.vendorId(), keyHash, "PENDING_APPROVAL", null));
 
-        // 5. Extract sample snippet & save files to disk
-        String requestId = UUID.randomUUID().toString();
-        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
-                delta, maxIntervalMs, sensorField);
-
-        // 6. Generate candidate mapping version via AI mapping engine using format
-        // autodetector on sample snippet
+        // 5. Generate candidate mapping version via AI mapping engine using format autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
         // Inject metadata block into candidate mapping_json
         injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
 
+        // 6. Extract sample snippet, include candidate mappings & save files to disk
+        String requestId = UUID.randomUUID().toString();
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
+                delta, maxIntervalMs, sensorField, proposals);
+
         // 7. Save onboarding request record
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
                 requestId, user.userId(), source.sourceId(), "NEW_SOURCE", sampleMetadataJson, "SUBMITTED",
                 LocalDateTime.now()));
 
+        invalidateAdminStatsCache();
         log.info("Onboarding request {} submitted for source {} with raw API key generated and metadata injected",
                 requestId, source.sourceId());
 
@@ -201,28 +227,27 @@ public class OnboardingService {
             effectiveLogType = "SEN_TEL";
         }
 
-        // 1. Extract sample snippet & store files
-        String requestId = UUID.randomUUID().toString();
-        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
-                delta, maxIntervalMs, sensorField);
-
-        // 2. Delete any stale candidate mapping for this source if present before
-        // generating new candidate
+        // 1. Delete any stale candidate mapping for this source if present before generating new candidate
         mappingRepository.deleteCandidateVersions(sourceId);
 
-        // 3. Generate new candidate mapping version via AI mapping engine using format
-        // autodetector on sample snippet
+        // 2. Generate new candidate mapping version via AI mapping engine using format autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
-        // 4. Inject metadata block into candidate mapping_json
+        // 3. Inject metadata block into candidate mapping_json
         injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
+
+        // 4. Extract sample snippet, include candidate mappings & store files
+        String requestId = UUID.randomUUID().toString();
+        String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
+                delta, maxIntervalMs, sensorField, proposals);
 
         // 5. Save onboarding request record with request_type = "UPDATE_SOURCE"
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
                 requestId, user.userId(), source.sourceId(), "UPDATE_SOURCE", sampleMetadataJson, "SUBMITTED",
                 LocalDateTime.now()));
 
+        invalidateAdminStatsCache();
         log.info("Schema update request {} submitted for existing source {}", requestId, source.sourceId());
 
         return new OnboardingSubmissionResult(
@@ -284,6 +309,10 @@ public class OnboardingService {
     }
 
     public OnboardingRequestRecord processAdminDecision(String requestId, String decision) {
+        return processAdminDecision(requestId, decision, null);
+    }
+
+    public OnboardingRequestRecord processAdminDecision(String requestId, String decision, String feedbackNote) {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
 
@@ -294,6 +323,7 @@ public class OnboardingService {
             if ("APPROVED".equals(finalStatus)) {
                 sourceRepository.activateSource(req.sourceId());
                 credentialRepository.activateCredentialForSource(req.sourceId());
+                userRepository.updateUserRole(req.userId(), com.ulpf.controlplane.model.Role.VENDOR);
 
                 // Activate candidate mapping version
                 activateCandidateMappingForSource(req.sourceId());
@@ -308,13 +338,19 @@ public class OnboardingService {
                 // Drop unapproved candidate mapping records immediately on rejection
                 mappingRepository.deleteCandidateVersions(req.sourceId());
 
+                String notifMsg = "Your onboarding request (ID: " + requestId + ") was REJECTED.";
+                if (feedbackNote != null && !feedbackNote.trim().isEmpty()) {
+                    notifMsg += " Reason: " + feedbackNote.trim();
+                }
+
                 onboardingRepository.saveNotification(
                         req.userId(),
                         "Onboarding Request Rejected",
-                        "Your onboarding request (ID: " + requestId + ") was REJECTED.");
+                        notifMsg);
             }
         }
 
+        invalidateAdminStatsCache();
         credentialRepository.clearCache();
         mappingRepository.clearCache();
         return onboardingRepository.findRequestById(requestId).orElse(req);
@@ -361,12 +397,23 @@ public class OnboardingService {
             String logType,
             Double delta,
             Long maxIntervalMs,
-            String sensorField) {
+            String sensorField,
+            List<MappingProposal> proposals) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("log_type", logType);
         metadata.put("delta", delta);
         metadata.put("max_interval_ms", maxIntervalMs != null ? maxIntervalMs : 60000L);
         metadata.put("sensor_field", sensorField);
+
+        if (proposals != null && !proposals.isEmpty()) {
+            Map<String, Object> candidateMap = new java.util.LinkedHashMap<>();
+            for (MappingProposal p : proposals) {
+                String target = (p.getCanonicalField() != null && !p.getCanonicalField().isBlank())
+                        ? p.getCanonicalField() : "unmapped";
+                candidateMap.put(p.getVendorFieldRaw(), target);
+            }
+            metadata.put("candidate_mapping", candidateMap);
+        }
 
         if (sampleLogFile != null && !sampleLogFile.isEmpty()) {
             String sampleSnippet = extractTopLines(sampleLogFile, 50);
