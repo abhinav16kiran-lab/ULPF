@@ -88,19 +88,10 @@ public class DynamicSchemaProvisioningService {
                 }
             }
 
-            // 2. If a compatible existing table is found, re-use it and ALTER TABLE to add missing columns!
+            // 2. If a compatible existing table is found, re-use it! Extra unmapped fields flow into raw_unmapped.
             if (bestMatchingTable != null) {
-                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'.",
+                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'. Extra unmapped fields will store in raw_unmapped.",
                         bestMatchingTable, (int) (highestMatchRatio * 100), sourceName);
-
-                for (String missingCol : missingFieldsToAlter) {
-                    String alterSql = String.format(
-                            "ALTER TABLE ulpf_events.%s ADD COLUMN IF NOT EXISTS %s Nullable(String)",
-                            bestMatchingTable, missingCol
-                    );
-                    clickhouseJdbcTemplate.execute(alterSql);
-                    log.info("Altered existing table 'ulpf_events.{}' to add column '{}'", bestMatchingTable, missingCol);
-                }
                 return bestMatchingTable;
             }
 
