@@ -38,6 +38,10 @@ public class DynamicSchemaProvisioningService {
      * @return Target table name in ClickHouse
      */
     public String provisionSchemaForSource(String sourceName, String mappingJson) {
+        return provisionSchemaForSource(null, sourceName, mappingJson);
+    }
+
+    public String provisionSchemaForSource(String sourceId, String sourceName, String mappingJson) {
         if (clickhouseJdbcTemplate == null) {
             log.warn("ClickHouse JDBC template is null. Skipping dynamic ClickHouse table provisioning.");
             return "canonical_events";
@@ -45,7 +49,7 @@ public class DynamicSchemaProvisioningService {
 
         try {
             Set<String> proposedCanonicalFields = extractCanonicalFields(mappingJson);
-            log.info("Provisioning ClickHouse schema for source '{}'. Proposed canonical fields: {}", sourceName, proposedCanonicalFields);
+            log.info("Provisioning ClickHouse schema for source '{}' (ID: {}). Proposed canonical fields: {}", sourceName, sourceId, proposedCanonicalFields);
 
             // 1. Get existing tables in ulpf_events database
             List<String> existingTables = clickhouseJdbcTemplate.query(
@@ -95,11 +99,8 @@ public class DynamicSchemaProvisioningService {
                 return bestMatchingTable;
             }
 
-            // 3. Otherwise, create a clean new dynamic table for this source/topic!
-            String newTableName = sanitizeTableName(sourceName);
-            if (newTableName.isBlank()) {
-                newTableName = "events_" + System.currentTimeMillis();
-            }
+            // 3. Otherwise, create a clean, structured, domain-prefixed dynamic table!
+            String newTableName = constructTableName(sourceName, existingTables);
 
             StringBuilder ddl = new StringBuilder();
             ddl.append("CREATE TABLE IF NOT EXISTS ulpf_events.").append(newTableName).append(" (\n");
@@ -111,7 +112,9 @@ public class DynamicSchemaProvisioningService {
             ddl.append("    timestamp DateTime64(3) DEFAULT now64(3),\n");
 
             for (String field : proposedCanonicalFields) {
+                if (field == null || field.isBlank()) continue;
                 String colName = normalizeColumnName(field);
+                if (colName.isBlank()) continue;
                 if (!List.of("event_id", "lineage_id", "vendor_id", "source_id", "mapping_version", "timestamp").contains(colName)) {
                     ddl.append("    ").append(colName).append(" Nullable(String),\n");
                 }
@@ -264,12 +267,47 @@ public class DynamicSchemaProvisioningService {
     }
 
     private String normalizeColumnName(String canonicalField) {
-        return canonicalField.replace('.', '_').replace('-', '_').toLowerCase();
+        if (canonicalField == null) return "";
+        return canonicalField.replace('.', '_').replace('-', '_').trim().toLowerCase();
     }
 
     private String sanitizeTableName(String sourceName) {
+        if (sourceName == null) return "";
         String clean = sourceName.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
         clean = clean.replaceAll("_+", "_").replaceAll("^_+|_+$", "");
         return clean;
+    }
+
+    public String constructTableName(String sourceName) {
+        return constructTableName(sourceName, java.util.Collections.emptyList());
+    }
+
+    public String constructTableName(String sourceName, List<String> existingTables) {
+        String cleanSlug = sanitizeTableName(sourceName);
+        if (cleanSlug.isBlank()) {
+            cleanSlug = "stream";
+        }
+
+        String baseName = "events_" + cleanSlug;
+        if (baseName.length() > 60) {
+            baseName = baseName.substring(0, 60);
+        }
+
+        String tableName = baseName.toLowerCase();
+
+        if (existingTables != null && !existingTables.isEmpty()) {
+            Set<String> tableSet = new HashSet<>();
+            for (String t : existingTables) {
+                if (t != null) tableSet.add(t.toLowerCase());
+            }
+
+            int counter = 2;
+            while (tableSet.contains(tableName)) {
+                tableName = baseName.toLowerCase() + "_" + counter;
+                counter++;
+            }
+        }
+
+        return tableName;
     }
 }

@@ -40,7 +40,7 @@ services:
       - "8080:8080"
     environment:
       - SQLITE_DB_PATH=/app/data/control-plane.db
-      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-jdbc:clickhouse:http://host.containers.internal:8123/ulpf_raw?compress=0&user=default&password=Clickhouse123!}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-Clickhouse123!}
       - ULPF_ADMIN_USERNAME=${ULPF_ADMIN_USERNAME:-admin}

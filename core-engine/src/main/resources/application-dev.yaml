@@ -5,7 +5,7 @@ logging:
     com.ulpf: DEBUG
     org.springframework.jdbc: DEBUG
 jwt:
-    secret: ${JWT_SECRET}
+    secret: ${JWT_SECRET:super-secret-jwt-signing-key-for-ulpf-dev-12345-minimum-256-bits}
 spring:
   servlet:
     multipart:

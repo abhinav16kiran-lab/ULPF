@@ -15,7 +15,7 @@ import java.util.function.Function;
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret}")
+    @Value("${jwt.secret:super-secret-jwt-signing-key-for-ulpf-dev-12345-minimum-256-bits}")
     private String secret;
 
     private SecretKey getSigningKey() {

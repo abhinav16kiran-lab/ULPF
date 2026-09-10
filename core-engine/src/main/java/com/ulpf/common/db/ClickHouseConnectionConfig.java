@@ -14,7 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration
 public class ClickHouseConnectionConfig {
 
-    @Value("${clickhouse.datasource.url:jdbc:clickhouse://localhost:8123/ulpf_raw}")
+    @Value("${clickhouse.datasource.url:jdbc:clickhouse:http://localhost:8123/ulpf_raw?compress=0&user=default&password=Clickhouse123!}")
     private String url;
 
     @Value("${clickhouse.datasource.driver-class-name:com.clickhouse.jdbc.ClickHouseDriver}")
@@ -23,7 +23,7 @@ public class ClickHouseConnectionConfig {
     @Value("${clickhouse.datasource.username:default}")
     private String username;
 
-    @Value("${clickhouse.datasource.password:}")
+    @Value("${clickhouse.datasource.password:Clickhouse123!}")
     private String password;
 
     @Bean

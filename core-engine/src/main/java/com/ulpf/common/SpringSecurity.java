@@ -36,7 +36,7 @@ public class SpringSecurity {
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                .requestMatchers("/v1/login", "/v1/signup", "/v1/events", "/v1/health", "/actuator/**").permitAll()
+                .requestMatchers("/v1/login", "/v1/signup", "/v1/events", "/v1/health", "/error", "/actuator/**").permitAll()
                 .requestMatchers("/v1/admin/**", "/v1/analytics/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             );

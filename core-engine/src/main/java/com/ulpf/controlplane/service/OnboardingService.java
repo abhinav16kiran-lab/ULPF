@@ -381,7 +381,7 @@ public class OnboardingService {
             if (dynamicSchemaProvisioningService != null) {
                 Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
                 String sourceName = srcOpt.map(SourceRecord::sourceName).orElse("stream_" + sourceId);
-                dynamicSchemaProvisioningService.provisionSchemaForSource(sourceName, candidate.mappingJson());
+                dynamicSchemaProvisioningService.provisionSchemaForSource(sourceId, sourceName, candidate.mappingJson());
             }
 
             // 2. Activate mapping version record in SQLite ONLY after ClickHouse schema provisioning succeeds

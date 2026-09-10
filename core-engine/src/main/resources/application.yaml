@@ -19,6 +19,9 @@ ulpf:
     username: ${ULPF_ADMIN_USERNAME:admin}
     password: ${ULPF_ADMIN_PASSWORD:Admin@12345}
 
+jwt:
+  secret: ${JWT_SECRET:super-secret-jwt-signing-key-for-ulpf-dev-12345-minimum-256-bits}
+
 # Mapping engine configuration
 mapping:
   confidence-threshold: 0.60
@@ -31,7 +34,7 @@ mapping:
 # ClickHouse storage configuration
 clickhouse:
   datasource:
-    url: ${CLICKHOUSE_URL:jdbc:clickhouse://localhost:8123/ulpf_raw}
+    url: ${CLICKHOUSE_URL:jdbc:clickhouse:http://localhost:8123/ulpf_raw?compress=0&user=default&password=Clickhouse123!}
     driver-class-name: com.clickhouse.jdbc.ClickHouseDriver
     username: ${CLICKHOUSE_USER:default}
-    password: ${CLICKHOUSE_PASSWORD:}
+    password: ${CLICKHOUSE_PASSWORD:Clickhouse123!}

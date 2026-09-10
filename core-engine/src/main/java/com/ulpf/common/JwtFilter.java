@@ -54,7 +54,9 @@ public class JwtFilter extends OncePerRequestFilter {
             UlpfPrincipal principal = new UlpfPrincipal(id, username, role);
 
             List<SimpleGrantedAuthority> authorities = (role != null)
-                    ? List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
+                    ? List.of(
+                            new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()),
+                            new SimpleGrantedAuthority(role.toUpperCase()))
                     : Collections.emptyList();
 
             UsernamePasswordAuthenticationToken authentication =
