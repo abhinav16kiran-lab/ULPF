@@ -73,6 +73,10 @@ public class BatchIntegrityService {
             if (sourceBatch.isEmpty())
                 continue;
 
+            // Sort batch events deterministically by timestamp and eventId to ensure 100% reproducible Merkle trees
+            sourceBatch.sort(java.util.Comparator.comparing(RawEventRecord::receivedAt, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+                    .thenComparing(RawEventRecord::eventId, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
+
             // 1. Calculate SHA-256 for each raw payload
             List<String> leafHashes = sourceBatch.stream()
                     .map(r -> MerkleTreeCalculator.hashSha256(r.rawPayload()))
@@ -123,7 +127,7 @@ public class BatchIntegrityService {
 
         IntegrityBlockRecord block = blockOpt.get();
 
-        List<String> rawPayloads = fetchRawPayloadsFromClickHouse(block.sourceId(), block.eventCount());
+        List<String> rawPayloads = fetchRawPayloadsFromClickHouse(block);
 
         if (rawPayloads.isEmpty()) {
             return new VerificationResult(
@@ -168,19 +172,52 @@ public class BatchIntegrityService {
         }
     }
 
-    private List<String> fetchRawPayloadsFromClickHouse(String sourceId, int limit) {
-        if (clickhouseJdbcTemplate == null) {
+    private List<String> fetchRawPayloadsFromClickHouse(IntegrityBlockRecord block) {
+        if (clickhouseJdbcTemplate == null || block == null) {
             return List.of();
         }
         try {
-            String sql = """
+            String sourceId = block.sourceId();
+            String firstEventId = block.firstEventId();
+            String lastEventId = block.lastEventId();
+            int limit = block.eventCount() != null ? block.eventCount() : 100;
+
+            if (firstEventId != null && firstEventId.equals(lastEventId)) {
+                String sql = "SELECT raw_payload FROM ulpf_raw.raw_events WHERE source_id = ? AND event_id = ?";
+                return clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, firstEventId);
+            }
+
+            if (firstEventId != null && lastEventId != null) {
+                String windowSql = """
+                        SELECT raw_payload
+                        FROM ulpf_raw.raw_events
+                        WHERE source_id = ?
+                          AND received_at >= (SELECT received_at FROM ulpf_raw.raw_events WHERE event_id = ? LIMIT 1)
+                          AND received_at <= (SELECT received_at FROM ulpf_raw.raw_events WHERE event_id = ? LIMIT 1)
+                        ORDER BY received_at ASC, event_id ASC
+                        LIMIT ?
+                        """;
+                List<String> payloads = clickhouseJdbcTemplate.query(
+                        windowSql,
+                        (rs, rowNum) -> rs.getString("raw_payload"),
+                        sourceId,
+                        firstEventId,
+                        lastEventId,
+                        limit
+                );
+                if (!payloads.isEmpty()) {
+                    return payloads;
+                }
+            }
+
+            String fallbackSql = """
                     SELECT raw_payload
                     FROM ulpf_raw.raw_events
                     WHERE source_id = ?
-                    ORDER BY received_at DESC
+                    ORDER BY received_at ASC, event_id ASC
                     LIMIT ?
                     """;
-            return clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, limit);
+            return clickhouseJdbcTemplate.query(fallbackSql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, limit);
         } catch (Exception e) {
             log.warn("Could not fetch raw log payloads from ClickHouse for verification: {}", e.getMessage());
             return List.of();
