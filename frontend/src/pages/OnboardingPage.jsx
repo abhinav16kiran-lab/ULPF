@@ -216,6 +216,8 @@ function OnboardingPage() {
     }
   };
 
+  const activeSources = mySources.filter((s) => s.status === "ACTIVE");
+
   return (
     <div className="onboarding-page-container">
       <Navbar />
@@ -301,9 +303,9 @@ function OnboardingPage() {
                           style={{ width: "100%", padding: "0.625rem 0.875rem" }}
                         >
                           <option value="">-- Select Active Source to Update --</option>
-                          {mySources.map((s) => (
+                          {activeSources.map((s) => (
                             <option key={s.sourceId} value={s.sourceId}>
-                              {s.sourceName} ({s.sourceId}) — {s.sourceType} [{s.status}]
+                              {s.sourceName} ({s.sourceId}) — {s.sourceType}
                             </option>
                           ))}
                         </select>
@@ -660,7 +662,7 @@ function OnboardingPage() {
                   </table>
                 )
               ) : (
-                mySources.length === 0 ? (
+                activeSources.length === 0 ? (
                   <p style={{ fontSize: "0.875rem", color: "#6b7280" }}>No active sources onboarded yet.</p>
                 ) : (
                   <table className="onboarding-table">
@@ -674,7 +676,7 @@ function OnboardingPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {mySources.map((s) => (
+                      {activeSources.map((s) => (
                         <tr key={s.sourceId}>
                           <td style={{ fontWeight: 500, color: "#1f2937", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                             <span style={{ width: "0.5rem", height: "0.5rem", borderRadius: "9999px", backgroundColor: "var(--ulpf-teal)" }}></span>
@@ -687,7 +689,7 @@ function OnboardingPage() {
                             </span>
                           </td>
                           <td>
-                            <span className={`status-badge ${s.status === "ACTIVE" ? "status-approved" : s.status === "SUSPENDED" ? "status-submitted" : "status-rejected"}`}>
+                            <span className="status-badge status-approved">
                               {s.status}
                             </span>
                           </td>
