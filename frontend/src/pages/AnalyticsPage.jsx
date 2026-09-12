@@ -7,22 +7,74 @@ function AnalyticsPage() {
   const [mode, setMode] = useState("builder");
 
   // Builder mode states
-  const [table, setTable] = useState("logs_canonical");
-  const [column, setColumn] = useState("source_ip");
+  const [table, setTable] = useState("canonical_events");
+  const [column, setColumn] = useState("event_id");
   const [aggregation, setAggregation] = useState("COUNT");
   const [groupBy, setGroupBy] = useState("None");
   const [timeRange, setTimeRange] = useState("Last 24 hours");
   const [customStart, setCustomStart] = useState("2026-03-01T00:00");
   const [customEnd, setCustomEnd] = useState("2026-03-02T23:59");
 
+  // Dynamic ClickHouse Schema states
+  const [availableTables, setAvailableTables] = useState(["canonical_events", "raw_events"]);
+  const [tableColumnsMap, setTableColumnsMap] = useState({
+    canonical_events: ["event_id", "lineage_id", "vendor_id", "source_id", "timestamp", "numeric_value", "canonical_payload", "raw_unmapped"],
+    raw_events: ["event_id", "lineage_id", "vendor_id", "source_id", "mapping_version", "received_at", "raw_payload"]
+  });
+
+  useEffect(() => {
+    async function fetchSchemaCatalog() {
+      try {
+        let res;
+        try {
+          res = await client.get("/v1/analytics/schemas");
+        } catch {
+          res = await client.get("/v1/admin/clickhouse/schemas");
+        }
+
+        if (res && res.data && Array.isArray(res.data)) {
+          const tblList = [];
+          const colMap = {};
+
+          res.data.forEach((db) => {
+            if (db.tables && Array.isArray(db.tables)) {
+              db.tables.forEach((t) => {
+                tblList.push(t.name);
+                const cols = (t.columns || []).map((c) => c.name);
+                colMap[t.name] = cols.length > 0 ? cols : ["event_id", "source_id", "timestamp"];
+              });
+            }
+          });
+
+          if (tblList.length > 0) {
+            setAvailableTables(tblList);
+            setTableColumnsMap(colMap);
+
+            const initialTbl = tblList.includes("canonical_events") ? "canonical_events" : tblList[0];
+            setTable(initialTbl);
+            const firstCols = colMap[initialTbl] || [];
+            if (firstCols.length > 0) {
+              setColumn(firstCols[0]);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Could not fetch dynamic ClickHouse schemas:", e);
+      }
+    }
+    fetchSchemaCatalog();
+  }, []);
+
+  const currentTableColumns = tableColumnsMap[table] || ["event_id", "source_id", "timestamp", "vendor_id", "canonical_payload", "raw_unmapped"];
+
   // Dynamic filter rows
   const [filters, setFilters] = useState([
-    { id: 1, field: "status_code", operator: "=", value: "200" }
+    { id: 1, field: "vendor_id", operator: "=", value: "" }
   ]);
 
   // SQL mode state
   const [sqlQuery, setSqlQuery] = useState(
-    "SELECT source_ip, count(*)\nFROM logs_canonical\nWHERE status_code = 200\nGROUP BY source_ip;"
+    "SELECT source_id, count(*)\nFROM canonical_events\nGROUP BY source_id;"
   );
 
   // Lineage mode state
@@ -465,12 +517,17 @@ function AnalyticsPage() {
                       </svg>
                     </button>
                     {openDropdown === "table" && (
-                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm">
-                        {["logs_canonical", "events"].map((item) => (
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm max-h-60 overflow-y-auto">
+                        {availableTables.map((item) => (
                           <button
                             key={item}
                             type="button"
-                            onClick={() => { setTable(item); setOpenDropdown(null); }}
+                            onClick={() => {
+                              setTable(item);
+                              const cols = tableColumnsMap[item] || [];
+                              if (cols.length > 0) setColumn(cols[0]);
+                              setOpenDropdown(null);
+                            }}
                             className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${table === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
                               }`}
                           >
@@ -502,8 +559,8 @@ function AnalyticsPage() {
                       </svg>
                     </button>
                     {openDropdown === "column" && (
-                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm">
-                        {["source_ip", "vendor_id", "status_code"].map((item) => (
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm max-h-60 overflow-y-auto">
+                        {currentTableColumns.map((item) => (
                           <button
                             key={item}
                             type="button"
@@ -576,8 +633,8 @@ function AnalyticsPage() {
                       </svg>
                     </button>
                     {openDropdown === "groupby" && (
-                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm">
-                        {["None", "source_ip", "vendor_id", "status_code"].map((item) => (
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm max-h-60 overflow-y-auto">
+                        {["None", ...currentTableColumns].map((item) => (
                           <button
                             key={item}
                             type="button"
@@ -693,9 +750,9 @@ function AnalyticsPage() {
                           onChange={(e) => updateFilterRow(row.id, "field", e.target.value)}
                           className="text-xs font-mono bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:ring-2 focus:ring-teal-500 min-w-[130px]"
                         >
-                          <option value="status_code">status_code</option>
-                          <option value="vendor_id">vendor_id</option>
-                          <option value="source_ip">source_ip</option>
+                          {currentTableColumns.map((col) => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
                         </select>
 
                         <select

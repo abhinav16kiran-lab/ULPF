@@ -23,9 +23,12 @@ class AnalyticsControllerTest {
     @Mock
     private AnalyticsService analyticsService;
 
+    @Mock
+    private com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
+
     @BeforeEach
     void setUp() {
-        AnalyticsController analyticsController = new AnalyticsController(analyticsService);
+        AnalyticsController analyticsController = new AnalyticsController(analyticsService, dynamicSchemaProvisioningService);
         mockMvc = MockMvcBuilders.standaloneSetup(analyticsController).build();
     }
 

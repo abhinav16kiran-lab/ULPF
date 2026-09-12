@@ -18,9 +18,18 @@ import com.ulpf.analytics.service.AnalyticsService;
 public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
+    private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
 
-    AnalyticsController(AnalyticsService analyticsService) {
+    public AnalyticsController(
+            AnalyticsService analyticsService,
+            com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
         this.analyticsService = analyticsService;
+        this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
+    }
+
+    @GetMapping("/analytics/schemas")
+    public ResponseEntity<?> getSchemas() {
+        return ResponseEntity.ok(dynamicSchemaProvisioningService.getClickHouseSchemaMetadata());
     }
 
     @GetMapping("/analytics")

@@ -28,4 +28,4 @@ analytics-service/__pycache__/
 
 # OS
 .DS_Store
-test.txt
+dev-tools/
