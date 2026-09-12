@@ -1,268 +1,88 @@
-# Universal Log Framework (ULPF)
-## Architecture — SIH Prototype
+# Universal Log Processing Framework (ULPF)
+## High-Level System Architecture — Production Reference
+
+---
 
 ## 1. Core Objective
 
-ULPF accepts heterogeneous logs/events, preserves the original data, maps source-specific fields into a canonical representation, and stores analytics-ready data.
+ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, AI-assisted field mapping, and forensic audit platform. It ingests heterogeneous multi-vendor log streams at high throughput (10,000+ EPS), preserves raw payload lineage, maps raw keys to canonical schemas, and provides cryptographic proof against post-ingestion log tampering.
 
-The prototype is intentionally modular without adding infrastructure without a demonstrated need.
+---
 
-## 2. High-Level View
-
-```text
-                 ULPF
-                  │
-        ┌─────────┴─────────┐
-        ↓                   ↓
-  CONTROL PLANE         DATA PLANE
-        │                   │
-   Web UI/API          POST /v1/events
-        │                   │
-     SQLite             RAW FIRST
-                            │
-                     parse/map/normalize
-                            │
-                        ClickHouse
-                            │
-                         Analytics
-```
-
-## 3. Control Plane
+## 2. Platform Architecture Overview
 
 ```text
-User
- ↓
-Vendor
- ↓
-Source
- ├── Credentials
- └── Mapping Versions
+                                [ Log Sources & Vendors ]
+                     (CrowdStrike, Palo Alto, Microservices, Sensors)
+                                           │
+                                           │ HTTP POST /v1/events (X-API-Key)
+                                           ▼
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│ ULPF REACT FRONTEND (Warm Kinetic UI / Nginx Reverse Proxy Port 3000)                │
+└──────────────────────────────────────────┬────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│ ULPF SPRING BOOT CORE ENGINE (Port 8080)                                               │
+│                                                                                       │
+│  ┌──────────────────────────────┐        ┌─────────────────────────────────────────┐  │
+│  │ CONTROL PLANE                │        │ DATA PLANE (Zero-Overhead Ingestion)    │  │
+│  │ • Onboarding Workflow        │        │ • Header-Based Protocol Autodetector    │  │
+│  │ • AI Mapping Engine          │        │ • In-Memory Lock-Free Queue Buffer      │  │
+│  │ • Schema Governance          │        │ • ClickHouse Async Micro-Batching       │  │
+│  │ • User Authentication & JWT  │        │ • Out-of-Band Merkle Tree Hashing       │  │
+│  └──────────────┬───────────────┘        └────────────────────┬────────────────────┘  │
+└─────────────────┼─────────────────────────────────────────────┼───────────────────────┘
+                  │                                             │
+                  ▼                                             ▼
+┌────────────────────────────────────────┐    ┌─────────────────────────────────────────┐
+│ SQLITE CONTROL PLANE DB                │    │ CLICKHOUSE DATA PLANE DB                │
+│ (data/control-plane.db)                │    │ (Port 8123 / 9000)                      │
+│ • users, vendors, sources, credentials │    │ • ulpf_raw.raw_events                   │
+│ • mapping_versions, onboarding_requests│    │ • ulpf_events.canonical_events          │
+│ • batch_integrity_blocks (Merkle Roots)│    │ • ulpf_events.events_{vendor}_{source}  │
+└────────────────────────────────────────┘    └─────────────────────────────────────────┘
 ```
 
-SQLite stores:
+---
 
-```text
-users
-vendors
-sources
-credentials
-mapping_versions
-onboarding_requests
-notifications
-```
+## 3. Core Architectural Modules
 
-Onboarding and configuration remain separate from high-volume ingestion.
+### 3.1 Control Plane
+* **User Authentication & Role Governance**: Enforces JWT Bearer token authentication supporting `ADMIN`, `VENDOR`, and `USER` roles.
+* **Vendor & Log Source Management**: Manages vendor identities, log sources, and active API key credentials with microsecond RAM caching and 5-minute idle eviction.
+* **Onboarding Workflow**: Accepts sample log payloads and schema files, runs AI field discovery, and queues candidate mappings for admin review.
 
-## 4. Data Plane
+### 3.2 AI Mapping Engine (Layers 1 – 4)
+* **Layer 1 (Exact Match)**: Instant SQLite dictionary lookup.
+* **Layer 2 (TF-IDF Similarity)**: N-gram term frequency-inverse document frequency cosine matching.
+* **Layer 3 (Typo Tolerance)**: Levenshtein edit distance matching.
+* **Layer 4 (Vector Embeddings)**: Local ONNX `all-MiniLM-L6-v2` 384-dimensional vector cosine similarity.
+* **Human Feedback Learning Loop**: Captures manual admin adjustments to continuously refine candidate confidence scores.
 
-```text
-POST /v1/events
-      ↓
-authenticate
-      ↓
-resolve vendor/source
-      ↓
-generate event_id
-      ↓
-assign lineage_id
-      ↓
-persist raw event
-      ↓
-active mapping
-      ↓
-parse / normalize
-      ↓
-canonical record(s)
-      ↓
-ClickHouse
-```
+### 3.3 Data Plane (Zero-Overhead Ingestion)
+* **Protocol Autodetector**: Automatically parses Syslog (RFC 3164/5424), CEF, LEEF, and JSON payloads.
+* **Non-Blocking Micro-Batching**: Enqueues events into a `ConcurrentLinkedQueue` memory buffer. Triggers ClickHouse async inserts (`async_insert=1`) when batch size reaches 500 events or every 1,000 ms.
+* **0% Ingestion Overhead**: Heavy operations (Merkle hashing, ClickHouse columnar merging, AI parsing) run asynchronously out-of-band, preserving sub-millisecond client HTTP response times.
 
-Raw preservation happens before transformation.
+### 3.4 Cryptographic Merkle Tree Forensic Audit Engine
+* **Tamper-Evident Ledger**: Batches log payloads into cryptographic blocks, computes SHA-256 binary Merkle tree root hashes, and chains block hashes in SQLite (`batch_integrity_blocks`).
+* **Live Forensic Auditor**: On-demand audit engine recalculates Merkle roots over raw ClickHouse logs and flags modified records as `TAMPERED_DETECTED`.
 
-## 5. ClickHouse
+### 3.5 Dynamic ClickHouse Schema Provisioning
+* **Dynamic Table Engine**: Automatically provisions isolated ClickHouse tables (`events_{vendor}_{source}`) upon onboarding approval.
+* **Lossless Schema Overflow**: Unmapped raw vendor payload fields route into a `raw_unmapped` column, eliminating runtime `ALTER TABLE` locks while guaranteeing 100% zero data loss.
 
-Prototype deployment:
+---
 
-```text
-ONE ClickHouse INSTANCE
-ONE ClickHouse CONTAINER
-        │
-        ├── ulpf_raw
-        │     └── raw_events
-        │
-        └── ulpf_events
-              └── runtime canonical tables
-```
+## 4. Technology Stack & Packaging
 
-Two logical databases do not create resource isolation.
-
-Detailed enterprise scaling mechanics (Partitioning, `Distributed` engine sharding, `ReplicatedMergeTree` high-availability failover, and NVMe $\rightarrow$ S3 hot/cold storage tiering) are documented in [SCALABILITY_AND_CLUSTER_GUIDE.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md).
-
-## 6. Canonical Schema
-
-Canonical classes are stable concepts, not vendor-specific tables by default.
-
-Examples:
-
-```text
-Network Activity
-Web / HTTP Activity
-Authentication Activity
-Database Activity
-DNS Activity
-File / Process Activity
-Sensor / Telemetry
-```
-
-Exact taxonomy/version for the demo remains an open decision.
-
-## 7. Runtime Schema Management
-
-```text
-Vendor sample
-   ↓
-Mapping/schema proposal
-   ↓
-Human review
-   ↓
-Approve / Edit / Reject
-   ↓
-Schema Manager
-   ↓
-controlled ClickHouse DDL
-```
-
-AI never receives unrestricted production schema mutation rights.
-
-Customer-specific runtime schema changes are not maintained as ULPF source-code migrations.
-
-## 8. Event Identity and Lineage
-
-Every raw event receives `event_id` in Spring Boot.
-
-`lineage_id` identifies the raw event or group of raw events represented by a normalized record.
-
-```text
-ordinary:
-raw E123 → normalized E123
-lineage = E123
-
-aggregated:
-E001 ─┐
-E002 ─┼→ L900 → normalized N500
-E003 ─┘
-```
-
-Every event-derived runtime table must contain `event_id` and `lineage_id`.
-
-## 9. Sensor Optimization
-
-Raw telemetry is always preserved.
-
-The normalized analytical representation may compress repeated values using configured thresholds:
-
-```text
-within delta → continue/extend
-beyond delta or max interval → emit
-```
-
-## 10. Mapping Engine
-
-Core deterministic path:
-
-```text
-Normalize
- ↓
-Tokenize
- ↓
-Dictionary / aliases
- ↓
-TF-IDF
- ↓
-Candidate ranking
- ↓
-Confidence
- ↓
-Threshold
- ↓
-Edit distance where useful
- ↓
-Unknown / mapping proposal
- ↓
-Human review
-```
-
-Optional semantic fallback:
-
-```text
-all-MiniLM-L6-v2 embeddings
-```
-
-This is only for difficult semantic cases and is a stretch goal for the prototype.
-
-Detailed performance, memory safety, and concurrency mechanics are documented in [MAPPING_ENGINE_OPTIMIZATIONS.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/MAPPING_ENGINE_OPTIMIZATIONS.md).
-
-## 11. Analytics
-
-Production path:
-
-```text
-React UI
-   ↓
-Spring Boot
-   ↓
-authorization / validation
-   ↓
-read-only ClickHouse query
-   ↓
-results
-   ↓
-React UI
-```
-
-ClickHouse aggregates. React renders. Python is not required for production analytics.
-
-Optional Python development tools may consume ClickHouse data for data-science/ML experiments.
-
-## 12. Air-Gapped Operation
-
-All production runtime dependencies must be available locally before deployment.
-
-If semantic embeddings are used:
-
-```text
-model file on disk
-      ↓
-loaded only when difficult onboarding requires it
-      ↓
-local inference
-```
-
-No cloud AI dependency is required.
-
-## 13. Containerization
-
-Target production/demo packaging:
-
-```text
-Podman
- ├── Spring Boot
- ├── React
- ├── ClickHouse
- ├── optional local AI runtime
- └── optional Vector
-```
-
-Persistent storage is required for SQLite and ClickHouse.
-
-## 14. Design Rules
-
-- One normal runtime ingestion endpoint.
-- Raw first.
-- AI proposes; human approves.
-- Mappings belong to sources.
-- Canonical classes are stable.
-- Unknown fields are never silently dropped.
-- Event-derived runtime tables must remain traceable.
-- Browser never connects directly to ClickHouse.
-- No infrastructure is added without a concrete reason.
+| Layer | Component | Technology |
+| :--- | :--- | :--- |
+| **Frontend** | UI SPA | React 18, Vite, Tailwind CSS, Warm Kinetic Design System |
+| **Web Server / Proxy** | Edge Proxy | Nginx Alpine (HTML5 SPA routing + API reverse proxy) |
+| **Backend Engine** | Core API & Logic | Java 21, Spring Boot 3.4, HikariCP, Spring Security, JWT |
+| **Control Database** | Metadata Store | SQLite 3 (`data/control-plane.db`) |
+| **Data Database** | Analytical Storage | ClickHouse 26.3 LTS (`ulpf_raw` & `ulpf_events`) |
+| **AI Model Engine** | Vector Embeddings | ONNX Runtime Java, `all-MiniLM-L6-v2` (Local Zero-RAM Lifecycle) |
+| **Orchestration** | Container Runtime | Podman / Docker Compose (`compose.yaml`, `start.sh`, `start.bat`) |

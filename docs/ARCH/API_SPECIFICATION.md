@@ -1,332 +1,262 @@
-# Universal Log Framework (ULPF)
-## API Specification — SIH Prototype
-
-> Prototype API baseline. Exact payload shapes are still open where the architecture has not fixed them.
-
-## 1. Principles
-
-- Spring Boot is the application/API boundary.
-- Normal runtime ingestion uses one endpoint: `POST /v1/events`.
-- Onboarding is a separate control-plane workflow.
-- Vendors do not connect directly to SQLite or ClickHouse.
-- Analytics is read-only and is mediated by Spring Boot.
-- `/v1` is the **ULPF API version**, not a vendor mapping version.
-
-## 2. Endpoint Summary
-
-| Endpoint | Purpose | Plane |
-|---|---|---|
-| `POST /v1/events` | Primary plug-and-play runtime ingestion | Data plane |
-| `POST /v1/onboard` | Submit onboarding/source/schema request | Control plane |
-| `POST /v1/login` | Prototype authentication | Control plane |
-| `GET /v1/notifications` | Load notifications for the logged-in user | Control plane |
-| `GET /v1/analytics` | Authorized read-only analytics access to ClickHouse | Analytics |
-| `GET /v1/analytics/export/parquet` | Local Parquet batch exporter for AI/ML data lakes | Analytics / Data plane |
-| `GET /v1/integrity/verify/{blockId}` | Cryptographic Merkle tree audit verification endpoint | Control / Integrity plane |
-
-## 3. `POST /v1/events`
-
-### Runtime flow
-
-```text
-Vendor/source
-   ↓
-POST /v1/events
-   ↓
-authenticate credential
-   ↓
-resolve vendor_id + source_id
-   ↓
-generate event_id
-   ↓
-assign lineage_id
-   ↓
-persist complete raw event
-   ↓
-resolve active mapping version
-   ↓
-parse / map / normalize
-   ↓
-write canonical record(s)
-```
-
-### Required rules
-
-1. Authenticate the ingestion credential.
-2. Resolve the vendor and source.
-3. Generate `event_id` in the application.
-4. Assign `lineage_id` before processing.
-5. Preserve the complete original event before transformation.
-6. Resolve the approved mapping for the source.
-7. Normalize and store canonical output.
-8. Never delete the raw event because processing fails.
-9. Carry the same `event_id` into one-to-one normalized records.
-10. A single incoming event may create multiple canonical records; lineage must remain traceable.
-
-### Open
-
-- Exact JSON payload
-- Batch request support
-- Duplicate/idempotency semantics for retries
-
-## 4. `POST /v1/onboard`
-
-Starts a new vendor/source/schema onboarding request.
-
-Supported request types:
-
-```text
-NEW_VENDOR
-NEW_SOURCE
-SCHEMA_UPDATE
-```
-
-Conceptual flow:
-
-```text
-submit sample/schema
-   ↓
-SQLite onboarding request
-   ↓
-mapping analysis
-   ↓
-AI proposal
-   ↓
-HUMAN_REVIEW
-   ↓
-approve / edit / reject
-```
-
-Exact multipart/request format is TBD.
-
-## 5. `POST /v1/login`
-
-Prototype authentication endpoint.
-
-Passwords are never stored in plaintext. SQLite stores a password hash.
-
-Exact token/session mechanism remains an implementation decision.
-
-## 6. `GET /v1/notifications`
-
-Returns notifications belonging to the authenticated user, including onboarding and schema-review outcomes.
-
-Exact response shape is TBD.
-
-## 7. `GET /v1/analytics`
-
-Analytics must follow:
-
-```text
-React UI
-   ↓
-Spring Boot
-   ↓
-authorization / validation
-   ↓
-read-only ClickHouse query
-   ↓
-results
-   ↓
-React UI
-```
-
-The browser never connects directly to ClickHouse.
-
-Minimum protections:
-
-- server-side authentication/authorization
-- read-only query enforcement
-- allowed-table/column controls where required
-- query timeout
-- result-size limits
-
-For chart rendering, ClickHouse performs aggregation; React receives compact results.
-
-## 8. Analytics Query Modes
-
-### Predefined analytics
-
-Backend-defined templates may expose:
-
-```text
-table
-column/metric
-aggregation
-filters
-time range
-```
-
-Candidate operations:
-
-```text
-COUNT
-SUM
-AVG
-MIN
-MAX
-GROUP BY
-time-bucketing
-```
-
-### Authorized SQL
-
-An advanced SQL editor may be provided for authorized users. The flow remains:
-
-```text
-SQL editor
- ↓
-Spring Boot
- ↓
-RBAC / authorization
- ↓
-read-only validation
- ↓
-limits / timeout
- ↓
-ClickHouse
- ↓
-results
-```
-
-## 9. API Versioning
-
-`/v1/` is independent from `mapping_versions.version`.
-
-Example:
-
-```text
-API: /v1/events
-Source A mapping: v7
-```
-
-## 10. Error Categories
-
-The final API should represent at least:
-
-- authentication failure
-- invalid/revoked credential
-- unauthorized operation
-- malformed event
-- unknown source
-- inactive source/vendor
-- missing mapping
-- schema operation failure
-- analytics query rejection
-- analytics timeout
-- validation failure
-
-Exact error-object structure is TBD.
-
-## 11. `GET /v1/integrity/verify/{blockId}`
-
-Cryptographic Merkle Tree audit verification endpoint. Re-computes SHA-256 event hashes for raw logs in ClickHouse corresponding to the specified `blockId`, constructs the binary Merkle root, and compares it against SQLite's persisted root.
-
-### Response format:
-```json
-{
-  "blockId": "blk_9012830192",
-  "sourceId": "src_fw_001",
-  "eventCount": 100,
-  "persistedMerkleRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "calculatedMerkleRoot": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "status": "VERIFIED_INTACT",
-  "verifiedAt": "2026-09-08T17:20:00"
-}
-```
-
-## 12. `GET /v1/analytics/export/parquet`
-
-Automated batch exporter endpoint dumping ClickHouse log chunks into Snappy-compressed binary Apache Parquet files for offline AI/ML model training pipelines and air-gapped data lakes.
-
-### Query Parameters:
-- `table` (optional): Target ClickHouse table name (default: `raw_events`)
-- `vendorId` (optional): Filter logs by vendor identifier
-- `sourceId` (optional): Filter logs by source identifier
-- `from` (optional): Start timestamp ISO string
-- `to` (optional): End timestamp ISO string
-- `limit` (optional): Max row limit (default: `10000`, max: `500000`)
-
-### Response Headers:
-- `Content-Type`: `application/vnd.apache.parquet`
-- `Content-Disposition`: `attachment; filename="ulpf_export_<vendorId>_<timestamp>.parquet"`
-
-## 13. `GET /v1/analytics/search`
-
-Full-text raw log substring and regex search engine backed by ClickHouse `tokenbf_v1` Bloom filter skip indexing over ZSTD compressed log payloads.
-
-### Query Parameters:
-- `q` (required): Substring term or regular expression pattern
-- `searchType` (optional): `CONTAINS` (case-insensitive substring search) or `REGEX` (ClickHouse `match()` regex search)
-- `vendorId` (optional): Filter logs by vendor identifier
-- `sourceId` (optional): Filter logs by source identifier
-- `limit` (optional): Max row limit (default: `200`, max: `5000`)
-
-### Response Format:
-```json
-{
-  "query": "error",
-  "totalMatches": 42,
-  "executionTimeMs": 14,
-  "events": [
-    {
-      "eventId": "evt_8941a20",
-      "lineageId": "lin_001",
-      "vendorId": "cisco",
-      "sourceId": "fw_east",
-      "mappingVersion": 1,
-      "receivedAt": "2026-09-09T10:15:00",
-      "rawPayload": "{\"level\":\"error\",\"msg\":\"Connection refused\"}"
-    }
-  ]
-}
-```
-
-## 14. `GET /v1/analytics/timeseries`
-
-Time-series histogram aggregation endpoint calculating total log throughput and error spike volume per interval for Grafana-style dashboard visual rendering.
-
-### Query Parameters:
-- `q` (optional): Substring term to filter histogram counts
-- `interval` (optional): Time bucket interval (e.g. `5m`, `1h`)
-
-### Response Format:
-```json
-[
+# Universal Log Processing Framework (ULPF)
+## API Specification — Production Reference
+
+---
+
+## 1. Core Principles
+
+- **Spring Boot API Boundary**: Spring Boot mediates all HTTP traffic between clients, control plane databases (SQLite), and high-throughput data plane databases (ClickHouse).
+- **Zero Ingestion Overhead**: The primary runtime ingestion endpoint (`POST /v1/events`) uses micro-batching and non-blocking ClickHouse async inserts.
+- **Isolated Control & Data Planes**: Vendor onboarding and administration occur out-of-band on the control plane without degrading ingestion performance.
+- **Role-Based Access Control (RBAC)**: Enforces `ADMIN`, `VENDOR`, and `USER` roles via JWT Bearer authentication headers.
+- **Read-Only Analytics Mediation**: Browsers never execute direct queries against ClickHouse; all analytical queries are validated, sanitized, and authorized by Spring Boot.
+
+---
+
+## 2. Endpoint Summary Matrix
+
+| Endpoint | Method | Role | Description |
+| :--- | :--- | :--- | :--- |
+| `/v1/auth/signup` | `POST` | Public | Register a new user (`ADMIN`, `VENDOR`, `USER`) |
+| `/v1/auth/login` | `POST` | Public | Authenticate user and issue JWT Bearer token |
+| `/v1/onboard/{username}` | `POST` | `VENDOR`/`ADMIN` | Submit sample log file and schema for AI field mapping |
+| `/v1/onboard/update` | `POST` | `VENDOR`/`ADMIN` | Update an existing log source mapping schema |
+| `/v1/admin/onboard` | `GET` | `ADMIN` | List all pending vendor onboarding requests |
+| `/v1/admin/onboard/{id}`| `PUT` | `ADMIN` | Approve or reject onboarding request candidate mapping |
+| `/v1/admin/clickhouse/schemas` | `GET` | `ADMIN` | Inspect active ClickHouse database and table schemas |
+| `/v1/events` | `POST` | `VENDOR`/`ADMIN` | Primary plug-and-play high-throughput log event ingestion |
+| `/v1/notifications` | `GET` | Authenticated | Fetch notifications and issued API keys for logged-in user |
+| `/v1/notifications/{id}/read` | `PUT` | Authenticated | Mark a notification item as read |
+| `/v1/analytics` | `GET` | `ADMIN` | Read-only ClickHouse metrics aggregation query execution |
+| `/v1/analytics/schemas` | `GET` | `ADMIN` | Get ClickHouse database catalog tables and dynamic columns |
+| `/v1/analytics/search` | `GET` | `ADMIN` | Full-text substring & regex raw log search with Bloom filter |
+| `/v1/analytics/timeseries` | `GET` | `ADMIN` | Time-series histogram throughput & error spike aggregation |
+| `/v1/analytics/import/file` | `POST` | `ADMIN` | Bulk upload `.json`, `.gz`, `.log`, or `.csv` files into ClickHouse |
+| `/v1/analytics/export/parquet` | `GET` | `ADMIN` | Export ClickHouse logs into Snappy-compressed Apache Parquet |
+| `/v1/integrity/audit` | `POST` | `ADMIN` | Execute live forensic Merkle tree cryptographic audit |
+| `/v1/integrity/verify/{blockId}` | `GET` | Authenticated | Re-verify cryptographic Merkle root hash for specific block |
+
+---
+
+## 3. Detailed Endpoint Specifications
+
+### 3.1 Authentication
+
+#### `POST /v1/auth/signup`
+Registers a new system user.
+
+* **Request Body**:
+  ```json
   {
-    "timestamp": "2026-09-09T10:00:00Z",
-    "totalCount": 450,
-    "errorCount": 12
-  },
-  {
-    "timestamp": "2026-09-09T10:05:00Z",
-    "totalCount": 510,
-    "errorCount": 48
+    "username": "crowdstrike_admin",
+    "password": "SecurePassword123!",
+    "role": "VENDOR"
   }
-]
-```
+  ```
+* **Response (200 OK)**:
+  ```json
+  {
+    "message": "User registered successfully",
+    "userId": "usr_9012830192"
+  }
+  ```
 
-## 15. `POST /v1/analytics/import/file`
+#### `POST /v1/auth/login`
+Authenticates credentials and returns a JWT token.
 
-Bulk log file ingestion endpoint supporting direct upload of legacy JSON, GZIP compressed (`.gz`), raw log (`.log`), or CSV files directly into ClickHouse's `ulpf_raw.raw_events` table for accelerated enterprise data migration.
+* **Request Body**:
+  ```json
+  {
+    "username": "crowdstrike_admin",
+    "password": "SecurePassword123!"
+  }
+  ```
+* **Response (200 OK)**:
+  ```json
+  {
+    "token": "eyJhbGciOiJIUzI1NiJ9...",
+    "username": "crowdstrike_admin",
+    "role": "VENDOR",
+    "userId": "usr_9012830192"
+  }
+  ```
 
-### Request Format:
-`multipart/form-data`
-- `file` (required): Uploaded log file binary byte stream (`.json`, `.gz`, `.log`, `.csv`)
-- `vendorId` (optional): Override vendor identifier (default: `bulk_import`)
-- `sourceId` (optional): Override source identifier (default: `file_upload`)
+---
 
-### Response Format:
+### 3.2 Vendor Log Source Onboarding
+
+#### `POST /v1/onboard/{username}`
+Uploads sample logs and schema files for AI field mapping discovery.
+
+* **Content-Type**: `multipart/form-data`
+* **Parameters**:
+  - `vendorName` (string, required): Organization name (e.g. `CrowdStrike`)
+  - `sourceName` (string, required): Log source identifier (e.g. `Falcon_EDR`)
+  - `sourceType` (string, required): `SYSLOG`, `JSON`, `CEF`, `LEEF`, `CSV`
+  - `sampleLogFile` (file, required): Raw log sample payload (`.log`, `.json`, `.txt`, `.csv`)
+  - `schemaFile` (file, optional): Vendor schema specification file
+* **Response (201 Created)**:
+  ```json
+  {
+    "requestId": "req_89a12c4b",
+    "status": "SUBMITTED",
+    "message": "Onboarding request submitted successfully. AI candidate mapping generated."
+  }
+  ```
+
+---
+
+### 3.3 Admin Governance
+
+#### `GET /v1/admin/onboard`
+Lists all pending and historical vendor onboarding requests.
+
+* **Headers**: `Authorization: Bearer <token>`
+* **Response (200 OK)**:
+  ```json
+  {
+    "requests": [
+      {
+        "requestId": "req_89a12c4b",
+        "vendorName": "CrowdStrike",
+        "sourceName": "Falcon_EDR",
+        "sourceType": "SYSLOG",
+        "status": "SUBMITTED",
+        "mappingJson": "{\"src_ip\":\"source_ip\",\"timstamp\":\"timestamp\"}",
+        "createdAt": "2026-09-12T10:00:00"
+      }
+    ]
+  }
+  ```
+
+#### `PUT /v1/admin/onboard/{requestId}`
+Approves or rejects an AI-proposed schema mapping candidate.
+
+* **Request Body**:
+  ```json
+  {
+    "decision": "APPROVED"
+  }
+  ```
+* **Response (200 OK)**:
+  ```json
+  {
+    "requestId": "req_89a12c4b",
+    "status": "APPROVED",
+    "apiKey": "ulpf_live_9f82a1b73e4c5d6e7f8a9b0c1d2e3f4a",
+    "message": "Onboarding request approved. Dynamic ClickHouse table provisioned."
+  }
+  ```
+
+---
+
+### 3.4 Runtime Ingestion (Data Plane)
+
+#### `POST /v1/events`
+High-throughput ingestion endpoint for log streaming.
+
+* **Headers**:
+  - `X-API-Key: ulpf_live_9f82a1b73e4c5d6e7f8a9b0c1d2e3f4a`
+  - `Content-Type: application/json` (or plain text for Syslog/CEF)
+* **Request Body**:
+  ```json
+  {
+    "timestamp": "2026-09-12T10:15:00Z",
+    "src_ip": "192.168.1.50",
+    "dst_ip": "10.0.0.1",
+    "action": "ALLOW",
+    "status_code": 200
+  }
+  ```
+* **Response (202 Accepted)**:
+  ```json
+  {
+    "eventId": "evt_019284a1-89bc-4a12",
+    "status": "ACCEPTED",
+    "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+  }
+  ```
+
+---
+
+### 3.5 ClickHouse Analytics & Observability
+
+#### `GET /v1/analytics`
+Executes read-only aggregation queries against ClickHouse log tables.
+
+* **Query Parameters**:
+  - `table` (required): Target table (e.g. `canonical_events`, `events_crowdstrike_falcon_edr`)
+  - `column` (required): Target column name (e.g. `source_ip`, `status_code`)
+  - `aggregation` (required): `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`
+* **Response (200 OK)**:
+  ```json
+  {
+    "table": "canonical_events",
+    "column": "source_ip",
+    "aggregation": "COUNT",
+    "result": 14285901,
+    "executionTimeMs": 8
+  }
+  ```
+
+#### `GET /v1/analytics/schemas`
+Returns live ClickHouse database tables and column definitions.
+
+* **Response (200 OK)**:
+  ```json
+  {
+    "tables": [
+      "canonical_events",
+      "raw_events",
+      "events_crowdstrike_falcon_edr"
+    ],
+    "schemas": {
+      "canonical_events": [
+        {"name": "event_id", "type": "String"},
+        {"name": "source_ip", "type": "String"},
+        {"name": "timestamp", "type": "DateTime64(3)"}
+      ]
+    }
+  }
+  ```
+
+#### `GET /v1/analytics/export/parquet`
+Exports log dataset chunks as Snappy-compressed binary Apache Parquet files.
+
+* **Query Parameters**: `table`, `vendorId`, `sourceId`, `from`, `to`, `limit`
+* **Response Headers**: `Content-Type: application/vnd.apache.parquet`
+
+---
+
+### 3.6 Forensic Integrity & Audit
+
+#### `POST /v1/integrity/audit`
+Executes full-scale Merkle tree cryptographic audit across ClickHouse raw log batches.
+
+* **Response (200 OK)**:
+  ```json
+  {
+    "status": "SUCCESS",
+    "blocksAudited": 134,
+    "verifiedCount": 134,
+    "tamperedCount": 0,
+    "integrityScore": "100%",
+    "auditedAt": "2026-09-12T10:30:00"
+  }
+  ```
+
+---
+
+## 4. Error Response Structure
+
+All API errors return standard HTTP error status codes and JSON error objects:
+
 ```json
 {
-  "status": "SUCCESS",
-  "fileName": "legacy_logs_2026.json.gz",
-  "importedCount": 12500,
-  "executionTimeMs": 142,
-  "vendorId": "cisco",
-  "sourceId": "fw_legacy"
+  "timestamp": "2026-09-12T10:35:00",
+  "status": 403,
+  "error": "Forbidden",
+  "message": "Invalid or revoked API key credential",
+  "path": "/v1/events"
 }
 ```
-
-
-
