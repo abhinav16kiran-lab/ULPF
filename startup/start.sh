@@ -2,6 +2,9 @@
 
 set -e
 
+# Ensure we run from the project root directory
+cd "$(dirname "$0")/.."
+
 echo "Starting ULPF Platform Environment..."
 
 echo "Checking storage directories..."

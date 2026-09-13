@@ -2,6 +2,9 @@
 
 set -e
 
+# Ensure we run from the project root directory
+cd "$(dirname "$0")/.."
+
 echo "Stopping ULPF Platform Environment..."
 
 if command -v podman-compose &> /dev/null; then

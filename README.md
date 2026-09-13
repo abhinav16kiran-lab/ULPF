@@ -51,14 +51,14 @@ Run the automated platform launcher for your operating system:
 
 * **Linux / macOS**:
   ```bash
-  chmod +x start.sh
-  ./start.sh              # Fast start (uses cached layers if unchanged)
-  ./start.sh --no-cache   # Clean start (forces fresh container rebuild)
+  chmod +x startup/start.sh
+  ./startup/start.sh              # Fast start (uses cached layers if unchanged)
+  ./startup/start.sh --no-cache   # Clean start (forces fresh container rebuild)
   ```
 
 * **Windows (Command Prompt / PowerShell)**:
   ```cmd
-  start.bat
+  startup\start.bat
   ```
 
 #### What `start.sh` & `start.bat` do automatically:
@@ -76,8 +76,8 @@ Run the automated platform launcher for your operating system:
 
 #### Stopping All Containers (One Command):
 To safely shut down and stop all platform services at once:
-* **Linux / macOS**: `chmod +x stop.sh && ./stop.sh`
-* **Windows**: `stop.bat`
+* **Linux / macOS**: `chmod +x startup/stop.sh && ./startup/stop.sh`
+* **Windows**: `startup\stop.bat`
 * **Or via Docker / Podman**: `docker compose down`
 
 ---

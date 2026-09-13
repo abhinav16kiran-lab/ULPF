@@ -5,6 +5,9 @@ echo ==========================================================================
 echo Starting ULPF Platform Environment...
 echo ==========================================================================
 
+REM Ensure we run from the project root directory
+cd /d "%~dp0\.."
+
 REM Create required local storage directories
 if not exist "core-engine\data" (
     echo Creating core-engine\data directory...

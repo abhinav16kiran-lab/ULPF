@@ -9,8 +9,11 @@ This document details the exact repository structure and responsibilities for ev
 ```text
 ULPF/
 ├── compose.yaml          # Master Podman/Docker Compose orchestrator
-├── start.sh              # Single-command Linux/macOS startup script with health checks
-├── start.bat             # Single-command Windows startup script
+├── startup/              # Platform startup and shutdown scripts
+│   ├── start.sh          # Single-command Linux/macOS startup script with health checks
+│   ├── start.bat         # Single-command Windows startup script
+│   ├── stop.sh           # Linux/macOS shutdown script
+│   └── stop.bat          # Windows shutdown script
 ├── README.md             # Primary project overview & quickstart documentation
 ├── MIGRATION.md          # Enterprise log platform migration guide
 ├── core-engine/          # Java Spring Boot backend engine
