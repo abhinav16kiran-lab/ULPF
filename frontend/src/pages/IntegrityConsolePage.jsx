@@ -8,6 +8,8 @@ function IntegrityConsolePage() {
   const [error, setError] = useState(null);
   const [verifyingBlockId, setVerifyingBlockId] = useState(null);
   const [verificationResults, setVerificationResults] = useState({});
+  const [bulkVerifying, setBulkVerifying] = useState(false);
+  const [bulkResults, setBulkResults] = useState(null);
 
   const fetchBlocks = useCallback(async () => {
     setLoading(true);
@@ -29,6 +31,28 @@ function IntegrityConsolePage() {
   useEffect(() => {
     fetchBlocks();
   }, [fetchBlocks]);
+
+  async function handleVerifyAll() {
+    setBulkVerifying(true);
+    setBulkResults(null);
+    try {
+      const response = await client.post("/v1/integrity/verify-all");
+      setBulkResults(response.data);
+      if (response.data.tamperedBlocks) {
+        setVerificationResults((prev) => {
+          const updated = { ...prev };
+          response.data.tamperedBlocks.forEach((b) => {
+            updated[b.blockId] = b;
+          });
+          return updated;
+        });
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setBulkVerifying(false);
+    }
+  }
 
   async function handleVerifyBlock(blockId) {
     setVerifyingBlockId(blockId);
@@ -56,20 +80,37 @@ function IntegrityConsolePage() {
       <div style={{ padding: "0 20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
           <h2>🔐 Merkle-Tree Batch Tamper-Evidence Audit Console</h2>
-          <button
-            onClick={fetchBlocks}
-            style={{
-              background: "#0f766e",
-              color: "white",
-              border: "none",
-              padding: "8px 16px",
-              borderRadius: "4px",
-              fontWeight: "600",
-              cursor: "pointer"
-            }}
-          >
-            🔄 Refresh Blocks
-          </button>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button
+              onClick={handleVerifyAll}
+              disabled={bulkVerifying}
+              style={{
+                background: bulkVerifying ? "#6c757d" : "#0d6efd",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                fontWeight: "600",
+                cursor: bulkVerifying ? "not-allowed" : "pointer"
+              }}
+            >
+              {bulkVerifying ? "Running Bulk Audit..." : "🛡️ Verify All Blocks"}
+            </button>
+            <button
+              onClick={fetchBlocks}
+              style={{
+                background: "#0f766e",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "4px",
+                fontWeight: "600",
+                cursor: "pointer"
+              }}
+            >
+              🔄 Refresh Blocks
+            </button>
+          </div>
         </div>
 
         {/* Informational Banner */}
@@ -89,6 +130,30 @@ function IntegrityConsolePage() {
 
         {loading && <p>Loading batch integrity blocks…</p>}
         {error && <p style={{ color: "red" }}>{error}</p>}
+
+        {bulkResults && (
+          <div
+            style={{
+              background: bulkResults.tamperedCount > 0 ? "#f8d7da" : "#d1e7dd",
+              borderLeft: `5px solid ${bulkResults.tamperedCount > 0 ? "#dc3545" : "#198754"}`,
+              padding: "16px",
+              borderRadius: "6px",
+              marginBottom: "20px",
+              color: bulkResults.tamperedCount > 0 ? "#842029" : "#0f5132",
+            }}
+          >
+            <h3 style={{ margin: "0 0 10px 0" }}>Bulk Verification Complete</h3>
+            <p style={{ margin: "0 0 5px 0" }}>
+              Total Blocks Checked: <strong>{bulkResults.totalBlocksChecked}</strong>
+            </p>
+            <p style={{ margin: "0 0 5px 0" }}>
+              Valid Blocks: <strong>{bulkResults.validCount}</strong>
+            </p>
+            <p style={{ margin: "0" }}>
+              Tampered Blocks Detected: <strong>{bulkResults.tamperedCount}</strong>
+            </p>
+          </div>
+        )}
 
         {!loading && !error && blocks.length === 0 && (
           <div style={{ background: "#f8f9fa", padding: "20px", borderRadius: "6px", textAlign: "center" }}>
@@ -171,6 +236,16 @@ function IntegrityConsolePage() {
                       {verification.computedMerkleRoot && (
                         <div style={{ marginTop: "4px", fontFamily: "monospace" }}>
                           Computed Root: {verification.computedMerkleRoot}
+                        </div>
+                      )}
+                      {verification.databaseTable && (
+                        <div style={{ marginTop: "10px", padding: "8px", background: "rgba(255,255,255,0.5)", borderRadius: "4px" }}>
+                          <strong>Traceability Data:</strong>
+                          <ul style={{ margin: "5px 0 0 0", paddingLeft: "20px", fontSize: "0.95em" }}>
+                            <li>Database Table: <code>{verification.databaseTable}</code></li>
+                            <li>Start Event ID: <code>{verification.firstEventId}</code></li>
+                            <li>End Event ID: <code>{verification.lastEventId}</code></li>
+                          </ul>
                         </div>
                       )}
                     </div>

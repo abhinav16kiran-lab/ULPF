@@ -33,8 +33,9 @@
 | `/v1/analytics/timeseries` | `GET` | `ADMIN` | Time-series histogram throughput & error spike aggregation |
 | `/v1/analytics/import/file` | `POST` | `ADMIN` | Bulk upload `.json`, `.gz`, `.log`, or `.csv` files into ClickHouse |
 | `/v1/analytics/export/parquet` | `GET` | `ADMIN` | Export ClickHouse logs into Snappy-compressed Apache Parquet |
-| `/v1/integrity/audit` | `POST` | `ADMIN` | Execute live forensic Merkle tree cryptographic audit |
-| `/v1/integrity/verify/{blockId}` | `GET` | Authenticated | Re-verify cryptographic Merkle root hash for specific block |
+| `/v1/integrity/blocks` | `GET` | Authenticated | List all cryptographic batch integrity blocks |
+| `/v1/integrity/verify/{blockId}` | `POST` | Authenticated | Re-verify cryptographic Merkle root hash for specific block |
+| `/v1/integrity/verify-all` | `POST` | `ADMIN` | Execute live forensic Merkle tree cryptographic bulk audit |
 
 ---
 
@@ -230,18 +231,39 @@ Exports log dataset chunks as Snappy-compressed binary Apache Parquet files.
 
 ### 3.6 Forensic Integrity & Audit
 
-#### `POST /v1/integrity/audit`
-Executes full-scale Merkle tree cryptographic audit across ClickHouse raw log batches.
+#### `GET /v1/integrity/blocks`
+Lists all batch integrity blocks, optionally filtered by `sourceId`.
+
+#### `POST /v1/integrity/verify/{blockId}`
+Re-verifies a single integrity block against ClickHouse and returns full deterministic traceability data.
 
 * **Response (200 OK)**:
   ```json
   {
-    "status": "SUCCESS",
-    "blocksAudited": 134,
-    "verifiedCount": 134,
+    "blockId": 12,
+    "sourceId": "src_fw_1",
+    "firstEventId": "evt_001",
+    "lastEventId": "evt_050",
+    "databaseTable": "ulpf_raw.raw_events",
+    "status": "VALID",
+    "storedMerkleRoot": "abc123def...",
+    "computedMerkleRoot": "abc123def...",
+    "eventCount": 50,
+    "isTampered": false,
+    "message": "Cryptographic Merkle Proof verified successfully! Log payloads match 100%."
+  }
+  ```
+
+#### `POST /v1/integrity/verify-all`
+Executes full-scale Merkle tree cryptographic audit across ClickHouse raw log batches using `.parallelStream()`.
+
+* **Response (200 OK)**:
+  ```json
+  {
+    "totalBlocksChecked": 134,
+    "validCount": 134,
     "tamperedCount": 0,
-    "integrityScore": "100%",
-    "auditedAt": "2026-09-12T10:30:00"
+    "tamperedBlocks": []
   }
   ```
 

@@ -49,4 +49,10 @@ public class IntegrityController {
         }
         return ResponseEntity.ok(result);
     }
+
+    @PostMapping("/verify-all")
+    public ResponseEntity<?> verifyAllBlocks() {
+        BatchIntegrityService.BulkVerificationResult result = batchIntegrityService.verifyAllBlocks();
+        return ResponseEntity.ok(result);
+    }
 }

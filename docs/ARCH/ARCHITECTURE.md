@@ -67,7 +67,8 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 
 ### 3.4 Cryptographic Merkle Tree Forensic Audit Engine
 * **Tamper-Evident Ledger**: Batches log payloads into cryptographic blocks, computes SHA-256 binary Merkle tree root hashes, and chains block hashes in SQLite (`batch_integrity_blocks`).
-* **Live Forensic Auditor**: On-demand audit engine recalculates Merkle roots over raw ClickHouse logs and flags modified records as `TAMPERED_DETECTED`.
+* **Full-Record Traceability Hashing**: The Merkle tree leaf node for each log record is a deterministic hash of its full immutable identity (`event_id` + `vendor_id` + `source_id` + `lineage_id` + `raw_payload`), guaranteeing that both the content and origin metadata cannot be forged.
+* **Bulk Forensic Auditor**: A high-speed, parallelized server-side audit engine recalculates Merkle roots over raw ClickHouse logs. Upon detecting a corrupted block, it returns exact deterministic traceability parameters (database table bounds) for root cause analysis.
 
 ### 3.5 Dynamic ClickHouse Schema Provisioning
 * **Dynamic Table Engine**: Automatically provisions isolated ClickHouse tables (`events_{vendor}_{source}`) upon onboarding approval.
