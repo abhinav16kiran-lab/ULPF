@@ -8,8 +8,8 @@ function LoginPage() {
   const navigate = useNavigate();
 
   // Form & Role State
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("Admin@12345");
   const [role, setRole] = useState("ADMIN");
   const [rememberMe, setRememberMe] = useState(true);
 
@@ -100,6 +100,28 @@ function LoginPage() {
           <div className="auth-header-text">
             <h2>Welcome Back</h2>
             <p>Sign in to access your logs, pipelines, and telemetry in real-time.</p>
+          </div>
+
+          {/* Development Notice */}
+          <div style={{
+            background: "#fff3cd",
+            border: "1px solid #ffe69c",
+            color: "#856404",
+            padding: "10px 14px",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontWeight: 500,
+            marginBottom: "20px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Note: Platform is currently in active development phase.
           </div>
 
           {/* Error Notice if any */}
