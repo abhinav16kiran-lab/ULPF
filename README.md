@@ -1,11 +1,23 @@
 # Universal Log Processing Framework (ULPF)
 
 [![Build & Test](https://github.com/abhinav16kiran-lab/ULPF/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/abhinav16kiran-lab/ULPF/actions)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License: CRL-1.0](https://img.shields.io/badge/License-CRL_1.0-red.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-21_LTS-orange.svg)](https://www.oracle.com/java/)
 [![Spring Boot](https://img.shields.io/badge/Spring_Boot-4.1.0-green.svg)](https://spring.io/projects/spring-boot)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-26.3_LTS-yellow.svg)](https://clickhouse.com/)
 [![React](https://img.shields.io/badge/React-19.0-cyan.svg)](https://react.dev/)
+
+## ⚠️ License & Source Availability
+
+**IMPORTANT NOTICE:** ULPF is a **source-available project, not an open-source project**.
+
+- This repository is publicly accessible for **competition evaluation, judging, academic review, and legitimate technical inspection**.
+- Public availability on GitHub does **not** constitute a release under an OSI-approved open-source license.
+- The Competitor's Right License (CRL-1.0) grants only the permissions expressly stated in the license.
+- Unauthorized commercial use, redistribution, sublicensing, incorporation into other products or services, or creation and distribution of derivative works is prohibited.
+- All rights not expressly granted under CRL-1.0 are reserved by the copyright holder(s).
+- See the complete [LICENSE](LICENSE) file for the exact permissions and restrictions.
+---
 
 **ULPF (Universal Log Processing Framework)** is an enterprise-grade, plug-and-play log ingestion, normalization, and analytical query platform designed to eliminate schema integration friction across multi-vendor infrastructure.
 
@@ -344,5 +356,8 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ## 7. License & Authors
 
-This project is licensed under the [Apache License, Version 2.0](LICENSE).  
+This project is licensed under the custom **Competitor's Right License (CRL-1.0)**.
+It is a source-available project strictly for competition evaluation, and is **not** open-source.  
+See the [LICENSE](LICENSE) file for full details and restrictions.
+
 See [AUTHORS](AUTHORS) for full author details.
