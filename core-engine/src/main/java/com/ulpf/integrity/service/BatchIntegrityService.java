@@ -42,12 +42,22 @@ public class BatchIntegrityService {
     public record VerificationResult(
             Long blockId,
             String sourceId,
+            String firstEventId,
+            String lastEventId,
+            String databaseTable,
             String status,
             String storedMerkleRoot,
             String computedMerkleRoot,
             Integer eventCount,
             boolean isTampered,
             String message) {
+    }
+
+    public record BulkVerificationResult(
+            int totalBlocksChecked,
+            int validCount,
+            int tamperedCount,
+            List<VerificationResult> tamperedBlocks) {
     }
 
     /**
@@ -77,9 +87,15 @@ public class BatchIntegrityService {
             sourceBatch.sort(java.util.Comparator.comparing(RawEventRecord::receivedAt, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
                     .thenComparing(RawEventRecord::eventId, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
 
-            // 1. Calculate SHA-256 for each raw payload
+            // 1. Calculate SHA-256 for each full raw event record
             List<String> leafHashes = sourceBatch.stream()
-                    .map(r -> MerkleTreeCalculator.hashSha256(r.rawPayload()))
+                    .map(r -> MerkleTreeCalculator.hashSha256(
+                            (r.eventId() != null ? r.eventId() : "") +
+                            (r.vendorId() != null ? r.vendorId() : "") +
+                            (r.sourceId() != null ? r.sourceId() : "") +
+                            (r.lineageId() != null ? r.lineageId() : "") +
+                            (r.rawPayload() != null ? r.rawPayload() : "")
+                    ))
                     .collect(Collectors.toList());
 
             // 2. Compute Merkle Root
@@ -121,18 +137,21 @@ public class BatchIntegrityService {
     public VerificationResult verifyBlockIntegrity(Long blockId) {
         Optional<IntegrityBlockRecord> blockOpt = integrityRepository.findBlockById(blockId);
         if (blockOpt.isEmpty()) {
-            return new VerificationResult(blockId, null, "NOT_FOUND", null, null, 0, true,
+            return new VerificationResult(blockId, null, null, null, null, "NOT_FOUND", null, null, 0, true,
                     "Integrity block #" + blockId + " not found");
         }
 
         IntegrityBlockRecord block = blockOpt.get();
 
-        List<String> rawPayloads = fetchRawPayloadsFromClickHouse(block);
+        List<RawEventRecord> rawRecords = fetchRawEventRecordsFromClickHouse(block);
 
-        if (rawPayloads.isEmpty()) {
+        if (rawRecords.isEmpty()) {
             return new VerificationResult(
                     blockId,
                     block.sourceId(),
+                    block.firstEventId(),
+                    block.lastEventId(),
+                    "ulpf_raw.raw_events",
                     "NO_DATA",
                     block.merkleRoot(),
                     null,
@@ -141,8 +160,14 @@ public class BatchIntegrityService {
                     "No raw events found in ClickHouse storage for block verification");
         }
 
-        List<String> leafHashes = rawPayloads.stream()
-                .map(MerkleTreeCalculator::hashSha256)
+        List<String> leafHashes = rawRecords.stream()
+                .map(r -> MerkleTreeCalculator.hashSha256(
+                        (r.eventId() != null ? r.eventId() : "") +
+                        (r.vendorId() != null ? r.vendorId() : "") +
+                        (r.sourceId() != null ? r.sourceId() : "") +
+                        (r.lineageId() != null ? r.lineageId() : "") +
+                        (r.rawPayload() != null ? r.rawPayload() : "")
+                ))
                 .collect(Collectors.toList());
 
         String computedMerkleRoot = merkleTreeCalculator.calculateMerkleRoot(leafHashes);
@@ -153,26 +178,32 @@ public class BatchIntegrityService {
             return new VerificationResult(
                     blockId,
                     block.sourceId(),
+                    block.firstEventId(),
+                    block.lastEventId(),
+                    "ulpf_raw.raw_events",
                     "VALID",
                     block.merkleRoot(),
                     computedMerkleRoot,
-                    rawPayloads.size(),
+                    rawRecords.size(),
                     false,
                     "Cryptographic Merkle Proof verified successfully! Log payloads match 100%.");
         } else {
             return new VerificationResult(
                     blockId,
                     block.sourceId(),
+                    block.firstEventId(),
+                    block.lastEventId(),
+                    "ulpf_raw.raw_events",
                     "TAMPERED_DETECTED",
                     block.merkleRoot(),
                     computedMerkleRoot,
-                    rawPayloads.size(),
+                    rawRecords.size(),
                     true,
                     "WARNING: Cryptographic mismatch detected! Log payloads have been modified or tampered with.");
         }
     }
 
-    private List<String> fetchRawPayloadsFromClickHouse(IntegrityBlockRecord block) {
+    private List<RawEventRecord> fetchRawEventRecordsFromClickHouse(IntegrityBlockRecord block) {
         if (clickhouseJdbcTemplate == null || block == null) {
             return List.of();
         }
@@ -182,14 +213,24 @@ public class BatchIntegrityService {
             String lastEventId = block.lastEventId();
             int limit = block.eventCount() != null ? block.eventCount() : 100;
 
+            org.springframework.jdbc.core.RowMapper<RawEventRecord> rowMapper = (rs, rowNum) -> new RawEventRecord(
+                rs.getString("event_id"),
+                rs.getString("lineage_id"),
+                rs.getString("vendor_id"),
+                rs.getString("source_id"),
+                rs.getObject("mapping_version") != null ? rs.getInt("mapping_version") : null,
+                rs.getTimestamp("received_at") != null ? rs.getTimestamp("received_at").toLocalDateTime() : null,
+                rs.getString("raw_payload")
+            );
+
             if (firstEventId != null && firstEventId.equals(lastEventId)) {
-                String sql = "SELECT raw_payload FROM ulpf_raw.raw_events WHERE source_id = ? AND event_id = ?";
-                return clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, firstEventId);
+                String sql = "SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload FROM ulpf_raw.raw_events WHERE source_id = ? AND event_id = ?";
+                return clickhouseJdbcTemplate.query(sql, rowMapper, sourceId, firstEventId);
             }
 
             if (firstEventId != null && lastEventId != null) {
                 String windowSql = """
-                        SELECT raw_payload
+                        SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload
                         FROM ulpf_raw.raw_events
                         WHERE source_id = ?
                           AND received_at >= (SELECT received_at FROM ulpf_raw.raw_events WHERE event_id = ? LIMIT 1)
@@ -197,34 +238,52 @@ public class BatchIntegrityService {
                         ORDER BY received_at ASC, event_id ASC
                         LIMIT ?
                         """;
-                List<String> payloads = clickhouseJdbcTemplate.query(
+                List<RawEventRecord> records = clickhouseJdbcTemplate.query(
                         windowSql,
-                        (rs, rowNum) -> rs.getString("raw_payload"),
+                        rowMapper,
                         sourceId,
                         firstEventId,
                         lastEventId,
                         limit
                 );
-                if (!payloads.isEmpty()) {
-                    return payloads;
+                if (!records.isEmpty()) {
+                    return records;
                 }
             }
 
             String fallbackSql = """
-                    SELECT raw_payload
+                    SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload
                     FROM ulpf_raw.raw_events
                     WHERE source_id = ?
                     ORDER BY received_at ASC, event_id ASC
                     LIMIT ?
                     """;
-            return clickhouseJdbcTemplate.query(fallbackSql, (rs, rowNum) -> rs.getString("raw_payload"), sourceId, limit);
+            return clickhouseJdbcTemplate.query(fallbackSql, rowMapper, sourceId, limit);
         } catch (Exception e) {
-            log.warn("Could not fetch raw log payloads from ClickHouse for verification: {}", e.getMessage());
+            log.warn("Could not fetch raw log records from ClickHouse for verification: {}", e.getMessage());
             return List.of();
         }
     }
 
     public List<IntegrityBlockRecord> getRecentBlocks(int limit) {
         return integrityRepository.findAllBlocks(limit);
+    }
+
+    public BulkVerificationResult verifyAllBlocks() {
+        List<IntegrityBlockRecord> allBlocks = integrityRepository.findAllBlocks(100000);
+        if (allBlocks.isEmpty()) {
+            return new BulkVerificationResult(0, 0, 0, List.of());
+        }
+
+        List<VerificationResult> results = allBlocks.parallelStream()
+                .map(block -> verifyBlockIntegrity(block.blockId()))
+                .toList();
+
+        int total = results.size();
+        List<VerificationResult> tampered = results.stream().filter(VerificationResult::isTampered).toList();
+        int tamperedCount = tampered.size();
+        int validCount = total - tamperedCount;
+
+        return new BulkVerificationResult(total, validCount, tamperedCount, tampered);
     }
 }
