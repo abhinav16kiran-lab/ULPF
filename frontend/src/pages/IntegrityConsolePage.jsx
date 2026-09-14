@@ -10,12 +10,13 @@ function IntegrityConsolePage() {
   const [verificationResults, setVerificationResults] = useState({});
   const [bulkVerifying, setBulkVerifying] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
+  const [limit, setLimit] = useState(50);
 
   const fetchBlocks = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await client.get("/v1/integrity/blocks");
+      const response = await client.get(`/v1/integrity/blocks?limit=${limit}`);
       setBlocks(response.data.blocks || []);
     } catch (err) {
       if (err.response && err.response.data && err.response.data.error) {
@@ -30,7 +31,7 @@ function IntegrityConsolePage() {
 
   useEffect(() => {
     fetchBlocks();
-  }, [fetchBlocks]);
+  }, [fetchBlocks, limit]);
 
   async function handleVerifyAll() {
     setBulkVerifying(true);
@@ -253,6 +254,25 @@ function IntegrityConsolePage() {
                 </div>
               );
             })}
+            
+            {blocks.length >= limit && (
+              <div style={{ textAlign: "center", marginTop: "20px", marginBottom: "20px" }}>
+                <button
+                  onClick={() => setLimit(prev => prev + 50)}
+                  style={{
+                    background: "#e9ecef",
+                    color: "#495057",
+                    border: "1px solid #ced4da",
+                    padding: "10px 20px",
+                    borderRadius: "6px",
+                    fontWeight: "600",
+                    cursor: "pointer"
+                  }}
+                >
+                  Load More Blocks
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

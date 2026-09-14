@@ -40,6 +40,20 @@ public class ClickHouseIngestionRepository {
     @Value("${clickhouse.ingestion.batch-size:500}")
     private int batchSize = 500;
 
+    private final Object batchTimeLock = new Object();
+    private long lastBatchMillis = 0;
+
+    private LocalDateTime getUniqueBatchTime() {
+        synchronized (batchTimeLock) {
+            long now = System.currentTimeMillis();
+            if (now <= lastBatchMillis) {
+                now = lastBatchMillis + 1;
+            }
+            lastBatchMillis = now;
+            return LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(now), java.time.ZoneId.systemDefault());
+        }
+    }
+
     public ClickHouseIngestionRepository(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
     }
@@ -129,10 +143,19 @@ public class ClickHouseIngestionRepository {
             return;
         }
 
+        LocalDateTime batchTime = getUniqueBatchTime();
         List<RawEventRecord> batch = new ArrayList<>();
         RawEventRecord item;
         while ((item = bufferQueue.poll()) != null) {
-            batch.add(item);
+            batch.add(new RawEventRecord(
+                item.eventId(),
+                item.lineageId(),
+                item.vendorId(),
+                item.sourceId(),
+                item.mappingVersion(),
+                batchTime,
+                item.rawPayload()
+            ));
         }
 
         if (batch.isEmpty()) {
