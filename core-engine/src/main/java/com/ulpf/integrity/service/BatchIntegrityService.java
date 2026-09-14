@@ -265,8 +265,14 @@ public class BatchIntegrityService {
         }
     }
 
-    public List<IntegrityBlockRecord> getRecentBlocks(int limit) {
-        return integrityRepository.findAllBlocks(limit);
+    public List<IntegrityBlockRecord> getRecentBlocks(int limit, String sourceId, String search) {
+        if (search != null && !search.isBlank()) {
+            return integrityRepository.searchBlocks(search, limit);
+        } else if (sourceId != null && !sourceId.isBlank()) {
+            return integrityRepository.findBlocksBySourceId(sourceId, limit);
+        } else {
+            return integrityRepository.findAllBlocks(limit);
+        }
     }
 
     public BulkVerificationResult verifyAllBlocks() {

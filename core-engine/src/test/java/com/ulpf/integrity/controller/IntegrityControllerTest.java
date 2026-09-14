@@ -30,9 +30,9 @@ class IntegrityControllerTest {
     void testGetIntegrityBlocks() {
         IntegrityBlockRecord block = new IntegrityBlockRecord(
                 1L, "src_1", 10, "e1", "e10", "root", "prev", LocalDateTime.now());
-        when(batchIntegrityService.getRecentBlocks(50)).thenReturn(List.of(block));
+        when(batchIntegrityService.getRecentBlocks(50, null, null)).thenReturn(List.of(block));
 
-        ResponseEntity<?> response = integrityController.getIntegrityBlocks(50, null);
+        ResponseEntity<?> response = integrityController.getIntegrityBlocks(50, null, null);
         assertEquals(200, response.getStatusCode().value());
 
         Map<String, Object> body = (Map<String, Object>) response.getBody();
@@ -48,9 +48,9 @@ class IntegrityControllerTest {
         IntegrityBlockRecord block2 = new IntegrityBlockRecord(2L, "src_2", 10, "e1", "e10", "root", "prev",
                 LocalDateTime.now());
 
-        when(batchIntegrityService.getRecentBlocks(50)).thenReturn(List.of(block1, block2));
+        when(batchIntegrityService.getRecentBlocks(50, "src_1", null)).thenReturn(List.of(block1));
 
-        ResponseEntity<?> response = integrityController.getIntegrityBlocks(50, "src_1");
+        ResponseEntity<?> response = integrityController.getIntegrityBlocks(50, "src_1", null);
         assertEquals(200, response.getStatusCode().value());
 
         Map<String, Object> body = (Map<String, Object>) response.getBody();

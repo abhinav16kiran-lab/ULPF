@@ -11,12 +11,17 @@ function IntegrityConsolePage() {
   const [bulkVerifying, setBulkVerifying] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
   const [limit, setLimit] = useState(50);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const fetchBlocks = useCallback(async () => {
+  const fetchBlocks = useCallback(async (currentLimit = limit, currentSearch = searchQuery) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await client.get(`/v1/integrity/blocks?limit=${limit}`);
+      let endpoint = `/v1/integrity/blocks?limit=${currentLimit}`;
+      if (currentSearch) {
+        endpoint += `&search=${encodeURIComponent(currentSearch)}`;
+      }
+      const response = await client.get(endpoint);
       setBlocks(response.data.blocks || []);
     } catch (err) {
       if (err.response && err.response.data && err.response.data.error) {
@@ -27,11 +32,26 @@ function IntegrityConsolePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit, searchQuery]);
 
   useEffect(() => {
-    fetchBlocks();
-  }, [fetchBlocks, limit]);
+    fetchBlocks(limit, searchQuery);
+  }, [limit]); // Only trigger on limit change, not on typing
+
+  function handleSearch(overrideQuery) {
+    const q = typeof overrideQuery === "string" ? overrideQuery : searchQuery;
+    if (typeof overrideQuery === "string") {
+      setSearchQuery(q);
+    }
+    setLimit(50);
+    fetchBlocks(50, q);
+  }
+
+  function clearSearch() {
+    setSearchQuery("");
+    setLimit(50);
+    fetchBlocks(50, "");
+  }
 
   async function handleVerifyAll() {
     setBulkVerifying(true);
@@ -98,7 +118,7 @@ function IntegrityConsolePage() {
               {bulkVerifying ? "Running Bulk Audit..." : "🛡️ Verify All Blocks"}
             </button>
             <button
-              onClick={fetchBlocks}
+              onClick={() => { setLimit(50); fetchBlocks(50, searchQuery); }}
               style={{
                 background: "#0f766e",
                 color: "white",
@@ -129,6 +149,25 @@ function IntegrityConsolePage() {
           <strong>NTRO Cryptographic Integrity Proof</strong>: Log events are grouped into batch blocks. Every block calculates a <strong>SHA-256 Merkle Root</strong> over raw log payloads and chains its <code>previous_block_hash</code> to form an unbroken forensic hash chain.
         </div>
 
+        <div style={{ marginBottom: "20px", display: "flex", gap: "10px", alignItems: "center" }}>
+          <input
+            type="text"
+            placeholder="Search by Block #, Source ID, or Event ID..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            style={{ flex: 1, padding: "10px", borderRadius: "4px", border: "1px solid #ced4da", fontSize: "1em", color: "#212529", backgroundColor: "#ffffff" }}
+          />
+          <button onClick={handleSearch} style={{ background: "#495057", color: "white", border: "none", padding: "10px 20px", borderRadius: "4px", cursor: "pointer", fontWeight: "600" }}>
+            Search
+          </button>
+          {searchQuery && (
+            <button onClick={clearSearch} style={{ background: "#e9ecef", color: "#495057", border: "1px solid #ced4da", padding: "10px 20px", borderRadius: "4px", cursor: "pointer", fontWeight: "600" }}>
+              Clear
+            </button>
+          )}
+        </div>
+
         {loading && <p>Loading batch integrity blocks…</p>}
         {error && <p style={{ color: "red" }}>{error}</p>}
 
@@ -153,12 +192,37 @@ function IntegrityConsolePage() {
             <p style={{ margin: "0" }}>
               Tampered Blocks Detected: <strong>{bulkResults.tamperedCount}</strong>
             </p>
+
+            {bulkResults.tamperedCount > 0 && (
+              <div style={{ marginTop: "15px", paddingTop: "15px", borderTop: `1px solid ${bulkResults.tamperedCount > 0 ? "rgba(220,53,69,0.2)" : "rgba(25,135,84,0.2)"}` }}>
+                <h4 style={{ margin: "0 0 10px 0" }}>Tampered Blocks</h4>
+                <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                  {bulkResults.tamperedBlocks.map(b => (
+                    <li key={b.blockId} style={{ marginBottom: "5px" }}>
+                      <button 
+                        onClick={() => handleSearch(b.blockId.toString())}
+                        style={{ background: "none", border: "none", color: "#842029", textDecoration: "underline", cursor: "pointer", padding: 0, fontSize: "1em", fontWeight: "bold" }}
+                        title="Search for this block"
+                      >
+                        Block #{b.blockId}
+                      </button>
+                      {" "}— Source: <code style={{ color: "#842029", background: "rgba(255,255,255,0.5)", padding: "2px 4px", borderRadius: "3px" }}>{b.sourceId}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
         {!loading && !error && blocks.length === 0 && (
-          <div style={{ background: "#f8f9fa", padding: "20px", borderRadius: "6px", textAlign: "center" }}>
-            <p style={{ color: "#666" }}>No batch integrity blocks generated yet. Ingest events at <code>/v1/events</code> to generate cryptographic batch proofs.</p>
+          <div style={{ background: "#f8f9fa", padding: "40px 20px", borderRadius: "6px", textAlign: "center" }}>
+            <div style={{ fontSize: "2rem", marginBottom: "10px" }}>📭</div>
+            {searchQuery ? (
+              <p style={{ color: "#666", fontSize: "1.1em" }}>No blocks found matching <strong>"{searchQuery}"</strong>.</p>
+            ) : (
+              <p style={{ color: "#666", fontSize: "1.1em" }}>No batch integrity blocks generated yet. Ingest events at <code>/v1/events</code> to generate cryptographic batch proofs.</p>
+            )}
           </div>
         )}
 

@@ -151,4 +151,27 @@ public class IntegrityRepository {
                 rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null),
                 sourceId, limit);
     }
+
+    public List<IntegrityBlockRecord> searchBlocks(String query, int limit) {
+        String sql = """
+                SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
+                FROM batch_integrity_blocks
+                WHERE CAST(block_id AS TEXT) = ? 
+                   OR source_id = ? 
+                   OR first_event_id = ? 
+                   OR last_event_id = ?
+                ORDER BY block_id DESC
+                LIMIT ?
+                """;
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new IntegrityBlockRecord(
+                rs.getLong("block_id"),
+                rs.getString("source_id"),
+                rs.getInt("event_count"),
+                rs.getString("first_event_id"),
+                rs.getString("last_event_id"),
+                rs.getString("merkle_root"),
+                rs.getString("previous_block_hash"),
+                rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null),
+                query, query, query, query, limit);
+    }
 }

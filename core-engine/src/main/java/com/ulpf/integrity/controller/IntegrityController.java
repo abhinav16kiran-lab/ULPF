@@ -28,16 +28,10 @@ public class IntegrityController {
     @GetMapping("/blocks")
     public ResponseEntity<?> getIntegrityBlocks(
             @RequestParam(defaultValue = "50") int limit,
-            @RequestParam(required = false) String sourceId
+            @RequestParam(required = false) String sourceId,
+            @RequestParam(required = false) String search
     ) {
-        List<IntegrityBlockRecord> blocks;
-        if (sourceId != null && !sourceId.isBlank()) {
-            blocks = batchIntegrityService.getRecentBlocks(limit).stream()
-                    .filter(b -> sourceId.equals(b.sourceId()))
-                    .toList();
-        } else {
-            blocks = batchIntegrityService.getRecentBlocks(limit);
-        }
+        List<IntegrityBlockRecord> blocks = batchIntegrityService.getRecentBlocks(limit, sourceId, search);
         return ResponseEntity.ok(Map.of("blocks", blocks));
     }
 
