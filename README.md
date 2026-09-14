@@ -183,7 +183,7 @@ CLICKHOUSE_PASSWORD=Clickhouse123!
 
 ### Step 1: Log in as Administrator
 1. Open [http://localhost:3000/login](http://localhost:3000/login).
-2. Login with `admin` / `Admin@12345`.
+2. Login with `admin` / `Admin@12345`(these are the default credentials, you can change them in your .env).
 3. You will be redirected to the **Admin Dashboard** (`/admin`).
 
 ### Step 2: Onboard a Log Source (`/onboard`)
@@ -317,7 +317,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ---
 
-## 5. Technology Stack
+## 6. Technology Stack
 
 | Layer | Technology | Details |
 | :--- | :--- | :--- |
@@ -330,7 +330,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ---
 
-## 6. Complete REST API Reference
+## 7. Complete REST API Reference
 
 | Method | Endpoint | Auth | Description |
 | :--- | :--- | :--- | :--- |
@@ -354,7 +354,23 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ---
 
-## 7. License & Authors
+## 8. System Performance Benchmarks
+
+The core ingestion engine (`/v1/events`) was subjected to a continuous load test using auto-ramping concurrency threads to identify the saturation point. 
+
+**Benchmark Saturation Summary:**
+- **Peak Engine Throughput:** 995.4 Events/Sec (EPS)
+- **Peak Bandwidth:** 0.43 MB/s (~3.40 Mbps)
+- **Optimal Concurrency:** 64 Threads
+- **Median Latency (P50):** 7.64 ms
+- **95th Percentile (P95):** 77.47 ms
+- **99th Percentile (P99):** 1716.56 ms
+
+*Note: System saturation was detected at 128 concurrent threads, where the P95 latency degraded to ~736ms while maintaining a 0.0% error rate.*
+
+---
+
+## 9. License & Authors
 
 This project is licensed under the custom **Competitor's Right License (CRL-1.0)**.
 It is a source-available project strictly for competition evaluation, and is **not** open-source.  
