@@ -17,55 +17,59 @@ function AnalyticsPage() {
 
   // Dynamic ClickHouse Schema states
   const [availableTables, setAvailableTables] = useState(["canonical_events", "raw_events"]);
-  const [tableColumnsMap, setTableColumnsMap] = useState({
-    canonical_events: ["event_id", "lineage_id", "vendor_id", "source_id", "timestamp", "numeric_value", "canonical_payload", "raw_unmapped"],
-    raw_events: ["event_id", "lineage_id", "vendor_id", "source_id", "mapping_version", "received_at", "raw_payload"]
-  });
+  const [tableColumnsMap, setTableColumnsMap] = useState({});
+  const [columnsLoading, setColumnsLoading] = useState(false);
 
   useEffect(() => {
-    async function fetchSchemaCatalog() {
+    async function fetchTables() {
       try {
-        let res;
-        try {
-          res = await client.get("/v1/analytics/schemas");
-        } catch {
-          res = await client.get("/v1/admin/clickhouse/schemas");
-        }
-
-        if (res && res.data && Array.isArray(res.data)) {
-          const tblList = [];
-          const colMap = {};
-
-          res.data.forEach((db) => {
-            if (db.tables && Array.isArray(db.tables)) {
-              db.tables.forEach((t) => {
-                tblList.push(t.name);
-                const cols = (t.columns || []).map((c) => c.name);
-                colMap[t.name] = cols.length > 0 ? cols : ["event_id", "source_id", "timestamp"];
-              });
-            }
-          });
-
-          if (tblList.length > 0) {
-            setAvailableTables(tblList);
-            setTableColumnsMap(colMap);
-
-            const initialTbl = tblList.includes("canonical_events") ? "canonical_events" : tblList[0];
-            setTable(initialTbl);
-            const firstCols = colMap[initialTbl] || [];
-            if (firstCols.length > 0) {
-              setColumn(firstCols[0]);
-            }
+        const res = await client.get("/v1/analytics/tables");
+        if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
+          setAvailableTables(res.data);
+          // If current table isn't in the list, set to the first available
+          if (!res.data.includes(table)) {
+            setTable(res.data[0]);
           }
         }
       } catch (e) {
-        console.warn("Could not fetch dynamic ClickHouse schemas:", e);
+        console.warn("Could not fetch available tables:", e);
       }
     }
-    fetchSchemaCatalog();
+    fetchTables();
   }, []);
 
-  const currentTableColumns = tableColumnsMap[table] || ["event_id", "source_id", "timestamp", "vendor_id", "canonical_payload", "raw_unmapped"];
+  useEffect(() => {
+    async function fetchColumns() {
+      if (!table) return;
+      if (tableColumnsMap[table]) {
+        const cols = tableColumnsMap[table];
+        if (cols && cols.length > 0 && !cols.includes(column)) {
+          setColumn(cols[0]);
+        }
+        return;
+      }
+      setColumnsLoading(true);
+      setColumn(""); // Clear selection
+      try {
+        const res = await client.get(`/v1/analytics/tables/${encodeURIComponent(table)}/columns`);
+        if (res && res.data && res.data.columns) {
+          const cols = res.data.columns.map(c => c.name);
+          setTableColumnsMap(prev => ({ ...prev, [table]: cols }));
+          if (cols.length > 0) {
+            setColumn(cols[0]);
+          }
+        }
+      } catch (e) {
+        console.warn(`Could not fetch columns for table ${table}:`, e);
+        setTableColumnsMap(prev => ({ ...prev, [table]: [] }));
+      } finally {
+        setColumnsLoading(false);
+      }
+    }
+    fetchColumns();
+  }, [table]);
+
+  const currentTableColumns = tableColumnsMap[table] || [];
 
   // Dynamic filter rows
   const [filters, setFilters] = useState([
@@ -550,32 +554,38 @@ function AnalyticsPage() {
                     </label>
                     <button
                       type="button"
+                      disabled={columnsLoading}
                       onClick={(e) => toggleDropdownMenu(e, "column")}
-                      className="flex items-center justify-between w-full px-4 py-2.5 text-sm bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-slate-800 transition-all text-left"
+                      className="flex items-center justify-between w-full px-4 py-2.5 text-sm bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-slate-800 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <span className="truncate">{column}</span>
-                      <svg className={`w-4 h-4 text-slate-500 transition-transform duration-200 shrink-0 ml-1 ${openDropdown === "column" ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                      </svg>
+                      <span className="truncate">{columnsLoading ? "Loading..." : (column || "No columns available")}</span>
+                      {!columnsLoading && (
+                        <svg className={`w-4 h-4 text-slate-500 transition-transform duration-200 shrink-0 ml-1 ${openDropdown === "column" ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      )}
                     </button>
-                    {openDropdown === "column" && (
+                    {openDropdown === "column" && !columnsLoading && (
                       <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden font-mono text-sm max-h-60 overflow-y-auto">
-                        {currentTableColumns.map((item) => (
-                          <button
-                            key={item}
-                            type="button"
-                            onClick={() => { setColumn(item); setOpenDropdown(null); }}
-                            className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${column === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"
-                              }`}
-                          >
-                            <span>{item}</span>
-                            {column === item && (
-                              <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                              </svg>
-                            )}
-                          </button>
-                        ))}
+                        {currentTableColumns.length === 0 ? (
+                          <div className="px-4 py-2.5 text-left text-slate-500 italic">No columns found</div>
+                        ) : (
+                          currentTableColumns.map((item) => (
+                            <button
+                              key={item}
+                              type="button"
+                              onClick={() => { setColumn(item); setOpenDropdown(null); }}
+                              className={`flex items-center justify-between w-full px-4 py-2.5 text-left hover:bg-teal-50 hover:text-teal-800 transition-colors ${column === item ? "bg-teal-50/70 text-teal-800 font-semibold" : "text-slate-700"}`}
+                            >
+                              <span>{item}</span>
+                              {column === item && (
+                                <svg className="w-4 h-4 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </button>
+                          ))
+                        )}
                       </div>
                     )}
                   </div>

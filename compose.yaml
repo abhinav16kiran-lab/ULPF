@@ -49,6 +49,7 @@ services:
       - API_KEY_HASH_SALT=${API_KEY_HASH_SALT:-dev-salt-key-for-api-hash-12345}
     volumes:
       - sqlite-data:/app/data
+      - ./core-engine/models:/app/models:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/health || exit 1"]
       interval: 5s

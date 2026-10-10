@@ -1,0 +1,3 @@
+clickhouse-data/
+*.log
+.DS_Store

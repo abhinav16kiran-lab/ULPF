@@ -32,6 +32,23 @@ public class AnalyticsController {
         return ResponseEntity.ok(dynamicSchemaProvisioningService.getClickHouseSchemaMetadata());
     }
 
+    @GetMapping("/analytics/tables")
+    public ResponseEntity<?> getTables() {
+        return ResponseEntity.ok(analyticsService.getTables());
+    }
+
+    @GetMapping("/analytics/tables/{table}/columns")
+    public ResponseEntity<?> getTableColumns(@PathVariable String table) {
+        if (table == null || table.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "table name is required"));
+        }
+        var columns = analyticsService.getTableColumns(table);
+        return ResponseEntity.ok(Map.of(
+                "table", table,
+                "columns", columns
+        ));
+    }
+
     @GetMapping("/analytics")
     public ResponseEntity<?> getAnalytics(
             @RequestParam(required = false) String table,

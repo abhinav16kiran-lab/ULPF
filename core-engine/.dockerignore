@@ -1,0 +1,7 @@
+target/
+data/
+models/
+*.db
+*.db-journal
+*.log
+.DS_Store

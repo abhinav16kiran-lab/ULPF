@@ -20,6 +20,12 @@ public class AnalyticsService {
     private static final Logger log = LoggerFactory.getLogger(AnalyticsService.class);
     private static final Set<String> VALID_AGGREGATIONS = Set.of("COUNT", "AVG", "MIN", "MAX", "SUM");
 
+    public record ColumnMeta(String name, String type) {}
+    private record CachedColumns(List<ColumnMeta> columns, long timestamp) {}
+    
+    private final java.util.Map<String, CachedColumns> columnCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long CACHE_TTL_MS = 300_000; // 5 minutes
+
     private final JdbcTemplate clickhouseJdbcTemplate;
     private final ClickHouseIngestionRepository clickHouseIngestionRepository;
 
@@ -57,6 +63,54 @@ public class AnalyticsService {
 
     public boolean isValidAggregation(String aggregation) {
         return aggregation != null && VALID_AGGREGATIONS.contains(aggregation.toUpperCase());
+    }
+
+    public List<String> getTables() {
+        long startTime = System.currentTimeMillis();
+        try {
+            List<String> tables = clickhouseJdbcTemplate.query(
+                    "SELECT name FROM system.tables WHERE database IN ('ulpf_events', 'ulpf_raw') AND name NOT LIKE '.inner%' ORDER BY name ASC",
+                    (rs, rowNum) -> rs.getString("name")
+            );
+            log.info("Fetched {} tables from ClickHouse metadata in {} ms", tables.size(), System.currentTimeMillis() - startTime);
+            return tables;
+        } catch (Exception e) {
+            log.error("Failed to fetch tables from ClickHouse: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    public List<ColumnMeta> getTableColumns(String table) {
+        if (table == null || table.isBlank()) return java.util.Collections.emptyList();
+        
+        String safeTable = sanitizeIdentifier(table);
+        String pureTable = safeTable.contains(".") ? safeTable.substring(safeTable.indexOf('.') + 1) : safeTable;
+
+        CachedColumns cached = columnCache.get(pureTable);
+        if (cached != null && (System.currentTimeMillis() - cached.timestamp()) < CACHE_TTL_MS) {
+            return cached.columns();
+        }
+
+        long startTime = System.currentTimeMillis();
+        String sql = "SELECT name, type FROM system.columns WHERE database IN ('ulpf_events', 'ulpf_raw') AND table = ? ORDER BY position ASC";
+        
+        try {
+            List<ColumnMeta> columns = clickhouseJdbcTemplate.query(
+                    sql,
+                    (rs, rowNum) -> new ColumnMeta(rs.getString("name"), rs.getString("type")),
+                    pureTable
+            );
+            
+            if (columns != null && !columns.isEmpty()) {
+                columnCache.put(pureTable, new CachedColumns(columns, System.currentTimeMillis()));
+                log.info("Fetched and cached {} columns for table '{}' in {} ms", columns.size(), pureTable, System.currentTimeMillis() - startTime);
+                return columns;
+            }
+            return java.util.Collections.emptyList();
+        } catch (Exception e) {
+            log.error("Failed to fetch columns for table {}: {}", pureTable, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
     }
 
     public AnalyticsResult runQuery(String table, String column, String aggregation) {

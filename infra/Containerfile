@@ -1,4 +1,4 @@
-FROM docker.io/clickhouse/clickhouse-server:26.3
+FROM docker.io/clickhouse/clickhouse-server:26.3-alpine
 
 # Copy SQL database initialization scripts (executed on first database container boot)
 COPY clickhouse-init/01_raw_events.sql /docker-entrypoint-initdb.d/
