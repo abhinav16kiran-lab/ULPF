@@ -77,4 +77,10 @@ Client-side authorization is enforced by `ProtectedRoute.jsx`:
 
 * Checks `localStorage.getItem("token")`. If missing, redirects immediately to `/login`.
 * Checks user role against `allowedRoles`. If unauthorized, redirects user safely.
-* Axios API requests automatically attach `Authorization: Bearer <token>` headers via `src/api/client.js`.
+* **Axios Request Interceptor (`src/api/client.js`)**:
+  * Automatically injects `Authorization: Bearer <token>` on protected API endpoints.
+  * Explicitly bypasses public auth endpoints (`/v1/login`, `/v1/signup`) so stale credentials from prior sessions are never transmitted.
+  * Discards malformed or `"undefined"` token values.
+* **Axios Response Interceptor (`src/api/client.js`)**:
+  * Automatically purges invalid or expired tokens (`token`, `username`, `role`) from `localStorage` upon receiving a `401 Unauthorized` on protected endpoints, ensuring clean session recovery.
+  * Sanitizes raw 5xx HTML error pages (e.g. Nginx 502/504) into structured user-facing JSON messages.

@@ -334,21 +334,24 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 | Method | Endpoint | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/auth/login` | None | Authenticate user & receive JWT token |
-| `POST` | `/v1/auth/register` | None | Register user account |
+| `POST` | `/v1/login` | None | Authenticate user & receive JWT token |
+| `POST` | `/v1/signup` | None | Register user account |
 | `POST` | `/v1/onboard` | Bearer Token | Submit vendor log source onboarding request |
 | `POST` | `/v1/onboard/update` | Bearer Token | Submit schema update for existing log source |
 | `GET` | `/v1/admin/onboard` | Admin Token | List pending onboarding requests |
 | `POST` | `/v1/admin/onboard/{id}/approve` | Admin Token | Approve request & issue API key |
 | `POST` | `/v1/admin/onboard/{id}/reject` | Admin Token | Reject onboarding request |
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
+| `GET` | `/v1/analytics/tables` | Admin Token | Fetch available ClickHouse table names |
+| `GET` | `/v1/analytics/tables/{table}/columns` | Admin Token | Inspect dynamic column metadata for selected table |
 | `GET` | `/v1/analytics/search` | Admin Token | Full-text log substring & regex search (ClickHouse `tokenbf_v1`) |
 | `GET` | `/v1/analytics/timeseries` | Admin Token | Time-series histogram throughput & error spike aggregation |
 | `POST` | `/v1/analytics/import/file` | Admin Token | Bulk upload legacy log files (`.json`, `.gz`, `.log`, `.csv`) |
 | `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |
 | `GET` | `/v1/integrity/blocks` | Bearer Token | List Merkle batch integrity blocks |
-| `POST` | `/v1/integrity/verify/{id}` | Bearer Token | Execute cryptographic forensic audit |
+| `POST` | `/v1/integrity/verify/{id}` | Bearer Token | Execute cryptographic forensic audit for single block |
+| `POST` | `/v1/integrity/verify-all` | Admin Token | Bulk audit all integrity blocks & identify tampered IDs |
 | `POST` | `/v1/events` | `X-API-Key` | Runtime log ingestion (Syslog, CEF, LEEF, JSON) |
 | `GET` | `/v1/health` | None | Health check & service readiness |
 

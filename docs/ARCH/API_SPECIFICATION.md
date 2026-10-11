@@ -17,8 +17,8 @@
 
 | Endpoint | Method | Role | Description |
 | :--- | :--- | :--- | :--- |
-| `/v1/auth/signup` | `POST` | Public | Register a new user (`ADMIN`, `VENDOR`, `USER`) |
-| `/v1/auth/login` | `POST` | Public | Authenticate user and issue JWT Bearer token |
+| `/v1/signup` | `POST` | Public | Register a new user account |
+| `/v1/login` | `POST` | Public | Authenticate user and issue JWT Bearer token |
 | `/v1/onboard/{username}` | `POST` | `VENDOR`/`ADMIN` | Submit sample log file and schema for AI field mapping |
 | `/v1/onboard/update` | `POST` | `VENDOR`/`ADMIN` | Update an existing log source mapping schema |
 | `/v1/admin/onboard` | `GET` | `ADMIN` | List all pending vendor onboarding requests |
@@ -28,6 +28,8 @@
 | `/v1/notifications` | `GET` | Authenticated | Fetch notifications and issued API keys for logged-in user |
 | `/v1/notifications/{id}/read` | `PUT` | Authenticated | Mark a notification item as read |
 | `/v1/analytics` | `GET` | `ADMIN` | Read-only ClickHouse metrics aggregation query execution |
+| `/v1/analytics/tables` | `GET` | `ADMIN` | Fetch list of accessible ClickHouse table names |
+| `/v1/analytics/tables/{table}/columns` | `GET` | `ADMIN` | Retrieve schema column metadata for specific ClickHouse table |
 | `/v1/analytics/schemas` | `GET` | `ADMIN` | Get ClickHouse database catalog tables and dynamic columns |
 | `/v1/analytics/search` | `GET` | `ADMIN` | Full-text substring & regex raw log search with Bloom filter |
 | `/v1/analytics/timeseries` | `GET` | `ADMIN` | Time-series histogram throughput & error spike aggregation |
@@ -43,33 +45,34 @@
 
 ### 3.1 Authentication
 
-#### `POST /v1/auth/signup`
+Public endpoints bypass the `JwtFilter` via `shouldNotFilter()`, ensuring unauthenticated traffic is never rejected prematurely by stale bearer tokens.
+
+#### `POST /v1/signup`
 Registers a new system user.
+
+* **Request Body**:
+  ```json
+  {
+    "name": "CrowdStrike Admin",
+    "username": "crowdstrike_admin",
+    "password": "SecurePassword123!",
+    "confirmPassword": "SecurePassword123!"
+  }
+  ```
+* **Response (200 OK)**:
+  ```json
+  "User registered successfully"
+  ```
+
+#### `POST /v1/login`
+Authenticates credentials and returns a signed JWT token.
 
 * **Request Body**:
   ```json
   {
     "username": "crowdstrike_admin",
     "password": "SecurePassword123!",
-    "role": "VENDOR"
-  }
-  ```
-* **Response (200 OK)**:
-  ```json
-  {
-    "message": "User registered successfully",
-    "userId": "usr_9012830192"
-  }
-  ```
-
-#### `POST /v1/auth/login`
-Authenticates credentials and returns a JWT token.
-
-* **Request Body**:
-  ```json
-  {
-    "username": "crowdstrike_admin",
-    "password": "SecurePassword123!"
+    "role": "ADMIN"
   }
   ```
 * **Response (200 OK)**:
@@ -77,8 +80,7 @@ Authenticates credentials and returns a JWT token.
   {
     "token": "eyJhbGciOiJIUzI1NiJ9...",
     "username": "crowdstrike_admin",
-    "role": "VENDOR",
-    "userId": "usr_9012830192"
+    "role": "ADMIN"
   }
   ```
 
@@ -197,6 +199,37 @@ Executes read-only aggregation queries against ClickHouse log tables.
     "aggregation": "COUNT",
     "result": 14285901,
     "executionTimeMs": 8
+  }
+  ```
+
+#### `GET /v1/analytics/tables`
+Returns a list of accessible ClickHouse table names across the system.
+
+* **Response (200 OK)**:
+  ```json
+  [
+    "canonical_events",
+    "raw_events",
+    "events_crowdstrike_falcon_edr",
+    "events_paloalto_panos_firewall"
+  ]
+  ```
+
+#### `GET /v1/analytics/tables/{table}/columns`
+Retrieves column metadata (`name`, `type`) for a specific ClickHouse table for dynamic UI query builder population.
+
+* **Path Parameters**: `table` (required, e.g. `events_crowdstrike_falcon_edr`)
+* **Response (200 OK)**:
+  ```json
+  {
+    "table": "events_crowdstrike_falcon_edr",
+    "columns": [
+      {"name": "event_id", "type": "String"},
+      {"name": "source_id", "type": "String"},
+      {"name": "timestamp", "type": "DateTime64(3)"},
+      {"name": "vendor_id", "type": "String"},
+      {"name": "raw_unmapped", "type": "String"}
+    ]
   }
   ```
 

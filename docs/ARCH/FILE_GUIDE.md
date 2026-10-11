@@ -32,19 +32,17 @@ ULPF/
 ```text
 core-engine/
 ├── src/main/java/com/ulpf/
-│   ├── admin/            # Admin onboarding approval controllers & schema management
-│   ├── analytics/        # ClickHouse query execution, time-series & dynamic schema service
-│   ├── auth/             # Authentication, user registration & JWT token security
-│   ├── common/           # DB connection pools, JWT utilities & global security filter
-│   ├── ingestion/        # High-throughput event ingestion & format autodetector
-│   ├── integrity/        # Cryptographic Merkle tree forensic audit engine
-│   ├── mapping/          # 4-layer AI schema mapping engine & human feedback loop
-│   ├── notification/     # Notification feed & API key delivery service
-│   └── onboard/          # Vendor log onboarding form processing & file upload
+│   ├── analytics/        # ClickHouse query execution, time-series, table catalog & dynamic column discovery
+│   ├── common/           # DB connection pools, JWT utilities & security filter chain (shouldNotFilter)
+│   ├── controlplane/     # Auth (login/signup), onboarding workflows, notification dispatch & admin governance
+│   ├── dataplane/        # High-throughput event ingestion, protocol autodetector & micro-batch pipeline
+│   ├── integrity/        # Cryptographic Merkle tree forensic audit engine & bulk tamper detection
+│   └── mapping/          # 4-layer AI schema mapping engine & human feedback loop
 ├── src/main/resources/
 │   ├── sqlite/schema.sql # Baseline SQLite control plane DDL script
 │   └── application.yaml  # Spring Boot configuration
-├── models/               # Local ONNX all-MiniLM-L6-v2 vector embedding model
+├── models/               # Local ONNX all-MiniLM-L6-v2 vector embedding model (mounted at runtime)
+├── .dockerignore         # Docker context exclusion (build target, database files, models)
 ├── Containerfile         # Multi-stage Java container build file
 └── pom.xml               # Maven dependencies and build config
 ```
@@ -54,6 +52,7 @@ core-engine/
 ```text
 frontend/
 ├── src/
+│   ├── api/              # Axios HTTP client with JWT interceptor & 401 session eviction
 │   ├── assets/           # Logo SVG assets & empty state vector illustrations
 │   ├── components/       # Reusable UI components (Navbar, UlpfLogo, EmptyState)
 │   ├── pages/            # View pages (Login, Signup, Onboard, Admin, Notifications, Integrity, Analytics)
@@ -81,7 +80,8 @@ dev-tools/
 infra/
 ├── clickhouse-config/users.d/async_inserts.xml  # ClickHouse async micro-batching config
 ├── clickhouse-init/01_raw_events.sql           # Database & raw_events table DDL
-└── Containerfile                                # Standalone ClickHouse container image build
+├── .dockerignore                                # Container context exclusion rules
+└── Containerfile                                # Lightweight Alpine ClickHouse container image build
 ```
 
 ### 2.5 `docs/` (Project Documentation)
