@@ -11,9 +11,9 @@ function AnalyticsPage() {
   const [column, setColumn] = useState("event_id");
   const [aggregation, setAggregation] = useState("COUNT");
   const [groupBy, setGroupBy] = useState("None");
-  const [timeRange, setTimeRange] = useState("Last 24 hours");
-  const [customStart, setCustomStart] = useState("2026-03-01T00:00");
-  const [customEnd, setCustomEnd] = useState("2026-03-02T23:59");
+  const [timeRange, setTimeRange] = useState("All Time");
+  const [customStart, setCustomStart] = useState("2026-09-01T00:00");
+  const [customEnd, setCustomEnd] = useState("2026-10-15T23:59");
 
   // Dynamic ClickHouse Schema states
   const [availableTables, setAvailableTables] = useState(["canonical_events", "raw_events"]);
@@ -80,6 +80,7 @@ function AnalyticsPage() {
   const [sqlQuery, setSqlQuery] = useState(
     "SELECT source_id, count(*)\nFROM canonical_events\nGROUP BY source_id;"
   );
+  const [sqlResultData, setSqlResultData] = useState(null);
 
   // Lineage mode state
   const [lineageId, setLineageId] = useState("ling_984a12");
@@ -305,15 +306,61 @@ function AnalyticsPage() {
       } finally {
         setLoading(false);
       }
+    } else if (mode === "sql") {
+      // Direct ClickHouse SQL Query Execution
+      setViewState("running");
+      setLoading(true);
+      setErrorMessage("");
+      const startTime = performance.now();
+
+      try {
+        const res = await client.post("/v1/analytics/sql", {
+          query: sqlQuery
+        });
+        const elapsed = Math.round(performance.now() - startTime);
+        setExecMetrics({
+          durationMs: res.data?.executionTimeMs || elapsed || 24,
+          scannedGb: "1.84 GB"
+        });
+        setSqlResultData(res.data);
+        if (res.data?.scalarResult !== null && res.data?.scalarResult !== undefined) {
+          setQueryResult({
+            table: "ClickHouse SQL",
+            column: res.data.columns?.[0] || "result",
+            aggregation: "EXACT",
+            result: res.data.scalarResult
+          });
+        } else {
+          setQueryResult({
+            table: "ClickHouse SQL",
+            column: res.data.columns?.[0] || "rows",
+            aggregation: "COUNT",
+            result: res.data?.totalRows || 0
+          });
+        }
+        setViewState("result");
+      } catch (err) {
+        console.warn("Direct SQL execution error:", err);
+        const errMsg = err.response?.data?.error || err.message || "Failed to execute SQL query";
+        setErrorMessage(errMsg);
+        setViewState("error");
+      } finally {
+        setLoading(false);
+      }
     } else {
-      // Standard Builder or Direct SQL Mode
+      // Standard Builder Mode
       setViewState("running");
       setLoading(true);
       const startTime = performance.now();
 
       try {
+        const queryParams = { table, column, aggregation, timeRange };
+        if (timeRange === "Custom Range") {
+          if (customStart) queryParams.from = customStart;
+          if (customEnd) queryParams.to = customEnd;
+        }
         const res = await client.get("/v1/analytics", {
-          params: { table, column, aggregation }
+          params: queryParams
         });
         const elapsed = Math.round(performance.now() - startTime);
         setExecMetrics({ durationMs: elapsed > 0 ? elapsed : 38, scannedGb: "1.84 GB" });
@@ -681,7 +728,7 @@ function AnalyticsPage() {
                     </button>
                     {openDropdown === "timerange" && (
                       <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 overflow-hidden text-sm">
-                        {["Last 15 minutes", "Last 1 hour", "Last 24 hours", "Last 7 days", "Custom Range"].map((item) => (
+                        {["Last 15 minutes", "Last 1 hour", "Last 24 hours", "Last 7 days", "All Time", "Custom Range"].map((item) => (
                           <button
                             key={item}
                             type="button"
@@ -826,6 +873,12 @@ function AnalyticsPage() {
                       rows={4}
                       value={sqlQuery}
                       onChange={(e) => setSqlQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                          e.preventDefault();
+                          handleRunQuery();
+                        }
+                      }}
                       spellCheck="false"
                       className="w-full bg-slate-900 text-teal-300 font-mono text-xs p-3.5 leading-relaxed focus:outline-none resize-y border-0 focus:ring-0 selection:bg-teal-800"
                     />
@@ -1192,8 +1245,103 @@ function AnalyticsPage() {
                   <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden text-center">
                     <div className="absolute -top-12 -right-12 w-44 h-44 bg-teal-100/40 rounded-full blur-2xl pointer-events-none"></div>
 
-                    {/* STANDARD QUERY RESULTS VIEW */}
-                    {mode !== "lineage" && (
+                    {/* DIRECT SQL QUERY RESULTS VIEW */}
+                    {mode === "sql" && (
+                      <div className="flex flex-col justify-between h-full space-y-5">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                            Direct SQL Result
+                          </span>
+                          <span className="text-xs font-mono font-semibold bg-teal-50 text-teal-800 border border-teal-200/80 px-2.5 py-1 rounded-lg shadow-2xs">
+                            {sqlResultData?.totalRows ?? 0} {sqlResultData?.totalRows === 1 ? "Row" : "Rows"}
+                          </span>
+                          <span className="text-xs font-mono text-slate-400">
+                            CLICKHOUSE_SQL
+                          </span>
+                        </div>
+
+                        {/* Single Hero Number if single numeric scalar (e.g. SELECT count()...) */}
+                        {sqlResultData?.scalarResult !== null && sqlResultData?.scalarResult !== undefined && (
+                          <div className="py-4 my-auto">
+                            <div className="text-5xl lg:text-6xl font-extrabold text-slate-900 tracking-tight font-sans">
+                              {Number(sqlResultData.scalarResult).toLocaleString("en-US")}
+                            </div>
+                            <div className="mt-2 flex items-center justify-center space-x-2">
+                              <span className="text-sm font-semibold text-slate-600">
+                                {sqlResultData.columns?.[0] || "Total Result"}
+                              </span>
+                              <span className="text-xs text-slate-400">•</span>
+                              <span className="text-xs text-teal-700 font-medium">
+                                Confidence: 100% Deterministic
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Tabular View for SQL Query Output */}
+                        {sqlResultData?.rows && sqlResultData.rows.length > 0 && (
+                          <div className="py-2 text-left">
+                            <div className="overflow-x-auto rounded-2xl border border-slate-200/80 max-h-72 overflow-y-auto">
+                              <table className="w-full text-left text-xs font-mono">
+                                <thead className="bg-slate-50 border-b border-slate-200/80 text-slate-600 font-semibold uppercase sticky top-0">
+                                  <tr>
+                                    {sqlResultData.columns.map((col) => (
+                                      <th key={col} className="py-2.5 px-3 whitespace-nowrap bg-slate-50">
+                                        {col}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {sqlResultData.rows.map((row, idx) => (
+                                    <tr key={idx} className="hover:bg-teal-50/40 transition-colors">
+                                      {sqlResultData.columns.map((col) => (
+                                        <td key={col} className="py-2 px-3 text-slate-700 whitespace-nowrap max-w-xs truncate">
+                                          {row[col] !== null && row[col] !== undefined ? String(row[col]) : <span className="text-slate-400 italic">NULL</span>}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="mt-2.5 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                              <span>Showing {sqlResultData.rows.length} rows</span>
+                              <span>Execution: {execMetrics.durationMs}ms</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {!sqlResultData && (
+                          <div className="py-12 my-auto text-center text-slate-400 font-mono text-xs">
+                            Type a SQL query above and click "Run Analytics Query" or press Ctrl+Enter.
+                          </div>
+                        )}
+
+                        {/* Execution Topology */}
+                        <div className="pt-3 border-t border-slate-100 text-left">
+                          <div className="text-[11px] font-mono text-slate-400 uppercase mb-1.5">
+                            Execution Topology
+                          </div>
+                          <div className="flex items-center text-xs font-mono text-slate-600 overflow-x-auto py-1">
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              ClickHouse Engine
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-teal-50 text-teal-700 font-semibold border border-teal-200/70 whitespace-nowrap">
+                              Columnar Vectorized Scan
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                              {sqlResultData?.totalRows ?? 0} Rows Streamed
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* STANDARD BUILDER QUERY RESULTS VIEW */}
+                    {mode === "builder" && (
                       <div className="flex flex-col justify-between h-full space-y-6">
                         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                           <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -1535,8 +1683,54 @@ function AnalyticsPage() {
                         </span>
                       </div>
 
-                      {/* STANDARD QUERY METADATA LIST */}
-                      {mode !== "lineage" && (
+                      {/* DIRECT SQL QUERY METADATA LIST */}
+                      {mode === "sql" && (
+                        <div className="divide-y divide-slate-100 text-xs font-mono">
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Query Mode:</span>
+                            <span className="px-2 py-0.5 bg-teal-50 text-teal-800 rounded font-semibold border border-teal-200/60">
+                              Direct ClickHouse SQL
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Columns:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60 truncate max-w-[200px]" title={sqlResultData?.columns?.join(", ")}>
+                              {sqlResultData?.columns?.join(", ") || "Auto-detected"}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Rows Returned:</span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {sqlResultData?.totalRows ?? 0}
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500 flex items-center">
+                              <svg className="w-3.5 h-3.5 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                              Execution Time:
+                            </span>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-semibold border border-slate-200/60">
+                              {execMetrics.durationMs}ms
+                            </span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Scan Engine:</span>
+                            <span className="text-slate-700 font-semibold">ClickHouse Columnar v26.3</span>
+                          </div>
+                          <div className="py-3 flex items-center justify-between">
+                            <span className="text-slate-500">Result Cache:</span>
+                            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
+                              DIRECT RUN
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* BUILDER QUERY METADATA LIST */}
+                      {mode === "builder" && (
                         <div className="divide-y divide-slate-100 text-xs font-mono">
                           <div className="py-3 flex items-center justify-between">
                             <span className="text-slate-500">Target Table:</span>
@@ -1564,8 +1758,13 @@ function AnalyticsPage() {
                           </div>
                           <div className="py-3 flex items-center justify-between">
                             <span className="text-slate-500">Time Range:</span>
-                            <span className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60">
-                              {timeRange}
+                            <span
+                              className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded font-medium border border-slate-200/60 text-right max-w-[200px] truncate"
+                              title={timeRange === "Custom Range" && customStart && customEnd ? `${customStart} - ${customEnd}` : timeRange}
+                            >
+                              {timeRange === "Custom Range" && customStart && customEnd
+                                ? `${customStart.replace("T", " ")} → ${customEnd.replace("T", " ")}`
+                                : timeRange}
                             </span>
                           </div>
                           <div className="py-3 flex items-center justify-between">
@@ -1582,7 +1781,7 @@ function AnalyticsPage() {
                           </div>
                           <div className="py-3 flex items-center justify-between">
                             <span className="text-slate-500">Scan Engine:</span>
-                            <span className="text-slate-700 font-semibold">ClickHouse Columnar v24.3</span>
+                            <span className="text-slate-700 font-semibold">ClickHouse Columnar v26.3</span>
                           </div>
                           <div className="py-3 flex items-center justify-between">
                             <span className="text-slate-500">Result Cache:</span>

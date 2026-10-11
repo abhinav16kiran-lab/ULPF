@@ -6,6 +6,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -49,11 +51,31 @@ public class AnalyticsController {
         ));
     }
 
+    public record SqlQueryRequest(String query) {}
+
+    @PostMapping("/analytics/sql")
+    public ResponseEntity<?> executeSql(@RequestBody SqlQueryRequest request) {
+        if (request == null || request.query() == null || request.query().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "query parameter is required"));
+        }
+        try {
+            var result = analyticsService.executeDirectSql(request.query());
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @GetMapping("/analytics")
     public ResponseEntity<?> getAnalytics(
             @RequestParam(required = false) String table,
             @RequestParam(required = false) String column,
-            @RequestParam(required = false) String aggregation
+            @RequestParam(required = false) String aggregation,
+            @RequestParam(required = false) String timeRange,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to
     ) {
         if (isBlank(table) || isBlank(column) || isBlank(aggregation)) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -67,7 +89,7 @@ public class AnalyticsController {
             ));
         }
 
-        var result = analyticsService.runQuery(table, column, aggregation);
+        var result = analyticsService.runQuery(table, column, aggregation, timeRange, from, to);
 
         return ResponseEntity.ok(Map.of(
                 "table", result.table(),

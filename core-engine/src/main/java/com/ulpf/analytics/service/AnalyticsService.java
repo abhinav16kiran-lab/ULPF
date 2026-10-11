@@ -39,6 +39,15 @@ public class AnalyticsService {
 
     public record AnalyticsResult(String table, String column, String aggregation, double result) {}
 
+    public record SqlQueryResult(
+            List<String> columns,
+            List<java.util.Map<String, Object>> rows,
+            long totalRows,
+            long executionTimeMs,
+            String query,
+            Double scalarResult
+    ) {}
+
     public record LogSearchResult(
             List<RawEventRecord> events,
             long totalMatches,
@@ -113,7 +122,92 @@ public class AnalyticsService {
         }
     }
 
+    public String resolveFullTableName(String table) {
+        String safeTable = sanitizeIdentifier(table);
+        if (safeTable.contains(".")) {
+            return safeTable;
+        }
+        if ("raw_events".equalsIgnoreCase(safeTable)) {
+            return "ulpf_raw.raw_events";
+        }
+        return "ulpf_events." + safeTable;
+    }
+
+    public SqlQueryResult executeDirectSql(String rawSql) {
+        if (rawSql == null || rawSql.isBlank()) {
+            throw new IllegalArgumentException("SQL query cannot be empty");
+        }
+        String trimmed = rawSql.trim();
+        while (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
+        }
+
+        String upper = trimmed.toUpperCase();
+        if (!upper.startsWith("SELECT") && !upper.startsWith("WITH") && !upper.startsWith("SHOW") && !upper.startsWith("DESCRIBE") && !upper.startsWith("EXPLAIN")) {
+            throw new IllegalArgumentException("Only read-only queries (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN) are permitted");
+        }
+
+        String[] forbidden = {"DROP ", "ALTER ", "INSERT ", "DELETE ", "TRUNCATE ", "UPDATE ", "ATTACH ", "DETACH ", "RENAME ", "KILL "};
+        for (String word : forbidden) {
+            if (upper.contains(word)) {
+                throw new IllegalArgumentException("Mutating operations are prohibited in read-only analytics mode: " + word.trim());
+            }
+        }
+
+        // Automatically qualify tables if unqualified
+        String executableSql = trimmed;
+        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+canonical_events\\b", "FROM ulpf_events.canonical_events");
+        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+canonical_events\\b", "JOIN ulpf_events.canonical_events");
+        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+raw_events\\b", "FROM ulpf_raw.raw_events");
+        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+raw_events\\b", "JOIN ulpf_raw.raw_events");
+
+        log.info("Executing Direct ClickHouse SQL Query: {}", executableSql);
+        long startTime = System.currentTimeMillis();
+
+        try {
+            return clickhouseJdbcTemplate.query(executableSql, rs -> {
+                java.sql.ResultSetMetaData meta = rs.getMetaData();
+                int colCount = meta.getColumnCount();
+                List<String> columns = new java.util.ArrayList<>(colCount);
+                for (int i = 1; i <= colCount; i++) {
+                    columns.add(meta.getColumnLabel(i));
+                }
+
+                List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
+                Double scalar = null;
+
+                while (rs.next() && rows.size() < 1000) {
+                    java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+                    for (int i = 1; i <= colCount; i++) {
+                        Object val = rs.getObject(i);
+                        row.put(columns.get(i - 1), val != null ? val.toString() : null);
+                    }
+                    rows.add(row);
+                }
+
+                if (!rows.isEmpty() && colCount == 1) {
+                    try {
+                        Object firstVal = rows.get(0).values().iterator().next();
+                        if (firstVal != null) {
+                            scalar = Double.parseDouble(firstVal.toString());
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                long elapsed = System.currentTimeMillis() - startTime;
+                return new SqlQueryResult(columns, rows, rows.size(), elapsed, rawSql, scalar);
+            });
+        } catch (Exception e) {
+            log.error("Failed to execute direct SQL query: {}", e.getMessage());
+            throw new RuntimeException("ClickHouse query error: " + e.getMessage(), e);
+        }
+    }
+
     public AnalyticsResult runQuery(String table, String column, String aggregation) {
+        return runQuery(table, column, aggregation, null, null, null);
+    }
+
+    public AnalyticsResult runQuery(String table, String column, String aggregation, String timeRange, String from, String to) {
         if (!isValidAggregation(aggregation)) {
             throw new IllegalArgumentException("Invalid aggregation function: " + aggregation);
         }
@@ -121,15 +215,62 @@ public class AnalyticsService {
         String aggUpper = aggregation.toUpperCase();
         String safeTable = sanitizeIdentifier(table);
         String safeColumn = sanitizeIdentifier(column);
+        String fullTableName = resolveFullTableName(safeTable);
 
-        // Target ulpf_raw or ulpf_events database prefix if not explicitly provided
-        String fullTableName = safeTable.contains(".") ? safeTable : "ulpf_raw." + safeTable;
+        String timeCol = "raw_events".equalsIgnoreCase(safeTable) ? "received_at" : "timestamp";
 
-        String sql = String.format("SELECT %s(%s) FROM %s", aggUpper, safeColumn, fullTableName);
-        log.info("Executing ClickHouse Analytics Query: {}", sql);
+        StringBuilder sqlBuilder = new StringBuilder();
+        sqlBuilder.append(String.format("SELECT %s(%s) FROM %s", aggUpper, safeColumn, fullTableName));
+
+        List<Object> params = new java.util.ArrayList<>();
+        List<String> whereClauses = new java.util.ArrayList<>();
+
+        if (timeRange != null && !timeRange.isBlank()) {
+            String tr = timeRange.trim();
+            if ("Last 15 minutes".equalsIgnoreCase(tr) || "15m".equalsIgnoreCase(tr)) {
+                whereClauses.add(timeCol + " >= now64(3) - INTERVAL 15 MINUTE");
+            } else if ("Last 1 hour".equalsIgnoreCase(tr) || "1h".equalsIgnoreCase(tr)) {
+                whereClauses.add(timeCol + " >= now64(3) - INTERVAL 1 HOUR");
+            } else if ("Last 24 hours".equalsIgnoreCase(tr) || "24h".equalsIgnoreCase(tr)) {
+                whereClauses.add(timeCol + " >= now64(3) - INTERVAL 24 HOUR");
+            } else if ("Last 7 days".equalsIgnoreCase(tr) || "7d".equalsIgnoreCase(tr)) {
+                whereClauses.add(timeCol + " >= now64(3) - INTERVAL 7 DAY");
+            } else if ("Custom Range".equalsIgnoreCase(tr) || "custom".equalsIgnoreCase(tr)) {
+                if (from != null && !from.isBlank()) {
+                    whereClauses.add(timeCol + " >= parseDateTime64BestEffortOrNull(?)");
+                    params.add(from.trim());
+                }
+                if (to != null && !to.isBlank()) {
+                    whereClauses.add(timeCol + " <= parseDateTime64BestEffortOrNull(?)");
+                    params.add(to.trim());
+                }
+            }
+            // "All Time" adds no restriction clause
+        } else if ((from != null && !from.isBlank()) || (to != null && !to.isBlank())) {
+            if (from != null && !from.isBlank()) {
+                whereClauses.add(timeCol + " >= parseDateTime64BestEffortOrNull(?)");
+                params.add(from.trim());
+            }
+            if (to != null && !to.isBlank()) {
+                whereClauses.add(timeCol + " <= parseDateTime64BestEffortOrNull(?)");
+                params.add(to.trim());
+            }
+        }
+
+        if (!whereClauses.isEmpty()) {
+            sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
+        }
+
+        String sql = sqlBuilder.toString();
+        log.info("Executing ClickHouse Analytics Query: {} [params: {}]", sql, params);
 
         try {
-            Double queryResult = clickhouseJdbcTemplate.queryForObject(sql, Double.class);
+            Double queryResult;
+            if (params.isEmpty()) {
+                queryResult = clickhouseJdbcTemplate.queryForObject(sql, Double.class);
+            } else {
+                queryResult = clickhouseJdbcTemplate.queryForObject(sql, Double.class, params.toArray());
+            }
             double val = (queryResult != null) ? queryResult : 0.0;
             return new AnalyticsResult(table, column, aggUpper, val);
         } catch (Exception e) {
@@ -148,7 +289,7 @@ public class AnalyticsService {
      */
     public byte[] exportParquet(String table, String vendorId, String sourceId, String from, String to, Integer limit) {
         String safeTable = (table != null && !table.isBlank()) ? sanitizeIdentifier(table) : "raw_events";
-        String fullTableName = safeTable.contains(".") ? safeTable : "ulpf_raw." + safeTable;
+        String fullTableName = resolveFullTableName(safeTable);
 
         int maxLimit = (limit != null && limit > 0 && limit <= 500000) ? limit : 10000;
 
