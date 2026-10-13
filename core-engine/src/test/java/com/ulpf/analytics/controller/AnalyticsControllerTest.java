@@ -11,6 +11,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -41,7 +42,9 @@ class AnalyticsControllerTest {
     @Test
     void testGetAnalytics_ValidParams_ReturnsOk() throws Exception {
         when(analyticsService.isValidAggregation("AVG")).thenReturn(true);
-        when(analyticsService.runQuery(anyString(), anyString(), anyString()))
+        // timeRange/from/to are optional request params and arrive as null here
+        when(analyticsService.runQuery(anyString(), anyString(), anyString(),
+                nullable(String.class), nullable(String.class), nullable(String.class)))
                 .thenReturn(new AnalyticsResult("logs", "latency", "AVG", 42.5));
 
         mockMvc.perform(get("/v1/analytics")
