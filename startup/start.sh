@@ -75,6 +75,13 @@ else
 fi
 echo "[✓] Container build and launch complete!"
 
+echo "Pruning dangling builder cache layers..."
+if command -v podman &> /dev/null; then
+    podman image prune -f > /dev/null 2>&1 || true
+elif command -v docker &> /dev/null; then
+    docker image prune -f > /dev/null 2>&1 || true
+fi
+
 echo "Verifying service readiness..."
 
 MAX_RETRIES=40

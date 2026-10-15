@@ -21,4 +21,11 @@ fi
 
 $COMPOSE_CMD down
 
+echo "Cleaning up dangling builder cache layers..."
+if command -v podman &> /dev/null; then
+    podman image prune -f > /dev/null 2>&1 || true
+elif command -v docker &> /dev/null; then
+    docker image prune -f > /dev/null 2>&1 || true
+fi
+
 echo "[✓] All ULPF containers stopped successfully!"
