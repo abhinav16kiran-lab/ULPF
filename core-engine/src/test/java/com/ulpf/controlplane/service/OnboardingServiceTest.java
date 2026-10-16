@@ -13,12 +13,14 @@ import com.ulpf.common.db.VendorRepository;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
 import com.ulpf.mapping.service.MappingProposalService;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.io.File;
 import java.util.List;
 import java.util.Optional;
 
@@ -163,5 +165,18 @@ class OnboardingServiceTest {
                 OnboardingRequestRecord req = onboardingRepository.findRequestById(updateResult.requestId()).get();
                 assertEquals("UPDATE_SOURCE", req.requestType());
                 assertEquals(initResult.sourceId(), req.sourceId());
+        }
+
+        @AfterAll
+        static void tearDownAll() {
+                File dir = new File("storage/onboarding-samples");
+                if (dir.exists() && dir.isDirectory()) {
+                        File[] files = dir.listFiles();
+                        if (files != null) {
+                                for (File file : files) {
+                                        file.delete();
+                                }
+                        }
+                }
         }
 }

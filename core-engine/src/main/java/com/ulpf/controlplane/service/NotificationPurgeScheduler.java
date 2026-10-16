@@ -4,6 +4,8 @@ import com.ulpf.common.db.OnboardingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -37,6 +39,16 @@ public class NotificationPurgeScheduler {
     }
 
     /**
+     * Startup purge check to ensure expired records and sample files are cleaned up
+     * even if the application was offline during the scheduled 2:00 AM cron window.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onStartup() {
+        log.info("Executing startup TTL data retention purge check...");
+        runDailyTtlPurge();
+    }
+
+    /**
      * Daily background job (default 2:00 AM) to purge expired notifications and onboarding metadata.
      */
     @Scheduled(cron = "${notifications.ttl.cron:0 0 2 * * *}")
@@ -66,26 +78,32 @@ public class NotificationPurgeScheduler {
     }
 
     private void cleanupDiskSampleFiles(int daysOld) {
-        try {
-            File dir = new File("storage/onboarding-samples");
-            if (!dir.exists() || !dir.isDirectory()) {
-                return;
-            }
+        File[] candidateDirs = new File[] {
+                new File("storage/onboarding-samples"),
+                new File("core-engine/storage/onboarding-samples")
+        };
 
-            long cutoffTime = System.currentTimeMillis() - (daysOld * 86400000L);
-            File[] files = dir.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.lastModified() < cutoffTime) {
-                        boolean deleted = file.delete();
-                        if (deleted) {
-                            log.info("Deleted expired sample file from disk: {}", file.getName());
+        for (File dir : candidateDirs) {
+            try {
+                if (!dir.exists() || !dir.isDirectory()) {
+                    continue;
+                }
+
+                long cutoffTime = System.currentTimeMillis() - (daysOld * 86400000L);
+                File[] files = dir.listFiles();
+                if (files != null) {
+                    for (File file : files) {
+                        if (file.lastModified() < cutoffTime) {
+                            boolean deleted = file.delete();
+                            if (deleted) {
+                                log.info("Deleted expired sample file from disk: {}", file.getName());
+                            }
                         }
                     }
                 }
+            } catch (Exception e) {
+                log.warn("Error cleaning up disk sample files in {}: {}", dir.getPath(), e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Error cleaning up disk sample files: {}", e.getMessage());
         }
     }
 }
