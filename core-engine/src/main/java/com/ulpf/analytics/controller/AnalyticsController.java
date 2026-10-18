@@ -89,14 +89,20 @@ public class AnalyticsController {
             ));
         }
 
-        var result = analyticsService.runQuery(table, column, aggregation, timeRange, from, to);
+        try {
+            var result = analyticsService.runQuery(table, column, aggregation, timeRange, from, to);
 
-        return ResponseEntity.ok(Map.of(
-                "table", result.table(),
-                "column", result.column(),
-                "aggregation", result.aggregation(),
-                "result", result.result()
-        ));
+            return ResponseEntity.ok(Map.of(
+                    "table", result.table(),
+                    "column", result.column(),
+                    "aggregation", result.aggregation(),
+                    "result", result.result()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/analytics/lineage/{lineageId}")

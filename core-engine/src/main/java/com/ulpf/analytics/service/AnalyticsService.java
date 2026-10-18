@@ -154,6 +154,13 @@ public class AnalyticsService {
             }
         }
 
+        // Prohibit external ClickHouse table/integration functions (file, url, remote, s3, etc.)
+        java.util.regex.Pattern forbiddenFunctionsPattern = java.util.regex.Pattern.compile(
+                "(?i)\\b(FILE|URL|REMOTE|REMOTE_SECURE|S3|HDFS|EXECUTABLE)\\s*\\(");
+        if (forbiddenFunctionsPattern.matcher(trimmed).find()) {
+            throw new IllegalArgumentException("Access to external system functions (file, url, remote, etc.) is prohibited");
+        }
+
         // Automatically qualify tables if unqualified
         String executableSql = trimmed;
         executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+canonical_events\\b", "FROM ulpf_events.canonical_events");

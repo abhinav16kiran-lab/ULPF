@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SchemaDriftNotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaDriftNotificationService.class);
-    private static final long COOLDOWN_MS = 15 * 60 * 1000L; // 15 Minutes
+    @org.springframework.beans.factory.annotation.Value("${ulpf.schema-drift.cooldown-ms:3600000}")
+    private long cooldownMs = 3600000L; // Default 1 Hour (configurable via ulpf.schema-drift.cooldown-ms)
 
     private final SourceRepository sourceRepository;
     private final VendorRepository vendorRepository;
@@ -51,10 +52,18 @@ public class SchemaDriftNotificationService {
         this.userRepository = userRepository;
     }
 
+    public void setCooldownMs(long cooldownMs) {
+        this.cooldownMs = cooldownMs;
+    }
+
+    public long getCooldownMs() {
+        return this.cooldownMs;
+    }
+
     /**
      * Inspects unmapped keys from a live log event and dispatches role-tailored
      * notifications to vendor and admin.
-     * Deduplicates alerts per sourceId and key set within a 15-minute window.
+     * Deduplicates alerts per sourceId and key set within a cooldown window.
      */
     public void checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys) {
         if (sourceId == null || unmappedKeys == null || unmappedKeys.isEmpty()) {
@@ -68,7 +77,7 @@ public class SchemaDriftNotificationService {
         long now = System.currentTimeMillis();
 
         Long lastNotified = lastNotifiedCache.get(cacheKey);
-        if (lastNotified != null && (now - lastNotified) < COOLDOWN_MS) {
+        if (lastNotified != null && (now - lastNotified) < cooldownMs) {
             log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
             return;
         }

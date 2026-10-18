@@ -55,6 +55,22 @@ class AnalyticsControllerTest {
     }
 
     @Test
+    void testGetAnalytics_InvalidTableThrowsIllegalArgumentException_ReturnsBadRequest() throws Exception {
+        when(analyticsService.isValidAggregation("COUNT")).thenReturn(true);
+        when(analyticsService.runQuery(anyString(), anyString(), anyString(),
+                nullable(String.class), nullable(String.class), nullable(String.class)))
+                .thenThrow(new IllegalArgumentException("Invalid characters in SQL identifier: bad;table"));
+
+        mockMvc.perform(get("/v1/analytics")
+                        .param("table", "bad;table")
+                        .param("column", "src_ip")
+                        .param("aggregation", "COUNT"))
+                .andExpect(status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error")
+                        .value("Invalid characters in SQL identifier: bad;table"));
+    }
+
+    @Test
     void testExportParquet_ReturnsBinaryContent() throws Exception {
         byte[] mockParquet = new byte[] {0x50, 0x41, 0x52, 0x31, 0x00, 0x00, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
         when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))

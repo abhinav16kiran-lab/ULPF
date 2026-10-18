@@ -68,6 +68,19 @@ class AnalyticsServiceTest {
     }
 
     @Test
+    void testExecuteDirectSql_RejectsExternalTableFunctions() {
+        assertThrows(IllegalArgumentException.class,
+                () -> analyticsService.executeDirectSql("SELECT * FROM file('/etc/passwd', 'LineAsString')"));
+        assertThrows(IllegalArgumentException.class,
+                () -> analyticsService.executeDirectSql("SELECT * FROM url('http://example.com/data', 'CSV')"));
+        assertThrows(IllegalArgumentException.class,
+                () -> analyticsService.executeDirectSql("SELECT * FROM remote('127.0.0.1', default)"));
+        assertThrows(IllegalArgumentException.class,
+                () -> analyticsService.executeDirectSql("SELECT * FROM s3('https://s3.amazonaws.com/bucket/file.csv')"));
+        verifyNoInteractions(clickhouseJdbcTemplate);
+    }
+
+    @Test
     void testExportParquetReturnsBinaryData() {
         byte[] parquet = analyticsService.exportParquet("raw_events", "vendor-123", "src-1", null, null, 100);
 

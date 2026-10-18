@@ -160,4 +160,102 @@ class BatchIntegrityServiceTest {
         assertEquals(1, result.tamperedBlocks().size());
         assertEquals(2L, result.tamperedBlocks().get(0).blockId());
     }
+
+    @Test
+    void testRawEventRecordCompactConstructorDefaultsNullTimestamp() {
+        RawEventRecord record = new RawEventRecord("e1", "l1", "v1", "src_1", 1, null, "payload");
+        assertNotNull(record.receivedAt(), "receivedAt should not be null after compact constructor runs");
+    }
+
+    @Test
+    void testVerifyBlockIntegrity_ClickHouseQueryContainsNullsFirst() {
+        IntegrityBlockRecord block = new IntegrityBlockRecord(
+                1L, "src_fw_1", 2, "e1", "e2", "mock_root", "prev_hash", LocalDateTime.now()
+        );
+        when(integrityRepository.findBlockById(1L)).thenReturn(java.util.Optional.of(block));
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        when(clickhouseJdbcTemplate.query(sqlCaptor.capture(), ArgumentMatchers.<RowMapper<RawEventRecord>>any(), any(), any(), any(), any()))
+                .thenReturn(List.of());
+
+        batchIntegrityService.verifyBlockIntegrity(1L);
+
+        String executedSql = sqlCaptor.getValue();
+        assertTrue(executedSql.contains("ORDER BY received_at ASC NULLS FIRST, event_id ASC NULLS FIRST"),
+                "ClickHouse windowSql should specify NULLS FIRST for both received_at and event_id");
+    }
+
+    @Test
+    void testVerifyBlockIntegrity_DefensiveSortingOrderMatchesMerkleRoot() {
+        LocalDateTime t1 = LocalDateTime.of(2026, 1, 1, 10, 0, 0);
+        LocalDateTime t2 = LocalDateTime.of(2026, 1, 1, 10, 0, 5);
+        RawEventRecord r1 = new RawEventRecord("e1", "l1", "v1", "src_fw_1", 1, t1, "payload1");
+        RawEventRecord r2 = new RawEventRecord("e2", "l1", "v1", "src_fw_1", 1, t2, "payload2");
+
+        // Calculate expected root when sorted [r1, r2]
+        String leaf1 = MerkleTreeCalculator.hashSha256("e1" + "v1" + "src_fw_1" + "l1" + "payload1");
+        String leaf2 = MerkleTreeCalculator.hashSha256("e2" + "v1" + "src_fw_1" + "l1" + "payload2");
+        String expectedRoot = merkleTreeCalculator.calculateMerkleRoot(List.of(leaf1, leaf2));
+
+        IntegrityBlockRecord block = new IntegrityBlockRecord(
+                1L, "src_fw_1", 2, "e1", "e2", expectedRoot, "prev_hash", LocalDateTime.now()
+        );
+        when(integrityRepository.findBlockById(1L)).thenReturn(java.util.Optional.of(block));
+
+        // Even if ClickHouse returned rows in reverse order [r2, r1], in-memory defensive sorting must restore [r1, r2]
+        when(clickhouseJdbcTemplate.query(anyString(), ArgumentMatchers.<RowMapper<RawEventRecord>>any(), any(), any(), any(), any()))
+                .thenReturn(List.of(r2, r1));
+
+        BatchIntegrityService.VerificationResult result = batchIntegrityService.verifyBlockIntegrity(1L);
+        assertEquals("VALID", result.status());
+        assertFalse(result.isTampered());
+        assertEquals(expectedRoot, result.computedMerkleRoot());
+    }
+
+    @Test
+    void testVerifyBlockIntegrity_DeduplicatesDuplicateDatabaseRecords() {
+        LocalDateTime t1 = LocalDateTime.of(2026, 1, 1, 10, 0, 0);
+        LocalDateTime t2 = LocalDateTime.of(2026, 1, 1, 10, 0, 5);
+        RawEventRecord r1 = new RawEventRecord("e1", "l1", "v1", "src_fw_1", 1, t1, "payload1");
+        RawEventRecord r2 = new RawEventRecord("e2", "l1", "v1", "src_fw_1", 1, t2, "payload2");
+
+        String leaf1 = MerkleTreeCalculator.hashSha256("e1" + "v1" + "src_fw_1" + "l1" + "payload1");
+        String leaf2 = MerkleTreeCalculator.hashSha256("e2" + "v1" + "src_fw_1" + "l1" + "payload2");
+        String expectedRoot = merkleTreeCalculator.calculateMerkleRoot(List.of(leaf1, leaf2));
+
+        IntegrityBlockRecord block = new IntegrityBlockRecord(
+                1L, "src_fw_1", 2, "e1", "e2", expectedRoot, "prev_hash", LocalDateTime.now()
+        );
+        when(integrityRepository.findBlockById(1L)).thenReturn(java.util.Optional.of(block));
+
+        // ClickHouse returns duplicated rows from retry flushes: [r1, r1, r2, r2]
+        when(clickhouseJdbcTemplate.query(anyString(), ArgumentMatchers.<RowMapper<RawEventRecord>>any(), any(), any(), any(), any()))
+                .thenReturn(List.of(r1, r1, r2, r2));
+
+        BatchIntegrityService.VerificationResult result = batchIntegrityService.verifyBlockIntegrity(1L);
+        assertEquals("VALID", result.status(), "Duplicate database rows should be deduplicated by eventId");
+        assertFalse(result.isTampered());
+        assertEquals(expectedRoot, result.computedMerkleRoot());
+    }
+
+    @Test
+    void testProcessRawBatch_IdempotentSkipsExistingBlock() {
+        RawEventRecord r1 = new RawEventRecord("e1", "l1", "v1", "src_fw_1", 1, LocalDateTime.now(), "payload");
+        String leaf1 = MerkleTreeCalculator.hashSha256("e1" + "v1" + "src_fw_1" + "l1" + "payload");
+        String expectedRoot = merkleTreeCalculator.calculateMerkleRoot(List.of(leaf1));
+
+        IntegrityBlockRecord existingBlock = new IntegrityBlockRecord(
+                10L, "src_fw_1", 1, "e1", "e1", expectedRoot, "prev_hash", LocalDateTime.now()
+        );
+
+        when(integrityRepository.findExistingBlock(eq("src_fw_1"), eq("e1"), eq("e1"), eq(expectedRoot)))
+                .thenReturn(java.util.Optional.of(existingBlock));
+
+        List<IntegrityBlockRecord> blocks = batchIntegrityService.processRawBatch(List.of(r1));
+
+        assertEquals(1, blocks.size());
+        assertEquals(10L, blocks.get(0).blockId());
+        // Verify saveBlock was NOT called since block already exists
+        verify(integrityRepository, never()).saveBlock(any());
+    }
 }

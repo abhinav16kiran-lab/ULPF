@@ -40,19 +40,6 @@ public class ClickHouseIngestionRepository {
     @Value("${clickhouse.ingestion.batch-size:500}")
     private int batchSize = 500;
 
-    private final Object batchTimeLock = new Object();
-    private long lastBatchMillis = 0;
-
-    private LocalDateTime getUniqueBatchTime() {
-        synchronized (batchTimeLock) {
-            long now = System.currentTimeMillis();
-            if (now <= lastBatchMillis) {
-                now = lastBatchMillis + 1;
-            }
-            lastBatchMillis = now;
-            return LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(now), java.time.ZoneId.systemDefault());
-        }
-    }
 
     public ClickHouseIngestionRepository(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
@@ -71,7 +58,13 @@ public class ClickHouseIngestionRepository {
         Integer mappingVersion,
         LocalDateTime receivedAt,
         String rawPayload
-    ) {}
+    ) {
+        public RawEventRecord {
+            if (receivedAt == null) {
+                receivedAt = LocalDateTime.now();
+            }
+        }
+    }
 
     public record CanonicalEventRecord(
         String eventId,
@@ -143,19 +136,10 @@ public class ClickHouseIngestionRepository {
             return;
         }
 
-        LocalDateTime batchTime = getUniqueBatchTime();
         List<RawEventRecord> batch = new ArrayList<>();
         RawEventRecord item;
         while ((item = bufferQueue.poll()) != null) {
-            batch.add(new RawEventRecord(
-                item.eventId(),
-                item.lineageId(),
-                item.vendorId(),
-                item.sourceId(),
-                item.mappingVersion(),
-                batchTime,
-                item.rawPayload()
-            ));
+            batch.add(item);
         }
 
         if (batch.isEmpty()) {
@@ -195,9 +179,34 @@ public class ClickHouseIngestionRepository {
             }
 
         } catch (Exception e) {
-            log.error("Failed to flush batch of {} raw log events to ClickHouse!", batch.size(), e);
-            // Re-enqueue batch in case of transient network failure
-            bufferQueue.addAll(batch);
+            log.warn("Flush exception encountered for batch of {} events: {}", batch.size(), e.getMessage());
+            boolean alreadyCommitted = false;
+            try {
+                if (!batch.isEmpty() && batch.get(0).eventId() != null) {
+                    String probeSql = "SELECT count() FROM ulpf_raw.raw_events WHERE event_id = ?";
+                    Integer count = clickhouseJdbcTemplate.queryForObject(probeSql, Integer.class, batch.get(0).eventId());
+                    if (count != null && count > 0) {
+                        alreadyCommitted = true;
+                    }
+                }
+            } catch (Exception probeEx) {
+                log.debug("Probe query to check if batch was committed failed: {}", probeEx.getMessage());
+            }
+
+            if (alreadyCommitted) {
+                log.info("Batch of {} events was already committed in ClickHouse before timeout. Skipping duplicate insert.", batch.size());
+                if (batchIntegrityService != null) {
+                    try {
+                        batchIntegrityService.processRawBatch(batch);
+                    } catch (Exception ex) {
+                        log.warn("Failed to process batch integrity block on recovery: {}", ex.getMessage());
+                    }
+                }
+            } else {
+                log.error("Failed to flush batch of {} raw log events to ClickHouse! Re-enqueuing batch.", batch.size(), e);
+                // Re-enqueue batch in case of genuine transient network failure
+                bufferQueue.addAll(batch);
+            }
         }
     }
 
