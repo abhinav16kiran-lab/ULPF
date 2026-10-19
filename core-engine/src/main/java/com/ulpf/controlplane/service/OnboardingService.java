@@ -1,6 +1,6 @@
 package com.ulpf.controlplane.service;
 
-// import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ulpf.common.db.CredentialRepository;
@@ -378,10 +378,28 @@ public class OnboardingService {
             MappingVersionRecord candidate = candidateOpt.get();
 
             // 1. Provision ClickHouse schema FIRST
+            String targetTable = null;
             if (dynamicSchemaProvisioningService != null) {
                 Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
                 String sourceName = srcOpt.map(SourceRecord::sourceName).orElse("stream_" + sourceId);
-                dynamicSchemaProvisioningService.provisionSchemaForSource(sourceId, sourceName, candidate.mappingJson());
+                targetTable = dynamicSchemaProvisioningService.provisionSchemaForSource(sourceId, sourceName, candidate.mappingJson());
+            }
+
+            // Save target_table in candidate mapping metadata if provisioned
+            if (targetTable != null && !targetTable.isBlank()) {
+                try {
+                    JsonNode rootNode = objectMapper.readTree(candidate.mappingJson());
+                    if (rootNode.isObject()) {
+                        ObjectNode objNode = (ObjectNode) rootNode;
+                        ObjectNode metaNode = objNode.has("metadata") && objNode.get("metadata").isObject()
+                                ? (ObjectNode) objNode.get("metadata")
+                                : objNode.putObject("metadata");
+                        metaNode.put("target_table", targetTable);
+                        mappingRepository.updateCandidateMappingJson(sourceId, objectMapper.writeValueAsString(objNode));
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to inject target_table into candidate mapping for sourceId {}: {}", sourceId, e.getMessage());
+                }
             }
 
             // 2. Activate mapping version record in SQLite ONLY after ClickHouse schema provisioning succeeds

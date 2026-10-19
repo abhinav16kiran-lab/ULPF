@@ -8,19 +8,24 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Extractor utility that inspects HTTP headers and raw event payloads for correlation IDs / Trace IDs.
- * Multi-candidate fallback hierarchy:
+ * Multi-candidate hierarchy:
  * 1. W3C traceparent header
  * 2. Common HTTP headers (X-Trace-Id, X-Request-Id, X-Correlation-Id)
- * 3. Raw log payload fields (trace_id, traceId, correlation_id, x-request-id)
- * 4. Fallback generation of a fresh W3C Trace ID if missing.
+ * 3. Raw log payload fields (trace_id, traceId, correlation_id, x-request-id, w3c_traceparent)
+ * If missing or non-compliant with W3C / UUID hex standards, returns null (no silent zero-padding or truncation).
  */
 public class TraceContextExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(TraceContextExtractor.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final Pattern HEX_32_PATTERN = Pattern.compile("^[0-9a-fA-F]{32}$");
+    private static final Pattern UUID_PATTERN = Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    private static final String ALL_ZEROS_TRACE_ID = "00000000000000000000000000000000";
 
     private static final List<String> HEADER_CANDIDATES = List.of(
             "traceparent",
@@ -44,7 +49,8 @@ public class TraceContextExtractor {
     );
 
     /**
-     * Extracts or generates a TraceContext from HTTP headers and log payload.
+     * Extracts a TraceContext from HTTP headers or log payload if a valid W3C trace ID / UUID is present.
+     * Returns null if no valid trace ID is found.
      */
     public static TraceContext extract(Map<String, String> headers, Object payload) {
         // 1. Try W3C traceparent header
@@ -62,10 +68,17 @@ public class TraceContextExtractor {
             for (String candidate : HEADER_CANDIDATES) {
                 for (Map.Entry<String, String> entry : headers.entrySet()) {
                     if (candidate.equalsIgnoreCase(entry.getKey()) && entry.getValue() != null && !entry.getValue().isBlank()) {
-                        String val = entry.getValue().trim();
-                        String traceId = normalizeTo32Hex(val);
-                        String spanId = W3cTraceContextParser.generateSpanId();
-                        return new TraceContext(traceId, spanId, null, true, Map.of("extracted_header", candidate));
+                        String rawVal = entry.getValue().trim();
+                        // Check if header contains a full W3C traceparent
+                        Optional<TraceContext> w3cCtx = W3cTraceContextParser.parseTraceparent(rawVal);
+                        if (w3cCtx.isPresent()) {
+                            return w3cCtx.get();
+                        }
+                        Optional<String> validTraceId = validateAndNormalizeTraceId(rawVal);
+                        if (validTraceId.isPresent()) {
+                            String spanId = W3cTraceContextParser.generateSpanId();
+                            return new TraceContext(validTraceId.get(), spanId, null, true, Map.of("extracted_header", candidate));
+                        }
                     }
                 }
             }
@@ -73,21 +86,26 @@ public class TraceContextExtractor {
 
         // 3. Try raw log payload JSON keys
         if (payload != null) {
-            Optional<String> payloadTraceId = extractFromPayload(payload);
-            if (payloadTraceId.isPresent()) {
-                String traceId = normalizeTo32Hex(payloadTraceId.get());
-                String spanId = W3cTraceContextParser.generateSpanId();
-                return new TraceContext(traceId, spanId, null, true, Map.of("extracted_from", "payload"));
+            Optional<TraceContext> payloadCtx = extractFromPayload(payload);
+            if (payloadCtx.isPresent()) {
+                return payloadCtx.get();
             }
         }
 
-        // 4. Fallback generation of fresh W3C Trace Context
+        // Return null if no valid trace ID was provided
+        return null;
+    }
+
+    /**
+     * Generates a fresh W3C Trace Context when explicit generation is desired.
+     */
+    public static TraceContext generateFresh() {
         String freshTraceId = W3cTraceContextParser.generateTraceId();
         String freshSpanId = W3cTraceContextParser.generateSpanId();
         return new TraceContext(freshTraceId, freshSpanId, null, true, Map.of("generated", "true"));
     }
 
-    private static Optional<String> extractFromPayload(Object payload) {
+    private static Optional<TraceContext> extractFromPayload(Object payload) {
         try {
             JsonNode rootNode;
             if (payload instanceof JsonNode jn) {
@@ -103,7 +121,16 @@ public class TraceContextExtractor {
                     if (rootNode.has(key) && !rootNode.get(key).isNull()) {
                         String val = rootNode.get(key).asText();
                         if (val != null && !val.isBlank()) {
-                            return Optional.of(val.trim());
+                            String trimmed = val.trim();
+                            Optional<TraceContext> w3cCtx = W3cTraceContextParser.parseTraceparent(trimmed);
+                            if (w3cCtx.isPresent()) {
+                                return w3cCtx;
+                            }
+                            Optional<String> validTraceId = validateAndNormalizeTraceId(trimmed);
+                            if (validTraceId.isPresent()) {
+                                String spanId = W3cTraceContextParser.generateSpanId();
+                                return Optional.of(new TraceContext(validTraceId.get(), spanId, null, true, Map.of("extracted_from", "payload", "payload_key", key)));
+                            }
                         }
                     }
                 }
@@ -114,18 +141,32 @@ public class TraceContextExtractor {
         return Optional.empty();
     }
 
-    private static String normalizeTo32Hex(String input) {
-        String clean = input.replaceAll("[^a-zA-Z0-9]", "");
-        if (clean.length() == 32) {
-            return clean.toLowerCase();
-        } else if (clean.length() > 32) {
-            return clean.substring(0, 32).toLowerCase();
-        } else {
-            StringBuilder sb = new StringBuilder(clean.toLowerCase());
-            while (sb.length() < 32) {
-                sb.append("0");
-            }
-            return sb.toString();
+    /**
+     * Validates and normalizes candidate trace ID strings into 32-character hexadecimal format.
+     * Accepts:
+     * - Standard 32-character hex strings ([0-9a-fA-F]{32})
+     * - Standard 36-character canonical UUID strings (converted by stripping hyphens)
+     * Rejects:
+     * - Non-hexadecimal characters
+     * - Strings of invalid lengths (does NOT truncate or pad)
+     * - All-zero identifiers (forbidden by W3C specification)
+     *
+     * @param input the raw candidate trace ID string
+     * @return Optional containing the lowercase 32-hex trace ID, or empty if invalid
+     */
+    public static Optional<String> validateAndNormalizeTraceId(String input) {
+        if (input == null || input.isBlank()) {
+            return Optional.empty();
         }
+        String trimmed = input.trim();
+        if (UUID_PATTERN.matcher(trimmed).matches()) {
+            trimmed = trimmed.replace("-", "");
+        }
+        if (!HEX_32_PATTERN.matcher(trimmed).matches() || ALL_ZEROS_TRACE_ID.equals(trimmed)) {
+            log.debug("Rejected non-compliant trace ID candidate: '{}'", input);
+            return Optional.empty();
+        }
+        return Optional.of(trimmed.toLowerCase());
     }
 }
+

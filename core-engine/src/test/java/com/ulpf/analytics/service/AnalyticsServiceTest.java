@@ -81,15 +81,43 @@ class AnalyticsServiceTest {
     }
 
     @Test
-    void testExportParquetReturnsBinaryData() {
+    @SuppressWarnings("unchecked")
+    void testExportParquetReturnsBinaryDataWhenPresent() {
+        byte[] expectedParquet = new byte[] {0x50, 0x41, 0x52, 0x31, 0x15, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
+        when(clickhouseJdbcTemplate.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(Object[].class)))
+                .thenReturn(expectedParquet);
+
         byte[] parquet = analyticsService.exportParquet("raw_events", "vendor-123", "src-1", null, null, 100);
 
         assertNotNull(parquet);
-        assertTrue(parquet.length > 8);
+        assertEquals(expectedParquet.length, parquet.length);
         assertEquals(0x50, parquet[0]); // 'P'
         assertEquals(0x41, parquet[1]); // 'A'
         assertEquals(0x52, parquet[2]); // 'R'
         assertEquals(0x31, parquet[3]); // '1'
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testExportParquetReturnsEmptyArrayWhenNoDataFound() {
+        when(clickhouseJdbcTemplate.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(Object[].class)))
+                .thenReturn(new byte[0]);
+
+        byte[] parquet = analyticsService.exportParquet("raw_events", "vendor-123", "src-1", null, null, 100);
+
+        assertNotNull(parquet);
+        assertEquals(0, parquet.length, "Should return empty byte array instead of fake PAR1 fallback when no data exists");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testExportParquetPropagatesExceptionOnDatabaseFailure() {
+        when(clickhouseJdbcTemplate.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(Object[].class)))
+                .thenThrow(new org.springframework.dao.DataAccessException("Connection refused") {});
+
+        assertThrows(RuntimeException.class, () ->
+                analyticsService.exportParquet("raw_events", "vendor-123", "src-1", null, null, 100)
+        );
     }
 
     @Test

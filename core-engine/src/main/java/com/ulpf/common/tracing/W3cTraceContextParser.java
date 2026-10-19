@@ -39,6 +39,11 @@ public class W3cTraceContextParser {
         String parentSpanId = matcher.group(3).toLowerCase();
         String traceFlags = matcher.group(4);
 
+        if ("00000000000000000000000000000000".equals(traceId) || "0000000000000000".equals(parentSpanId)) {
+            log.debug("Rejecting all-zero traceId or spanId in W3C traceparent");
+            return Optional.empty();
+        }
+
         boolean sampled = (Integer.parseInt(traceFlags, 16) & 0x01) == 1;
         String childSpanId = generateSpanId();
 

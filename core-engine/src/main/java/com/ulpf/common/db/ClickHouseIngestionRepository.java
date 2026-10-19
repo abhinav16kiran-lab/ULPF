@@ -67,6 +67,7 @@ public class ClickHouseIngestionRepository {
     }
 
     public record CanonicalEventRecord(
+        String targetTable,
         String eventId,
         String lineageId,
         String vendorId,
@@ -75,8 +76,23 @@ public class ClickHouseIngestionRepository {
         LocalDateTime timestamp,
         Double numericValue,
         String canonicalPayload,
-        String rawUnmapped
+        String rawUnmapped,
+        java.util.Map<String, Object> mappedFields
     ) {
+        public CanonicalEventRecord(
+            String eventId,
+            String lineageId,
+            String vendorId,
+            String sourceId,
+            Integer mappingVersion,
+            LocalDateTime timestamp,
+            Double numericValue,
+            String canonicalPayload,
+            String rawUnmapped
+        ) {
+            this(null, eventId, lineageId, vendorId, sourceId, mappingVersion, timestamp, numericValue, canonicalPayload, rawUnmapped, java.util.Collections.emptyMap());
+        }
+
         public CanonicalEventRecord(
             String eventId,
             String lineageId,
@@ -87,8 +103,28 @@ public class ClickHouseIngestionRepository {
             Double numericValue,
             String canonicalPayload
         ) {
-            this(eventId, lineageId, vendorId, sourceId, mappingVersion, timestamp, numericValue, canonicalPayload, "{}");
+            this(null, eventId, lineageId, vendorId, sourceId, mappingVersion, timestamp, numericValue, canonicalPayload, "{}", java.util.Collections.emptyMap());
         }
+    }
+
+    private final java.util.Map<String, List<String>> tableColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private List<String> getColumnsForTable(String tableName) {
+        if (tableName == null || tableName.isBlank() || clickhouseJdbcTemplate == null) {
+            return java.util.Collections.emptyList();
+        }
+        return tableColumnsCache.computeIfAbsent(tableName, tbl -> {
+            try {
+                return clickhouseJdbcTemplate.query(
+                        "SELECT name FROM system.columns WHERE database = 'ulpf_events' AND table = ? ORDER BY position ASC",
+                        (rs, rowNum) -> rs.getString("name"),
+                        tbl
+                );
+            } catch (Exception e) {
+                log.warn("Could not query columns for table ulpf_events.{}: {}", tbl, e.getMessage());
+                return java.util.Collections.emptyList();
+            }
+        });
     }
 
     /**
@@ -211,7 +247,7 @@ public class ClickHouseIngestionRepository {
     }
 
     /**
-     * Synchronously flushes queued canonical events to ClickHouse ulpf_events.canonical_events.
+     * Synchronously flushes queued canonical events dynamically to their respective ClickHouse tables.
      */
     public synchronized void flushCanonical() {
         if (canonicalQueue.isEmpty()) {
@@ -224,41 +260,83 @@ public class ClickHouseIngestionRepository {
             batch.add(item);
         }
 
-        if (batch.isEmpty()) {
+        if (batch.isEmpty() || clickhouseJdbcTemplate == null) {
             return;
         }
 
-        try {
-            log.info("Flushing batch of {} canonical events to ClickHouse (ulpf_events.canonical_events)...", batch.size());
-            String sql = """
-                INSERT INTO ulpf_events.canonical_events (event_id, lineage_id, vendor_id, source_id, mapping_version, timestamp, numeric_value, canonical_payload, raw_unmapped)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """;
+        // Group batch by dynamic targetTable
+        java.util.Map<String, List<CanonicalEventRecord>> byTable = new java.util.LinkedHashMap<>();
+        for (CanonicalEventRecord rec : batch) {
+            if (rec.targetTable() != null && !rec.targetTable().isBlank()) {
+                byTable.computeIfAbsent(rec.targetTable(), k -> new ArrayList<>()).add(rec);
+            } else {
+                // If targetTable is not defined (e.g. unmapped source or no table provisioned yet),
+                // it is already safely preserved in ulpf_raw.raw_events. No fallback table needed.
+                log.debug("Skipping dynamic table insert for event {} (no targetTable defined)", rec.eventId());
+            }
+        }
 
-            clickhouseJdbcTemplate.batchUpdate(sql, batch, batch.size(), (ps, record) -> {
-                ps.setString(1, record.eventId());
-                ps.setString(2, record.lineageId());
-                ps.setString(3, record.vendorId());
-                ps.setString(4, record.sourceId());
-                if (record.mappingVersion() != null) {
-                    ps.setInt(5, record.mappingVersion());
-                } else {
-                    ps.setNull(5, java.sql.Types.INTEGER);
+        for (java.util.Map.Entry<String, List<CanonicalEventRecord>> entry : byTable.entrySet()) {
+            String tableName = entry.getKey().trim();
+            List<CanonicalEventRecord> tableBatch = entry.getValue();
+            if (!tableName.matches("^[a-zA-Z0-9_]+$")) {
+                log.warn("Invalid dynamic table name: '{}', skipping batch", tableName);
+                continue;
+            }
+
+            try {
+                List<String> cols = getColumnsForTable(tableName);
+                if (cols.isEmpty()) {
+                    log.debug("Table ulpf_events.{} has no known columns or does not exist yet. Skipping flush of {} events.", tableName, tableBatch.size());
+                    continue;
                 }
-                ps.setTimestamp(6, record.timestamp() != null ? Timestamp.valueOf(record.timestamp()) : Timestamp.valueOf(LocalDateTime.now()));
-                if (record.numericValue() != null) {
-                    ps.setDouble(7, record.numericValue());
-                } else {
-                    ps.setNull(7, java.sql.Types.DOUBLE);
-                }
-                ps.setString(8, record.canonicalPayload());
-                ps.setString(9, record.rawUnmapped() != null ? record.rawUnmapped() : "{}");
-            });
 
-            log.info("Successfully flushed {} canonical events to ClickHouse.", batch.size());
+                String colsSql = String.join(", ", cols);
+                String placeholders = String.join(", ", java.util.Collections.nCopies(cols.size(), "?"));
+                String sql = "INSERT INTO ulpf_events." + tableName + " (" + colsSql + ") VALUES (" + placeholders + ")";
 
-        } catch (Exception e) {
-            log.debug("Canonical events table ulpf_events.canonical_events skipped: {}", e.getMessage());
+                clickhouseJdbcTemplate.batchUpdate(sql, tableBatch, tableBatch.size(), (ps, record) -> {
+                    for (int i = 0; i < cols.size(); i++) {
+                        int paramIndex = i + 1;
+                        String col = cols.get(i).toLowerCase();
+                        switch (col) {
+                            case "event_id" -> ps.setString(paramIndex, record.eventId());
+                            case "lineage_id" -> ps.setString(paramIndex, record.lineageId());
+                            case "vendor_id" -> ps.setString(paramIndex, record.vendorId());
+                            case "source_id" -> ps.setString(paramIndex, record.sourceId());
+                            case "mapping_version" -> {
+                                if (record.mappingVersion() != null) {
+                                    ps.setInt(paramIndex, record.mappingVersion());
+                                } else {
+                                    ps.setNull(paramIndex, java.sql.Types.INTEGER);
+                                }
+                            }
+                            case "timestamp" -> ps.setTimestamp(paramIndex, record.timestamp() != null ? Timestamp.valueOf(record.timestamp()) : Timestamp.valueOf(LocalDateTime.now()));
+                            case "numeric_value" -> {
+                                if (record.numericValue() != null) {
+                                    ps.setDouble(paramIndex, record.numericValue());
+                                } else {
+                                    ps.setNull(paramIndex, java.sql.Types.DOUBLE);
+                                }
+                            }
+                            case "raw_unmapped" -> ps.setString(paramIndex, record.rawUnmapped() != null ? record.rawUnmapped() : "{}");
+                            case "canonical_payload" -> ps.setString(paramIndex, record.canonicalPayload() != null ? record.canonicalPayload() : "{}");
+                            default -> {
+                                Object val = record.mappedFields() != null ? record.mappedFields().get(col) : null;
+                                if (val != null) {
+                                    ps.setString(paramIndex, String.valueOf(val));
+                                } else {
+                                    ps.setNull(paramIndex, java.sql.Types.VARCHAR);
+                                }
+                            }
+                        }
+                    }
+                });
+
+                log.info("Successfully flushed {} dynamic events into ulpf_events.{}", tableBatch.size(), tableName);
+            } catch (Exception e) {
+                log.warn("Failed to flush dynamic events to ulpf_events.{}: {}", tableName, e.getMessage());
+            }
         }
 
     }

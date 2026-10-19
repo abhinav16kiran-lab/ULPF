@@ -25,4 +25,37 @@ public class DynamicSchemaProvisioningServiceTest {
         String tableName4 = service.constructTableName("shitty source ", List.of("events_shitty_source"));
         assertEquals("events_shitty_source_2", tableName4);
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testProvisionSchemaForSourceExtractsObjectFieldsProperly() {
+        org.springframework.jdbc.core.JdbcTemplate jdbcTemplate = org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        DynamicSchemaProvisioningService service = new DynamicSchemaProvisioningService(jdbcTemplate);
+
+        org.mockito.Mockito.when(jdbcTemplate.query(org.mockito.ArgumentMatchers.eq("SHOW TABLES FROM ulpf_events"), org.mockito.ArgumentMatchers.any(org.springframework.jdbc.core.RowMapper.class)))
+                .thenReturn(List.of());
+
+        String mappingJson = """
+            {
+                "src_ip": {
+                    "canonicalField": "source_ip",
+                    "confidence": 0.95
+                },
+                "bytes_transferred": {
+                    "canonicalField": "network.bytes",
+                    "confidence": 0.88
+                }
+            }
+            """;
+
+        String tableName = service.provisionSchemaForSource("src_1", "Web Server", mappingJson);
+        assertEquals("events_web_server", tableName);
+
+        org.mockito.ArgumentCaptor<String> ddlCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(jdbcTemplate).execute(ddlCaptor.capture());
+
+        String ddl = ddlCaptor.getValue();
+        org.junit.jupiter.api.Assertions.assertTrue(ddl.contains("source_ip Nullable(String)"), "DDL must contain source_ip column");
+        org.junit.jupiter.api.Assertions.assertTrue(ddl.contains("network_bytes Nullable(String)"), "DDL must contain normalized network_bytes column");
+    }
 }

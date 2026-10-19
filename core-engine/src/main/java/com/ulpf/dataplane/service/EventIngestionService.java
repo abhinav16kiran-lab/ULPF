@@ -134,12 +134,16 @@ public class EventIngestionService {
         Double delta = null;
         Long maxIntervalMs = 60000L;
         String sensorField = null;
+        String targetTable = null;
 
         if (mappingOpt.isPresent()) {
             try {
                 JsonNode mappingRoot = objectMapper.readTree(mappingOpt.get().mappingJson());
                 if (mappingRoot.has("metadata")) {
                     JsonNode meta = mappingRoot.get("metadata");
+                    if (meta.has("target_table") && !meta.get("target_table").isNull()) {
+                        targetTable = meta.get("target_table").asText();
+                    }
                     if (meta.has("log_type")) {
                         logType = meta.get("log_type").asText("REG_LOG");
                     }
@@ -152,6 +156,9 @@ public class EventIngestionService {
                     if (meta.has("sensor_field") && !meta.get("sensor_field").isNull()) {
                         sensorField = meta.get("sensor_field").asText();
                     }
+                }
+                if (targetTable == null && mappingRoot.has("target_table") && !mappingRoot.get("target_table").isNull()) {
+                    targetTable = mappingRoot.get("target_table").asText();
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse metadata from mappingJson for source {}: {}", cred.sourceId(), e.getMessage());
@@ -187,10 +194,20 @@ public class EventIngestionService {
         // Extract unmapped fields into Lossless Overflow Field (raw_unmapped JSON)
         String rawUnmappedJson = extractUnmappedFields(parsedFields.isEmpty() ? payload : parsedFields, mappingOpt, cred.sourceId());
 
+        // Extract normalized mapped fields for dynamic table columns
+        java.util.Map<String, Object> mappedFields = extractMappedFields(parsedFields.isEmpty() ? payload : parsedFields, mappingOpt, cred.sourceId());
+        String canonicalPayloadJson;
+        try {
+            canonicalPayloadJson = objectMapper.writeValueAsString(mappedFields);
+        } catch (Exception e) {
+            canonicalPayloadJson = "{}";
+        }
+
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
             if (evalResult != null && evalResult.shouldEmit()) {
                 CanonicalEventRecord canonicalEvent = new CanonicalEventRecord(
+                        targetTable,
                         eventId,
                         lineageId,
                         cred.vendorId(),
@@ -198,14 +215,16 @@ public class EventIngestionService {
                         mappingVersion,
                         now,
                         evalResult.value(),
-                        rawJson,
-                        rawUnmappedJson
+                        canonicalPayloadJson,
+                        rawUnmappedJson,
+                        mappedFields
                 );
                 clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
             }
         } else {
             // Regular log path: emit canonical event immediately
             CanonicalEventRecord canonicalEvent = new CanonicalEventRecord(
+                    targetTable,
                     eventId,
                     lineageId,
                     cred.vendorId(),
@@ -213,8 +232,9 @@ public class EventIngestionService {
                     mappingVersion,
                     now,
                     null,
-                    rawJson,
-                    rawUnmappedJson
+                    canonicalPayloadJson,
+                    rawUnmappedJson,
+                    mappedFields
             );
             clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
         }
@@ -351,19 +371,99 @@ public class EventIngestionService {
 
     private record HistoricalVersion(int version, JsonNode rootNode) {}
 
-    private boolean isKeyMappedInJson(String vendorKey, JsonNode mappingRoot) {
+    private String resolveCanonicalField(String vendorKey, JsonNode mappingRoot) {
         if (mappingRoot == null || !mappingRoot.has(vendorKey)) {
-            return false;
+            return null;
         }
         JsonNode fieldMapping = mappingRoot.get(vendorKey);
-        if (fieldMapping != null && fieldMapping.isObject() && fieldMapping.has("canonicalField")) {
-            String canonicalField = fieldMapping.get("canonicalField").asText();
-            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
+        if (fieldMapping != null && fieldMapping.isObject()) {
+            if (fieldMapping.has("canonicalField")) {
+                String cf = fieldMapping.get("canonicalField").asText();
+                if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
+                    return cf;
+                }
+            } else if (fieldMapping.has("canonical_field")) {
+                String cf = fieldMapping.get("canonical_field").asText();
+                if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
+                    return cf;
+                }
+            }
         } else if (fieldMapping != null && fieldMapping.isTextual()) {
-            String canonicalField = fieldMapping.asText();
-            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
+            String cf = fieldMapping.asText();
+            if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
+                return cf;
+            }
         }
-        return false;
+        return null;
+    }
+
+    private boolean isKeyMappedInJson(String vendorKey, JsonNode mappingRoot) {
+        return resolveCanonicalField(vendorKey, mappingRoot) != null;
+    }
+
+    private java.util.Map<String, Object> extractMappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
+        java.util.Map<String, Object> mappedFields = new java.util.LinkedHashMap<>();
+        if (mappingOpt.isEmpty() || payload == null) {
+            return mappedFields;
+        }
+
+        try {
+            JsonNode payloadNode;
+            if (payload instanceof JsonNode jn) {
+                payloadNode = jn;
+            } else if (payload instanceof String strPayload) {
+                try {
+                    payloadNode = objectMapper.readTree(strPayload);
+                } catch (Exception e) {
+                    payloadNode = objectMapper.valueToTree(payload);
+                }
+            } else {
+                payloadNode = objectMapper.valueToTree(payload);
+            }
+
+            if (payloadNode == null || !payloadNode.isObject()) {
+                return mappedFields;
+            }
+
+            JsonNode mappingRoot = null;
+            try {
+                mappingRoot = objectMapper.readTree(mappingOpt.get().mappingJson());
+            } catch (Exception e) {
+                log.warn("Failed to parse mappingJson in extractMappedFields: {}", e.getMessage());
+            }
+
+            var fields = payloadNode.properties().iterator();
+            List<HistoricalVersion> historicalVersions = null;
+
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                String vendorKey = entry.getKey();
+                JsonNode value = entry.getValue();
+
+                String canonicalField = resolveCanonicalField(vendorKey, mappingRoot);
+                if (canonicalField == null && sourceId != null && mappingRepository != null) {
+                    if (historicalVersions == null) {
+                        historicalVersions = loadHistoricalVersions(sourceId, mappingOpt);
+                    }
+                    for (HistoricalVersion hist : historicalVersions) {
+                        canonicalField = resolveCanonicalField(vendorKey, hist.rootNode());
+                        if (canonicalField != null) break;
+                    }
+                }
+
+                if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
+                    String normCol = canonicalField.replace('.', '_').replace('-', '_').trim().toLowerCase();
+                    if (value.isValueNode()) {
+                        mappedFields.put(normCol, value.asText());
+                    } else {
+                        mappedFields.put(normCol, objectMapper.writeValueAsString(value));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract mapped fields: {}", e.getMessage());
+        }
+        return mappedFields;
     }
 
     private List<HistoricalVersion> loadHistoricalVersions(String sourceId, Optional<MappingVersionRecord> activeMappingOpt) {

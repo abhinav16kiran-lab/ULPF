@@ -29,18 +29,12 @@ public class EmbeddingClient {
      * @return embedding vector (384 dimensions for all-MiniLM-L6-v2)
      */
     public double[] getEmbedding(String text) {
-        try {
-            // Ensure model is loaded (idempotent, updates last accessed time)
-            modelLifecycleManager.ensureLoaded();
-
-            // Get the active session
-            OrtSession session = modelLifecycleManager.getSession();
+        try (ModelLifecycleManager.SessionLease lease = modelLifecycleManager.acquireSession()) {
+            OrtSession session = lease.session();
             OrtEnvironment env = OrtEnvironment.getEnvironment();
 
-            // Tokenize and prepare input (simplified - real tokenization would be more
-            // complex)
+            // Tokenize and prepare input (simplified - real tokenization would be more complex)
             // For MiniLM, we need input_ids, attention_mask, token_type_ids
-            // This is a simplified version - in production, use a proper tokenizer
             long[][] inputIds = tokenizeText(text);
             long[][] attentionMask = createAttentionMask(inputIds[0].length);
             long[][] tokenTypeIds = createTokenTypeIds(inputIds[0].length);

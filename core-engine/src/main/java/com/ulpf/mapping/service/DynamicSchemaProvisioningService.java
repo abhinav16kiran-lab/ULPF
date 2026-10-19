@@ -44,7 +44,7 @@ public class DynamicSchemaProvisioningService {
     public String provisionSchemaForSource(String sourceId, String sourceName, String mappingJson) {
         if (clickhouseJdbcTemplate == null) {
             log.warn("ClickHouse JDBC template is null. Skipping dynamic ClickHouse table provisioning.");
-            return "canonical_events";
+            return constructTableName(sourceName);
         }
 
         try {
@@ -146,7 +146,12 @@ public class DynamicSchemaProvisioningService {
                 for (JsonNode node : mappings) {
                     if (node.has("canonical_field")) {
                         String field = node.get("canonical_field").asText();
-                        if (!"unmapped".equalsIgnoreCase(field)) {
+                        if (!"unmapped".equalsIgnoreCase(field) && !field.isBlank()) {
+                            fields.add(field);
+                        }
+                    } else if (node.has("canonicalField")) {
+                        String field = node.get("canonicalField").asText();
+                        if (!"unmapped".equalsIgnoreCase(field) && !field.isBlank()) {
                             fields.add(field);
                         }
                     }
@@ -156,9 +161,24 @@ public class DynamicSchemaProvisioningService {
                 while (keys.hasNext()) {
                     String k = keys.next();
                     if (!"metadata".equalsIgnoreCase(k)) {
-                        String val = mappings.get(k).asText();
-                        if (!"unmapped".equalsIgnoreCase(val)) {
-                            fields.add(val);
+                        JsonNode valNode = mappings.get(k);
+                        if (valNode.isTextual()) {
+                            String val = valNode.asText();
+                            if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                fields.add(val);
+                            }
+                        } else if (valNode.isObject()) {
+                            if (valNode.has("canonicalField")) {
+                                String val = valNode.get("canonicalField").asText();
+                                if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                    fields.add(val);
+                                }
+                            } else if (valNode.has("canonical_field")) {
+                                String val = valNode.get("canonical_field").asText();
+                                if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                    fields.add(val);
+                                }
+                            }
                         }
                     }
                 }
@@ -193,25 +213,7 @@ public class DynamicSchemaProvisioningService {
                 ORDER BY (vendor_id, source_id, received_at, event_id)
             """);
 
-            clickhouseJdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS ulpf_events.canonical_events
-                (
-                    event_id          String,
-                    lineage_id        String,
-                    vendor_id         String,
-                    source_id         String,
-                    mapping_version   Nullable(UInt32),
-                    timestamp         DateTime64(3) DEFAULT now64(3),
-                    numeric_value     Nullable(Float64),
-                    canonical_payload String CODEC(ZSTD(1)),
-                    raw_unmapped      String CODEC(ZSTD(1))
-                )
-                ENGINE = MergeTree
-                PARTITION BY toYYYYMM(timestamp)
-                ORDER BY (vendor_id, source_id, timestamp, event_id)
-            """);
-
-            log.info("Baseline ClickHouse schemas (ulpf_raw.raw_events & ulpf_events.canonical_events) verified successfully.");
+            log.info("Baseline ClickHouse schemas (ulpf_raw.raw_events) verified successfully.");
         } catch (Exception e) {
             log.warn("ClickHouse baseline initialization warning: {}", e.getMessage());
         }

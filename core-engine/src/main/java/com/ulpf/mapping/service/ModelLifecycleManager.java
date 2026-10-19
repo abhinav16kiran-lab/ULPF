@@ -25,6 +25,7 @@ public class ModelLifecycleManager {
     private OrtEnvironment env;
     private OrtSession session;
     private long lastAccessedTime = 0;
+    private final java.util.concurrent.locks.ReentrantReadWriteLock rwLock = new java.util.concurrent.locks.ReentrantReadWriteLock(true);
 
     public ModelLifecycleManager() {}
 
@@ -32,6 +33,58 @@ public class ModelLifecycleManager {
         this.modelPath = modelPath;
     }
 
+    /**
+     * Scoped resource lease representing an active in-flight inference reader.
+     * While any lease is active, the model will not be unloaded.
+     */
+    public class SessionLease implements AutoCloseable {
+        private final OrtSession session;
+        private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        private SessionLease(OrtSession session) {
+            this.session = session;
+        }
+
+        public OrtSession session() {
+            if (closed.get()) {
+                throw new IllegalStateException("Session lease has already been closed");
+            }
+            return session;
+        }
+
+        public OrtSession getSession() {
+            return session();
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                rwLock.readLock().unlock();
+                lastAccessedTime = System.currentTimeMillis();
+            }
+        }
+    }
+
+    /**
+     * Acquires a shared read lease on the active OrtSession for thread-safe inference.
+     * Prevents model unloading while the lease is open.
+     */
+    public SessionLease acquireSession() {
+        ensureLoaded();
+        rwLock.readLock().lock();
+        try {
+            if (session == null) {
+                rwLock.readLock().unlock();
+                ensureLoaded();
+                rwLock.readLock().lock();
+            }
+            lastAccessedTime = System.currentTimeMillis();
+            return new SessionLease(session);
+        } catch (RuntimeException e) {
+            rwLock.readLock().unlock();
+            throw e;
+        }
+    }
 
     /**
      * Idempotently loads model.onnx into C++ native heap memory if not already active.
@@ -69,8 +122,18 @@ public class ModelLifecycleManager {
 
     /**
      * Synchronously closes the ONNX native session and environment, releasing C++ heap memory back to the OS.
+     * Waits for all active inference read leases to finish before unloading.
      */
-    public synchronized void unloadModel() {
+    public void unloadModel() {
+        rwLock.writeLock().lock();
+        try {
+            unloadModelInternal();
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    private synchronized void unloadModelInternal() {
         if (session == null && env == null) {
             return;
         }
@@ -109,6 +172,7 @@ public class ModelLifecycleManager {
 
     /**
      * Returns the active OrtSession (ensuring loaded first).
+     * Note: Prefer acquireSession() with try-with-resources for thread-safe inference protection.
      */
     public synchronized OrtSession getSession() {
         ensureLoaded();
@@ -116,14 +180,36 @@ public class ModelLifecycleManager {
     }
 
     /**
+     * Returns the number of currently active read leases.
+     */
+    public int getActiveLeaseCount() {
+        return rwLock.getReadLockCount();
+    }
+
+    /**
      * Background scheduler running every 60 seconds.
      * Automatically unloads the model if loaded and idle for > idleTimeoutMs.
+     * Uses tryLock() to ensure it never interrupts or closes an active inference lease.
      */
     @Scheduled(fixedDelay = 60000)
-    public synchronized void checkIdleTimeout() {
-        if (isLoaded() && (System.currentTimeMillis() - lastAccessedTime > idleTimeoutMs)) {
-            log.info("ONNX model has been idle for over {} ms. Triggering automatic memory release...", idleTimeoutMs);
-            unloadModel();
+    public void checkIdleTimeout() {
+        if (!isLoaded()) {
+            return;
+        }
+
+        if (System.currentTimeMillis() - lastAccessedTime > idleTimeoutMs) {
+            if (rwLock.writeLock().tryLock()) {
+                try {
+                    if (isLoaded() && (System.currentTimeMillis() - lastAccessedTime > idleTimeoutMs)) {
+                        log.info("ONNX model has been idle for over {} ms. Triggering automatic memory release...", idleTimeoutMs);
+                        unloadModelInternal();
+                    }
+                } finally {
+                    rwLock.writeLock().unlock();
+                }
+            } else {
+                log.debug("Skipping scheduled ONNX model unload: active inference in progress.");
+            }
         }
     }
 }

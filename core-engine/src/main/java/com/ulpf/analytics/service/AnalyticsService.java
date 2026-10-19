@@ -163,8 +163,8 @@ public class AnalyticsService {
 
         // Automatically qualify tables if unqualified
         String executableSql = trimmed;
-        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+canonical_events\\b", "FROM ulpf_events.canonical_events");
-        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+canonical_events\\b", "JOIN ulpf_events.canonical_events");
+        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+(events_[a-zA-Z0-9_]+)\\b", "FROM ulpf_events.$1");
+        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+(events_[a-zA-Z0-9_]+)\\b", "JOIN ulpf_events.$1");
         executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+raw_events\\b", "FROM ulpf_raw.raw_events");
         executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+raw_events\\b", "JOIN ulpf_raw.raw_events");
 
@@ -314,6 +314,16 @@ public class AnalyticsService {
             params.add(sourceId.trim());
         }
 
+        String timeCol = "raw_events".equalsIgnoreCase(safeTable) ? "received_at" : "timestamp";
+        if (from != null && !from.isBlank()) {
+            whereClauses.add(timeCol + " >= parseDateTime64BestEffortOrNull(?)");
+            params.add(from.trim());
+        }
+        if (to != null && !to.isBlank()) {
+            whereClauses.add(timeCol + " <= parseDateTime64BestEffortOrNull(?)");
+            params.add(to.trim());
+        }
+
         if (!whereClauses.isEmpty()) {
             sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
         }
@@ -324,6 +334,40 @@ public class AnalyticsService {
         String sql = sqlBuilder.toString();
         log.info("Executing Parquet Export query against ClickHouse: {}", sql);
 
+        if (clickhouseJdbcTemplate == null) {
+            throw new IllegalStateException("ClickHouse database connection is not configured");
+        }
+
+        // 1. Try direct raw binary streaming via ClickHouse JDBC statement
+        try {
+            byte[] bytes = clickhouseJdbcTemplate.execute((org.springframework.jdbc.core.ConnectionCallback<byte[]>) conn -> {
+                if (conn == null) return null;
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                    for (int i = 0; i < params.size(); i++) {
+                        ps.setObject(i + 1, params.get(i));
+                    }
+                    if (ps.isWrapperFor(com.clickhouse.jdbc.ClickHouseStatement.class)) {
+                        ps.unwrap(com.clickhouse.jdbc.ClickHouseStatement.class).setMirroredOutput(baos);
+                    }
+                    try {
+                        ps.execute();
+                    } catch (Exception e) {
+                        log.debug("Handled JDBC parse during raw stream capture: {}", e.getMessage());
+                    }
+                }
+                byte[] raw = baos.toByteArray();
+                return (raw.length > 0) ? raw : null;
+            });
+
+            if (bytes != null && bytes.length > 0) {
+                return bytes;
+            }
+        } catch (Exception e) {
+            log.debug("Direct ClickHouse connection streaming query attempt: {}", e.getMessage());
+        }
+
+        // 2. Query via template (supports mock JdbcTemplate in tests or standard query)
         try {
             byte[] parquetBytes = clickhouseJdbcTemplate.query(sql, rs -> {
                 if (rs.next()) {
@@ -336,25 +380,12 @@ public class AnalyticsService {
                 return parquetBytes;
             }
         } catch (Exception e) {
-            log.warn("ClickHouse Parquet export query execution fallback: {}", e.getMessage());
+            log.error("ClickHouse Parquet export query execution failed: {}", e.getMessage());
+            throw new RuntimeException("ClickHouse Parquet export query failed: " + e.getMessage(), e);
         }
 
-        return generateFallbackParquet(fullTableName, vendorId, sourceId);
-    }
-
-    private byte[] generateFallbackParquet(String table, String vendorId, String sourceId) {
-        // Apache Parquet magic header (PAR1)
-        byte[] magic = new byte[] {0x50, 0x41, 0x52, 0x31};
-        byte[] footer = new byte[] {0x00, 0x00, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
-
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        try {
-            out.write(magic);
-            String meta = "{\"schema\":\"ulpf_parquet_v1\",\"table\":\"" + table + "\",\"vendorId\":\"" + (vendorId != null ? vendorId : "all") + "\"}";
-            out.write(meta.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            out.write(footer);
-        } catch (Exception ignored) {}
-        return out.toByteArray();
+        // Return empty array when no matching rows are found (0 records)
+        return new byte[0];
     }
 
     private String sanitizeIdentifier(String input) {

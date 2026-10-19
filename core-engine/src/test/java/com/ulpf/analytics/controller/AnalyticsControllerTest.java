@@ -84,6 +84,28 @@ class AnalyticsControllerTest {
     }
 
     @Test
+    void testExportParquet_ReturnsNoContentWhenEmpty() throws Exception {
+        when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(new byte[0]);
+
+        mockMvc.perform(get("/v1/analytics/export/parquet")
+                        .param("vendorId", "vendor-empty"))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void testExportParquet_ReturnsBadGatewayOnStorageFailure() throws Exception {
+        when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenThrow(new RuntimeException("ClickHouse connection failed"));
+
+        mockMvc.perform(get("/v1/analytics/export/parquet")
+                        .param("vendorId", "vendor-1"))
+                .andExpect(status().isBadGateway())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error")
+                        .value(org.hamcrest.Matchers.containsString("Failed to export Parquet data from storage")));
+    }
+
+    @Test
     void testSearchLogs_ReturnsOk() throws Exception {
         when(analyticsService.searchLogs(anyString(), anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(new AnalyticsService.LogSearchResult(java.util.Collections.emptyList(), 0, 5, "error"));

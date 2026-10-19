@@ -7,7 +7,7 @@ function AnalyticsPage() {
   const [mode, setMode] = useState("builder");
 
   // Builder mode states
-  const [table, setTable] = useState("canonical_events");
+  const [table, setTable] = useState("raw_events");
   const [column, setColumn] = useState("event_id");
   const [aggregation, setAggregation] = useState("COUNT");
   const [groupBy, setGroupBy] = useState("None");
@@ -16,7 +16,7 @@ function AnalyticsPage() {
   const [customEnd, setCustomEnd] = useState("2026-10-15T23:59");
 
   // Dynamic ClickHouse Schema states
-  const [availableTables, setAvailableTables] = useState(["canonical_events", "raw_events"]);
+  const [availableTables, setAvailableTables] = useState(["raw_events"]);
   const [tableColumnsMap, setTableColumnsMap] = useState({});
   const [columnsLoading, setColumnsLoading] = useState(false);
 
@@ -78,7 +78,7 @@ function AnalyticsPage() {
 
   // SQL mode state
   const [sqlQuery, setSqlQuery] = useState(
-    "SELECT source_id, count(*)\nFROM canonical_events\nGROUP BY source_id;"
+    "SELECT source_id, count(*)\nFROM raw_events\nGROUP BY source_id;"
   );
   const [sqlResultData, setSqlResultData] = useState(null);
 

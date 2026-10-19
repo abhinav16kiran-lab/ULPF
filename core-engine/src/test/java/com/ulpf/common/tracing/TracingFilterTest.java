@@ -53,39 +53,46 @@ class TracingFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        request.addHeader("X-Correlation-Id", "my-custom-correlation-12345");
+        request.addHeader("X-Correlation-Id", "4bf92f35-77b3-4da6-a3ce-929d0e0e4736");
 
         FilterChain filterChain = (req, res) -> {
             TraceContext ctx = (TraceContext) req.getAttribute(TracingFilter.TRACE_CONTEXT_ATTRIBUTE);
             assertNotNull(ctx);
-            assertNotNull(ctx.traceId());
-            assertEquals(32, ctx.traceId().length());
-            assertEquals(ctx.traceId(), MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
+            assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", ctx.traceId());
+            assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
         };
 
         tracingFilter.doFilterInternal(request, response, filterChain);
 
-        assertNotNull(response.getHeader("X-Trace-Id"));
+        assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", response.getHeader("X-Trace-Id"));
         assertNull(MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
     }
 
     @Test
-    void testFallbackFreshTraceIdGeneration() throws ServletException, IOException {
+    void testMissingOrInvalidTraceHeaderLeavesContextNull() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
 
+        // No trace headers sent
         FilterChain filterChain = (req, res) -> {
             TraceContext ctx = (TraceContext) req.getAttribute(TracingFilter.TRACE_CONTEXT_ATTRIBUTE);
-            assertNotNull(ctx);
-            assertNotNull(ctx.traceId());
-            assertEquals(32, ctx.traceId().length());
-            assertEquals(ctx.traceId(), MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
+            assertNull(ctx);
+            assertNull(MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
         };
 
         tracingFilter.doFilterInternal(request, response, filterChain);
 
-        assertNotNull(response.getHeader("X-Trace-Id"));
-        assertNotNull(response.getHeader("traceparent"));
+        assertNull(response.getHeader("X-Trace-Id"));
+        assertNull(response.getHeader("traceparent"));
         assertNull(MDC.get(TraceMdcAdapter.MDC_TRACE_ID));
+
+        // Invalid non-hex header sent
+        MockHttpServletRequest req2 = new MockHttpServletRequest();
+        MockHttpServletResponse res2 = new MockHttpServletResponse();
+        req2.addHeader("X-Trace-Id", "abc");
+
+        tracingFilter.doFilterInternal(req2, res2, filterChain);
+        assertNull(res2.getHeader("X-Trace-Id"));
+        assertNull(res2.getHeader("traceparent"));
     }
 }
