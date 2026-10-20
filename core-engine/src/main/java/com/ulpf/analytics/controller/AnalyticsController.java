@@ -177,12 +177,16 @@ public class AnalyticsController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to
     ) {
-        var buckets = analyticsService.getTimeSeries(query, interval, from, to);
-        return ResponseEntity.ok(Map.of(
-                "interval", interval,
-                "totalBuckets", buckets.size(),
-                "buckets", buckets
-        ));
+        try {
+            var buckets = analyticsService.getTimeSeries(query, interval, from, to);
+            return ResponseEntity.ok(Map.of(
+                    "interval", interval,
+                    "totalBuckets", buckets.size(),
+                    "buckets", buckets
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @org.springframework.web.bind.annotation.PostMapping(value = "/analytics/import/file", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)

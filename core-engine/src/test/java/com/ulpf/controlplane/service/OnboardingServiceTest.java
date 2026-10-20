@@ -16,8 +16,10 @@ import com.ulpf.mapping.service.MappingProposalService;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.File;
@@ -27,6 +29,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OnboardingServiceTest {
@@ -37,6 +40,7 @@ class OnboardingServiceTest {
         private SourceRepository sourceRepository;
         private CredentialRepository credentialRepository;
         private OnboardingRepository onboardingRepository;
+        private MappingRepository mappingRepository;
 
         @BeforeEach
         void setUp() {
@@ -45,28 +49,18 @@ class OnboardingServiceTest {
                 dataSource.setUrl("jdbc:sqlite::memory:");
                 dataSource.setSuppressClose(true);
 
+                ResourceDatabasePopulator populator = new ResourceDatabasePopulator(
+                                new ClassPathResource("sqlite/schema.sql"));
+                populator.execute(dataSource);
+
                 JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
-                jdbcTemplate.execute(
-                                "CREATE TABLE users (user_id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE vendors (vendor_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL UNIQUE, vendor_name TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE sources (source_id TEXT PRIMARY KEY, vendor_id TEXT NOT NULL, source_name TEXT NOT NULL, source_type TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE credentials (credential_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, key_hash TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE onboarding_requests (request_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, source_id TEXT, request_type TEXT NOT NULL, sample_metadata TEXT, status TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE notifications (notification_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, read BOOLEAN NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
-                jdbcTemplate.execute(
-                                "CREATE TABLE mapping_versions (mapping_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, version INTEGER NOT NULL, mapping_json TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
 
                 userRepository = new UserRepository(jdbcTemplate);
                 credentialRepository = new CredentialRepository(jdbcTemplate);
                 vendorRepository = new VendorRepository(jdbcTemplate, credentialRepository);
                 sourceRepository = new SourceRepository(jdbcTemplate, credentialRepository);
                 onboardingRepository = new OnboardingRepository(jdbcTemplate);
-                MappingRepository mappingRepository = new MappingRepository(jdbcTemplate);
+                mappingRepository = new MappingRepository(jdbcTemplate);
                 MappingProposalService mappingProposalService = new MappingProposalService(mappingRepository);
                 
                 // Create mock MappingLearningService for tests
@@ -158,13 +152,145 @@ class OnboardingServiceTest {
 
                 assertNotNull(updateResult.requestId());
                 assertEquals(initResult.sourceId(), updateResult.sourceId());
-                org.junit.jupiter.api.Assertions.assertNull(updateResult.rawApiKey(), "API key must remain null (unchanged) for UPDATE_SOURCE");
+                org.junit.jupiter.api.Assertions.assertNull(updateResult.rawApiKey(), "API key must remain null (unchanged) for SCHEMA_UPDATE");
                 assertEquals("SUBMITTED", updateResult.status());
 
-                // Verify request record in DB has type UPDATE_SOURCE
+                // Verify request record in DB has canonical type SCHEMA_UPDATE
                 OnboardingRequestRecord req = onboardingRepository.findRequestById(updateResult.requestId()).get();
-                assertEquals("UPDATE_SOURCE", req.requestType());
+                assertEquals("SCHEMA_UPDATE", req.requestType());
                 assertEquals(initResult.sourceId(), req.sourceId());
+        }
+
+        @Test
+        void testSubmitUpdateRequestFailsWhenPendingRequestAlreadyExists() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+
+                onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+
+                // Submit first update request
+                MockMultipartFile newSampleFile = new MockMultipartFile(
+                                "sampleLogFile", "v2_sample.log", "text/plain", "v2 log data".getBytes());
+
+                var firstUpdate = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, newSampleFile, null);
+                assertEquals("SUBMITTED", firstUpdate.status());
+
+                // Attempt to submit second update request while first is still pending
+                IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                        onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, newSampleFile, null)
+                );
+                assertTrue(ex.getMessage().contains("already awaiting review"));
+        }
+
+        @Test
+        void testAdminRejectSchemaUpdateDoesNotRevokeActiveSource() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+
+                onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+                assertEquals("ACTIVE", sourceRepository.findById(initResult.sourceId()).get().status());
+
+                // Submit update request
+                MockMultipartFile newSampleFile = new MockMultipartFile(
+                                "sampleLogFile", "v2_sample.log", "text/plain", "bad schema log data".getBytes());
+
+                var updateResult = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, newSampleFile, null);
+
+                // Admin rejects the schema update
+                onboardingService.processAdminDecision(updateResult.requestId(), "REJECTED", "Schema is inconsistent");
+
+                // The request should be REJECTED, but the source should REMAIN ACTIVE!
+                assertEquals("REJECTED", onboardingRepository.findRequestById(updateResult.requestId()).get().status());
+                assertEquals("ACTIVE", sourceRepository.findById(initResult.sourceId()).get().status(),
+                                "Rejecting a schema update must not revoke an active log source");
+
+                // Candidate versions must be cleaned up
+                assertTrue(mappingRepository.findCandidateBySourceId(initResult.sourceId()).isEmpty(),
+                                "Candidate versions must be cleaned up upon rejection");
+        }
+
+        @Test
+        void testWithdrawRequestSucceedsAndAllowsSubsequentUpdate() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+                onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+
+                // Submit first update request
+                MockMultipartFile v2File = new MockMultipartFile(
+                                "sampleLogFile", "v2.log", "text/plain", "v2 data".getBytes());
+                var firstUpdate = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, v2File, null);
+                assertEquals("SUBMITTED", firstUpdate.status());
+
+                // Vendor realizes mistake and withdraws the request
+                var withdrawn = onboardingService.withdrawRequest("vendor_alice", firstUpdate.requestId());
+                assertEquals("REJECTED", withdrawn.status());
+
+                // Active source must remain ACTIVE, candidate mapping must be cleaned up
+                assertEquals("ACTIVE", sourceRepository.findById(initResult.sourceId()).get().status());
+                assertTrue(mappingRepository.findCandidateBySourceId(initResult.sourceId()).isEmpty());
+
+                // Now vendor can submit a fresh update request without 409 conflict
+                MockMultipartFile v3File = new MockMultipartFile(
+                                "sampleLogFile", "v3.log", "text/plain", "v3 corrected data".getBytes());
+                var secondUpdate = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, v3File, null);
+                assertEquals("SUBMITTED", secondUpdate.status());
+        }
+
+        @Test
+        void testAdminCannotApproveWithdrawnRequest() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+                onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+
+                // Submit update request
+                MockMultipartFile v2File = new MockMultipartFile(
+                                "sampleLogFile", "v2.log", "text/plain", "v2 data".getBytes());
+                var updateResult = onboardingService.submitUpdateRequest(
+                                "vendor_alice", initResult.sourceId(), "FIREWALL", "REG_LOG", null, null, null, v2File, null);
+
+                // Withdraw request
+                onboardingService.withdrawRequest("vendor_alice", updateResult.requestId());
+
+                // Admin attempts to approve withdrawn request -> must fail with IllegalStateException
+                IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                        onboardingService.processAdminDecision(updateResult.requestId(), "APPROVED")
+                );
+                assertTrue(ex.getMessage().contains("terminal state"));
+        }
+
+        @Test
+        void testWithdrawRequestFailsForNonOwner() {
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var initResult = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+
+                // Create second user bob
+                userRepository.save(new com.ulpf.controlplane.model.User(null, "vendor_bob", "Bob", "hash", com.ulpf.controlplane.model.Role.USER, null));
+
+                // Bob attempts to withdraw Alice's request -> must fail
+                IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                        onboardingService.withdrawRequest("vendor_bob", initResult.requestId())
+                );
+                assertTrue(ex.getMessage().contains("only withdraw your own"));
         }
 
         @AfterAll

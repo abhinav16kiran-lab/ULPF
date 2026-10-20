@@ -428,6 +428,16 @@ public class AnalyticsService {
             params.add(sourceId.trim());
         }
 
+        if (from != null && !from.isBlank()) {
+            whereClauses.add("received_at >= parseDateTime64BestEffortOrNull(?)");
+            params.add(from.trim());
+        }
+
+        if (to != null && !to.isBlank()) {
+            whereClauses.add("received_at <= parseDateTime64BestEffortOrNull(?)");
+            params.add(to.trim());
+        }
+
         if (!whereClauses.isEmpty()) {
             sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
         }
@@ -458,35 +468,105 @@ public class AnalyticsService {
         }
     }
 
+    public long resolveIntervalSeconds(String interval) {
+        if (interval == null || interval.isBlank()) {
+            return 300L; // default 5m
+        }
+
+        String trimmed = interval.trim().toLowerCase();
+        if (trimmed.length() < 2) {
+            throw new IllegalArgumentException(
+                    "Invalid interval '" + interval + "'. Format must be <positive_integer>[s|m|h|d], e.g. '30s', '5m', '1h', '1d'."
+            );
+        }
+
+        char unit = trimmed.charAt(trimmed.length() - 1);
+        String numPart = trimmed.substring(0, trimmed.length() - 1);
+
+        if (!numPart.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException(
+                    "Invalid interval '" + interval + "'. Format must be <positive_integer>[s|m|h|d], e.g. '30s', '5m', '1h', '1d'."
+            );
+        }
+
+        long value;
+        try {
+            value = Long.parseLong(numPart);
+            if (value <= 0) {
+                throw new IllegalArgumentException("Interval value must be greater than 0: " + interval);
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Interval value is too large: " + numPart);
+        }
+
+        return switch (unit) {
+            case 's' -> value;
+            case 'm' -> value * 60L;
+            case 'h' -> value * 3600L;
+            case 'd' -> value * 86400L;
+            default -> throw new IllegalArgumentException(
+                    "Invalid unit '" + unit + "'. Supported units: s (seconds), m (minutes), h (hours), d (days)."
+            );
+        };
+    }
+
     public List<TimeSeriesBucket> getTimeSeries(String query, String interval, String from, String to) {
-        String safeInterval = (interval != null && !interval.isBlank()) ? interval.trim() : "5m";
-        log.info("Executing ClickHouse time-series histogram query for interval: {}", safeInterval);
+        long intervalSeconds = resolveIntervalSeconds(interval);
+        log.info("Executing ClickHouse time-series histogram query for interval: {}s (input: {})", intervalSeconds, interval);
 
         try {
-            String sql = """
+            StringBuilder sqlBuilder = new StringBuilder("""
                 SELECT 
-                    toStartOfInterval(received_at, INTERVAL 5 MINUTE) AS time_bucket,
+                    toStartOfInterval(received_at, toIntervalSecond(?)) AS time_bucket,
                     count(*) AS total_count,
                     countIf(positionCaseInsensitive(raw_payload, 'error') > 0 OR positionCaseInsensitive(raw_payload, 'fail') > 0) AS error_count
                 FROM ulpf_raw.raw_events
-                GROUP BY time_bucket
+                """);
+
+            List<Object> params = new java.util.ArrayList<>();
+            params.add(intervalSeconds);
+
+            List<String> whereClauses = new java.util.ArrayList<>();
+
+            if (query != null && !query.isBlank()) {
+                whereClauses.add("positionCaseInsensitive(raw_payload, ?) > 0");
+                params.add(query.trim());
+            }
+
+            if (from != null && !from.isBlank()) {
+                whereClauses.add("received_at >= parseDateTime64BestEffortOrNull(?)");
+                params.add(from.trim());
+            }
+
+            if (to != null && !to.isBlank()) {
+                whereClauses.add("received_at <= parseDateTime64BestEffortOrNull(?)");
+                params.add(to.trim());
+            }
+
+            if (!whereClauses.isEmpty()) {
+                sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
+            }
+
+            sqlBuilder.append("""
+                 GROUP BY time_bucket
                 ORDER BY time_bucket ASC
-                LIMIT 60
-                """;
+                LIMIT 100
+                """);
+
+            String sql = sqlBuilder.toString();
+            log.debug("Generated ClickHouse time-series query: {}", sql);
 
             List<TimeSeriesBucket> buckets = clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> new TimeSeriesBucket(
                     rs.getTimestamp("time_bucket") != null ? rs.getTimestamp("time_bucket").toInstant().toString() : java.time.Instant.now().toString(),
                     rs.getLong("total_count"),
                     rs.getLong("error_count")
-            ));
+            ), params.toArray());
 
-            if (buckets != null && !buckets.isEmpty()) {
-                return buckets;
-            }
+            return buckets != null ? buckets : java.util.Collections.emptyList();
         } catch (Exception e) {
             log.warn("ClickHouse time-series query execution error: {}, generating synthetic time-series buckets", e.getMessage());
+            return generateMockTimeSeries();
         }
-        return generateMockTimeSeries();
     }
 
     private List<TimeSeriesBucket> generateMockTimeSeries() {

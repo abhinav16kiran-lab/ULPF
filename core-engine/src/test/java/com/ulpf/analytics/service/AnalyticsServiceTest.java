@@ -3,7 +3,9 @@ package com.ulpf.analytics.service;
 import com.ulpf.common.db.ClickHouseIngestionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.eq;
@@ -130,9 +132,78 @@ class AnalyticsServiceTest {
 
     @Test
     void testGetTimeSeries_ReturnsBuckets() {
+        when(clickhouseJdbcTemplate.query(anyString(), ArgumentMatchers.<RowMapper<AnalyticsService.TimeSeriesBucket>>any(), any(Object[].class)))
+                .thenReturn(java.util.List.of(new AnalyticsService.TimeSeriesBucket("2026-10-20T10:00:00Z", 150L, 12L)));
+
         var buckets = analyticsService.getTimeSeries("error", "5m", null, null);
         assertNotNull(buckets);
-        assertFalse(buckets.isEmpty());
+        assertEquals(1, buckets.size());
+        assertEquals("2026-10-20T10:00:00Z", buckets.get(0).timestamp());
+        assertEquals(150L, buckets.get(0).totalCount());
+        assertEquals(12L, buckets.get(0).errorCount());
+    }
+
+    @Test
+    void testGetTimeSeries_BuildsDynamicParameterizedSql() {
+        org.mockito.ArgumentCaptor<String> sqlCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<Object[]> paramsCaptor = org.mockito.ArgumentCaptor.forClass(Object[].class);
+
+        when(clickhouseJdbcTemplate.query(sqlCaptor.capture(), ArgumentMatchers.<RowMapper<AnalyticsService.TimeSeriesBucket>>any(), paramsCaptor.capture()))
+                .thenReturn(java.util.Collections.emptyList());
+
+        analyticsService.getTimeSeries("timeout", "1h", "2026-10-20T00:00:00Z", "2026-10-20T23:59:59Z");
+
+        String capturedSql = sqlCaptor.getValue();
+        Object[] capturedParams = paramsCaptor.getValue();
+
+        assertTrue(capturedSql.contains("toStartOfInterval(received_at, toIntervalSecond(?))"), "SQL must use toIntervalSecond(?)");
+        assertTrue(capturedSql.contains("positionCaseInsensitive(raw_payload, ?) > 0"), "SQL must filter by query");
+        assertTrue(capturedSql.contains("received_at >= parseDateTime64BestEffortOrNull(?)"), "SQL must filter by from timestamp");
+        assertTrue(capturedSql.contains("received_at <= parseDateTime64BestEffortOrNull(?)"), "SQL must filter by to timestamp");
+
+        assertEquals(4, capturedParams.length);
+        assertEquals(3600L, capturedParams[0]); // 1h in seconds
+        assertEquals("timeout", capturedParams[1]);
+        assertEquals("2026-10-20T00:00:00Z", capturedParams[2]);
+        assertEquals("2026-10-20T23:59:59Z", capturedParams[3]);
+    }
+
+    @Test
+    void testGetTimeSeries_Exception_ReturnsFallbackMockBuckets() {
+        when(clickhouseJdbcTemplate.query(anyString(), ArgumentMatchers.<RowMapper<AnalyticsService.TimeSeriesBucket>>any(), any(Object[].class)))
+                .thenThrow(new RuntimeException("ClickHouse connection refused"));
+
+        var buckets = analyticsService.getTimeSeries("error", "5m", null, null);
+        assertNotNull(buckets);
+        assertFalse(buckets.isEmpty(), "Must fall back to synthetic mock data when ClickHouse is offline");
+    }
+
+    @Test
+    void testResolveIntervalSeconds() {
+        assertEquals(10L, analyticsService.resolveIntervalSeconds("10s"));
+        assertEquals(30L, analyticsService.resolveIntervalSeconds("30s"));
+        assertEquals(60L, analyticsService.resolveIntervalSeconds("1m"));
+        assertEquals(300L, analyticsService.resolveIntervalSeconds("5m"));
+        assertEquals(600L, analyticsService.resolveIntervalSeconds("10m"));
+        assertEquals(900L, analyticsService.resolveIntervalSeconds("15m"));
+        assertEquals(1800L, analyticsService.resolveIntervalSeconds("30m"));
+        assertEquals(3600L, analyticsService.resolveIntervalSeconds("1h"));
+        assertEquals(43200L, analyticsService.resolveIntervalSeconds("12h"));
+        assertEquals(86400L, analyticsService.resolveIntervalSeconds("1d"));
+        assertEquals(259200L, analyticsService.resolveIntervalSeconds("3d"));
+
+        // Defaults when null or blank
+        assertEquals(300L, analyticsService.resolveIntervalSeconds(null));
+        assertEquals(300L, analyticsService.resolveIntervalSeconds(""));
+        assertEquals(300L, analyticsService.resolveIntervalSeconds("   "));
+
+        // Strict rejection on invalid formats, non-numeric values, or SQL injection attempts
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("5m; DROP TABLE raw_events"));
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("10x"));
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("0m"));
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("-5m"));
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("invalid"));
+        assertThrows(IllegalArgumentException.class, () -> analyticsService.resolveIntervalSeconds("m"));
     }
 
     @Test

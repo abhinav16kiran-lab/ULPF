@@ -115,18 +115,51 @@ public class OnboardingController {
             ));
         }
 
-        var saved = onboardingService.submitUpdateRequest(
-                username, sourceId, sourceType, logType, delta, maxIntervalMs, sensorField, sampleLogFile, schemaFile
-        );
+        try {
+            var saved = onboardingService.submitUpdateRequest(
+                    username, sourceId, sourceType, logType, delta, maxIntervalMs, sensorField, sampleLogFile, schemaFile
+            );
 
-        java.util.Map<String, Object> respMap = new java.util.HashMap<>();
-        respMap.put("requestId", saved.requestId());
-        respMap.put("sourceId", saved.sourceId());
-        respMap.put("vendorId", saved.vendorId());
-        respMap.put("status", saved.status());
-        respMap.put("message", saved.message());
+            java.util.Map<String, Object> respMap = new java.util.HashMap<>();
+            respMap.put("requestId", saved.requestId());
+            respMap.put("sourceId", saved.sourceId());
+            respMap.put("vendorId", saved.vendorId());
+            respMap.put("status", saved.status());
+            respMap.put("message", saved.message());
 
-        return ResponseEntity.status(201).body(respMap);
+            return ResponseEntity.status(201).body(respMap);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "error", e.getMessage()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.BAD_REQUEST).body(Map.of(
+                    "error", e.getMessage()
+            ));
+        }
+    }
+
+    @PostMapping("/onboard/withdraw/{requestId}")
+    public ResponseEntity<?> withdrawRequest(
+            @AuthenticationPrincipal UlpfPrincipal principal,
+            @PathVariable String requestId
+    ) {
+        try {
+            var updated = onboardingService.withdrawRequest(principal.username(), requestId);
+            return ResponseEntity.ok(Map.of(
+                    "requestId", updated.requestId(),
+                    "status", updated.status(),
+                    "message", "Request withdrawn successfully"
+            ));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).body(Map.of(
+                    "error", e.getMessage()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.BAD_REQUEST).body(Map.of(
+                    "error", e.getMessage()
+            ));
+        }
     }
 
     @GetMapping("/onboard/my-requests")

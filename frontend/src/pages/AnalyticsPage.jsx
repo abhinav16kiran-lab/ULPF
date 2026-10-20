@@ -89,6 +89,7 @@ function AnalyticsPage() {
   // Grafana Observability mode state
   const [searchQuery, setSearchQuery] = useState("error");
   const [searchType, setSearchType] = useState("CONTAINS");
+  const [histogramInterval, setHistogramInterval] = useState("5m");
   const [searchResults, setSearchResults] = useState(null);
   const [timeSeriesBuckets, setTimeSeriesBuckets] = useState([]);
   const [selectedBucket, setSelectedBucket] = useState(null);
@@ -149,13 +150,16 @@ function AnalyticsPage() {
     try {
       const [searchRes, tsRes] = await Promise.all([
         client.get("/v1/analytics/search", { params: { query: searchQuery, searchType } }),
-        client.get("/v1/analytics/timeseries", { params: { query: searchQuery, interval: "5m" } })
+        client.get("/v1/analytics/timeseries", { params: { query: searchQuery, interval: histogramInterval || "5m" } })
       ]);
       setSearchResults(searchRes.data);
       setTimeSeriesBuckets(tsRes.data.buckets || []);
       setViewState("result");
     } catch (err) {
       console.warn("Grafana search API fallback:", err);
+      if (err.response?.data?.error) {
+        setErrorMessage(err.response.data.error);
+      }
       setSearchResults({
         query: searchQuery,
         totalMatches: 4,
@@ -968,7 +972,7 @@ function AnalyticsPage() {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-2">
-                    <div className="sm:col-span-8 space-y-1.5">
+                    <div className="sm:col-span-6 space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
                         Search Substring / Pattern
                       </label>
@@ -984,7 +988,7 @@ function AnalyticsPage() {
                       </div>
                     </div>
 
-                    <div className="sm:col-span-4 space-y-1.5">
+                    <div className="sm:col-span-3 space-y-1.5">
                       <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
                         Match Strategy
                       </label>
@@ -996,6 +1000,23 @@ function AnalyticsPage() {
                         <option value="CONTAINS">CONTAINS (Case-Insensitive)</option>
                         <option value="REGEX">REGEX (ClickHouse match())</option>
                       </select>
+                    </div>
+
+                    <div className="sm:col-span-3 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                          Bucket Interval
+                        </label>
+                        <span className="text-[10px] text-teal-400 font-mono">Format: 30s, 5m, 1h, 1d</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={histogramInterval}
+                        onChange={(e) => setHistogramInterval(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleGrafanaSearch()}
+                        placeholder="5m"
+                        className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
                     </div>
                   </div>
                 </div>

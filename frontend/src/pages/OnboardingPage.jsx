@@ -149,6 +149,23 @@ function OnboardingPage() {
     }
   }
 
+  async function handleWithdraw(requestId) {
+    if (!window.confirm(`Are you sure you want to withdraw onboarding request ${requestId}?`)) {
+      return;
+    }
+    setError(null);
+    try {
+      await client.post(`/v1/onboard/withdraw/${requestId}`);
+      await fetchUserData();
+    } catch (err) {
+      if (err.response && err.response.data && err.response.data.error) {
+        setError(err.response.data.error);
+      } else {
+        setError(err.message);
+      }
+    }
+  }
+
   const isSensorMode = logType === "SEN_TEL";
   const toggleSensorMode = () => {
     setLogType(isSensorMode ? "REG_LOG" : "SEN_TEL");
@@ -643,6 +660,7 @@ function OnboardingPage() {
                         <th>Type</th>
                         <th>Status</th>
                         <th>Date</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -656,6 +674,33 @@ function OnboardingPage() {
                             </span>
                           </td>
                           <td style={{ fontFamily: "var(--font-mono)", color: "#6b7280" }}>{r.createdAt}</td>
+                          <td>
+                            {["SUBMITTED", "AI_ANALYSIS", "HUMAN_REVIEW"].includes(r.status) && (
+                              <button
+                                type="button"
+                                onClick={() => handleWithdraw(r.requestId)}
+                                style={{
+                                  padding: "0.2rem 0.55rem",
+                                  fontSize: "0.75rem",
+                                  borderRadius: "0.25rem",
+                                  border: "1px solid #f87171",
+                                  backgroundColor: "#fff",
+                                  color: "#dc2626",
+                                  cursor: "pointer",
+                                  fontWeight: 500,
+                                  transition: "all 0.15s ease-in-out"
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.target.style.backgroundColor = "#fee2e2";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.target.style.backgroundColor = "#fff";
+                                }}
+                              >
+                                Withdraw
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
