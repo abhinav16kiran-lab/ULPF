@@ -134,6 +134,23 @@ class OnboardingServiceTest {
         }
 
         @Test
+        void testAdminApproveTriggersAutomaticReplay() {
+                var replayMock = org.mockito.Mockito.mock(com.ulpf.replay.service.ReplayBackfillService.class);
+                onboardingService.setReplayBackfillService(replayMock);
+
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var result = onboardingService.submitRequest(
+                                "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
+
+                onboardingService.processAdminDecision(result.requestId(), "APPROVED");
+
+                org.mockito.Mockito.verify(replayMock, org.mockito.Mockito.times(1))
+                                .triggerReplayAsync(org.mockito.ArgumentMatchers.eq(result.sourceId()), org.mockito.ArgumentMatchers.isNull());
+        }
+
+        @Test
         void testSubmitUpdateRequestCreatesUpdateRecordAndPreservesKey() {
                 MockMultipartFile sampleFile = new MockMultipartFile(
                                 "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());

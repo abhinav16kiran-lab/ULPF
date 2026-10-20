@@ -56,6 +56,7 @@ public class OnboardingService {
     private final LogFormatDetector logFormatDetector;
     private final MappingEngineOrchestrator mappingEngineOrchestrator;
     private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
+    private com.ulpf.replay.service.ReplayBackfillService replayBackfillService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public record AdminStats(int pendingReviewCount, int activeVendorsCount) {}
@@ -97,6 +98,23 @@ public class OnboardingService {
                 mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null, null);
     }
 
+    public OnboardingService(
+            UserRepository userRepository,
+            VendorRepository vendorRepository,
+            SourceRepository sourceRepository,
+            CredentialRepository credentialRepository,
+            OnboardingRepository onboardingRepository,
+            MappingRepository mappingRepository,
+            MappingProposalService mappingProposalService,
+            MappingLearningService mappingLearningService,
+            LogFormatDetector logFormatDetector,
+            MappingEngineOrchestrator mappingEngineOrchestrator,
+            com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository,
+                mappingRepository, mappingProposalService, mappingLearningService, logFormatDetector,
+                mappingEngineOrchestrator, dynamicSchemaProvisioningService, null);
+    }
+
     @Autowired
     public OnboardingService(
             UserRepository userRepository,
@@ -109,7 +127,8 @@ public class OnboardingService {
             MappingLearningService mappingLearningService,
             LogFormatDetector logFormatDetector,
             @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator,
-            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService,
+            @Autowired(required = false) com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -121,6 +140,12 @@ public class OnboardingService {
         this.logFormatDetector = logFormatDetector;
         this.mappingEngineOrchestrator = mappingEngineOrchestrator;
         this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
+        this.replayBackfillService = replayBackfillService;
+    }
+
+    @Autowired(required = false)
+    public void setReplayBackfillService(com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
+        this.replayBackfillService = replayBackfillService;
     }
 
     public record OnboardingSubmissionResult(
@@ -364,6 +389,16 @@ public class OnboardingService {
                         "Onboarding Request Approved",
                         "Your onboarding request (ID: " + requestId
                                 + ") for log source has been APPROVED! Your API key is now ACTIVE.");
+
+                // 4. AUTOMATIC REPLAY TRIGGER:
+                if (replayBackfillService != null) {
+                    try {
+                        log.info("Triggering automatic background replay for approved source {}", req.sourceId());
+                        replayBackfillService.triggerReplayAsync(req.sourceId(), null);
+                    } catch (Exception e) {
+                        log.warn("Automatic replay failed to start for source {}: {}", req.sourceId(), e.getMessage());
+                    }
+                }
             } else {
                 onboardingRepository.updateRequestStatus(requestId, "APPROVED");
             }

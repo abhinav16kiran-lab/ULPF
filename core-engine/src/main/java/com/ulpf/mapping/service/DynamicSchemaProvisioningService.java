@@ -92,10 +92,25 @@ public class DynamicSchemaProvisioningService {
                 }
             }
 
-            // 2. If a compatible existing table is found, re-use it! Extra unmapped fields flow into raw_unmapped.
+            // 2. If a compatible existing table is found, re-use it! Provision missing columns so new fields are queryable.
             if (bestMatchingTable != null) {
-                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'. Extra unmapped fields will store in raw_unmapped.",
+                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'.",
                         bestMatchingTable, (int) (highestMatchRatio * 100), sourceName);
+
+                if (missingFieldsToAlter != null && !missingFieldsToAlter.isEmpty()) {
+                    for (String missingCol : missingFieldsToAlter) {
+                        if (missingCol == null || missingCol.isBlank()) continue;
+                        try {
+                            String alterSql = "ALTER TABLE ulpf_events." + bestMatchingTable +
+                                              " ADD COLUMN IF NOT EXISTS " + missingCol + " Nullable(String)";
+                            log.info("Applying dynamic schema evolution: {}", alterSql);
+                            clickhouseJdbcTemplate.execute(alterSql);
+                        } catch (Exception e) {
+                            log.warn("Failed to alter table ulpf_events.{} to add column {}: {}",
+                                    bestMatchingTable, missingCol, e.getMessage());
+                        }
+                    }
+                }
                 return bestMatchingTable;
             }
 
@@ -311,5 +326,27 @@ public class DynamicSchemaProvisioningService {
         }
 
         return tableName;
+    }
+
+    public boolean tableExists(String tableName) {
+        return tableExists("ulpf_events", tableName);
+    }
+
+    public boolean tableExists(String database, String tableName) {
+        if (clickhouseJdbcTemplate == null || tableName == null || tableName.isBlank()) {
+            return false;
+        }
+        String db = (database == null || database.isBlank()) ? "ulpf_events" : database;
+        try {
+            Integer count = clickhouseJdbcTemplate.queryForObject(
+                    "SELECT count() FROM system.tables WHERE database = ? AND name = ?",
+                    Integer.class,
+                    db, tableName
+            );
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.warn("Failed to check if table {}.{} exists: {}", db, tableName, e.getMessage());
+            return false;
+        }
     }
 }

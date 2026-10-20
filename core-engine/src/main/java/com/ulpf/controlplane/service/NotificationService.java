@@ -29,4 +29,10 @@ public class NotificationService {
     public void markAsRead(String notificationId) {
         onboardingRepository.markNotificationAsRead(notificationId);
     }
+
+    public void createNotification(String userId, String title, String message) {
+        if (userId != null && !userId.isBlank()) {
+            onboardingRepository.saveNotification(userId, title, message);
+        }
+    }
 }
