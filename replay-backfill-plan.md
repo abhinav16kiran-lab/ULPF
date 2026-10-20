@@ -2773,5 +2773,47 @@ mvn test
 
 All 10 scenarios in `ReplayBackfillServiceTest`, 7 endpoints in `ReplayBackfillControllerTest`, unit tests in `MappingTransformerTest`, and approval workflow tests in `OnboardingServiceTest` passed with 100% success rate.
 
+---
+
+### Phase 6: Post-Review Hardening & Refinements
+
+Following an architectural review, the replay implementation was further hardened to address edge cases and enforce strict boundaries:
+
+1. **Fail-Fast ClickHouse Error Handling**:
+   - In `ClickHouseIngestionRepository`, `readRawEventsChunk`, `countRawEventsForSource`, and `findExistingEventIds` now propagate `RuntimeException` upon database or query failures rather than returning empty lists/sets/counts.
+   - This prevents silent data loss where a ClickHouse outage could masquerade as an empty source or complete replay with 0 inserts. Jobs encountering database errors are now correctly marked as `FAILED`.
+
+2. **Upper Time Bound (`now()`) & Default 30-Day Cap**:
+   - In `ReplayBackfillService.triggerReplayAsync`, if `toTime` is not specified, it defaults to `LocalDateTime.now()`. This guarantees that replay does not scan events arriving after the mapping approval (which live ingestion already writes).
+   - If `fromTime` is not specified, it defaults to `effectiveToTime.minusDays(30)`, enforcing the plan's 30-day default window.
+
+3. **Adaptive Throttling (ClickHouse Backpressure)**:
+   - Added `isMemoryPressureHigh()` in `ClickHouseIngestionRepository`, querying `system.metrics` (`MemoryTracking`) against `system.settings` (`max_memory_usage`) at an 80% threshold.
+   - If memory pressure exceeds 80%, `ReplayBackfillService.executeReplay` throttles between chunk iterations (sleeping 200ms) to ensure replay does not degrade live ingestion performance.
+
+4. **Empty-Source Notification (Scenario 8)**:
+   - When `totalEstimate == 0`, `triggerReplayAsync` sends a notification to the vendor owner before completing, satisfying Scenario 8.
+
+5. **Schema Update Optimization (Q10/Q11 Alignment)**:
+   - In `OnboardingService.processAdminDecision`, the automatic replay trigger was updated to fire only for `NEW_SOURCE` onboardings (`!"SCHEMA_UPDATE".equalsIgnoreCase(req.requestType())`).
+   - Because schema swaps transition instantaneously without dropping events, this avoids redundant full-table dedup scans, while administrators can still trigger manual replays via REST API if required.
+
+#### Final Verification (Full Suite)
+```
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 231, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  19.884 s
+[INFO] Finished at: 2026-10-20T19:57:22+05:30
+[INFO] ------------------------------------------------------------------------
+```
+- Total tests in `ReplayBackfillServiceTest`: 14 tests (added `testReplayClickHouseDownFailsFast`, `testReplayClickHouseCountFailureFailsFast`, `testReplay30DayDefaultAndUpperTimeBound`, `testReplayAdaptiveThrottleOnHighMemory`).
+- Full project test suite: 231/231 passing.
+
+
 
 
