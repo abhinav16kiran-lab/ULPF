@@ -457,7 +457,7 @@ public class ClickHouseIngestionRepository {
             ), params.toArray());
         } catch (Exception e) {
             log.error("Failed to read raw events chunk for source {}: {}", sourceId, e.getMessage());
-            return Collections.emptyList();
+            throw new RuntimeException("Failed to read raw events from ClickHouse for source " + sourceId + ": " + e.getMessage(), e);
         }
     }
 
@@ -486,7 +486,7 @@ public class ClickHouseIngestionRepository {
             return count != null ? count : 0L;
         } catch (Exception e) {
             log.warn("Failed to count raw events for source {}: {}", sourceId, e.getMessage());
-            return 0L;
+            throw new RuntimeException("Failed to count raw events from ClickHouse for source " + sourceId + ": " + e.getMessage(), e);
         }
     }
 
@@ -506,8 +506,25 @@ public class ClickHouseIngestionRepository {
             return new HashSet<>(found);
         } catch (Exception e) {
             log.warn("Failed to check existing event_ids in ulpf_events.{}: {}", tableName, e.getMessage());
-            return Collections.emptySet();
+            throw new RuntimeException("Failed to check existing event_ids in ulpf_events." + tableName + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Checks if ClickHouse memory usage exceeds 80% threshold for adaptive throttling.
+     */
+    public boolean isMemoryPressureHigh() {
+        if (clickhouseJdbcTemplate == null) return false;
+        try {
+            Long memoryUsage = clickhouseJdbcTemplate.queryForObject(
+                "SELECT value FROM system.metrics WHERE metric = 'MemoryTracking'", Long.class);
+            Long maxMemory = clickhouseJdbcTemplate.queryForObject(
+                "SELECT value FROM system.settings WHERE name = 'max_memory_usage'", Long.class);
+            if (memoryUsage != null && maxMemory != null && maxMemory > 0) {
+                return (double) memoryUsage / maxMemory > 0.80;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /**

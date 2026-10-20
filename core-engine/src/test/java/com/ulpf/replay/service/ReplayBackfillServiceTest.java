@@ -250,6 +250,7 @@ class ReplayBackfillServiceTest {
         when(mappingRepo.findActiveBySourceId(sourceId)).thenReturn(Optional.of(mapping));
         when(schemaService.tableExists("ulpf_events", "events_empty")).thenReturn(true);
         when(clickHouseRepo.countRawEventsForSource(eq(sourceId), any(), any())).thenReturn(0L);
+        when(vendorRepo.findById("ven_1")).thenReturn(Optional.of(new VendorRecord("ven_1", "user_admin", "Vendor 1", "ACTIVE", null)));
 
         ReplayJobStatus status = replayService.triggerReplayAsync(sourceId, null);
 
@@ -259,6 +260,7 @@ class ReplayBackfillServiceTest {
         assertEquals(0, status.processed());
         assertEquals(0, status.inserted());
         verify(clickHouseRepo, never()).readRawEventsChunk(any(), any(), any(), any(), any(), anyInt());
+        verify(notificationService, times(1)).createNotification(eq("user_admin"), eq("Replay Completed"), contains("no historical data found"));
     }
 
     @Test
@@ -471,5 +473,106 @@ class ReplayBackfillServiceTest {
             pauseLatch.countDown();
             pausingExecutor.shutdown();
         }
+    }
+
+    @Test
+    void testReplayClickHouseDownFailsFast() {
+        String sourceId = "src_fail_fast";
+        SourceRecord source = createMockSource(sourceId, "ven_1", "fail_fast_source");
+        when(sourceRepo.findById(sourceId)).thenReturn(Optional.of(source));
+
+        String mappingJson = "{\"metadata\":{\"target_table\":\"events_fail_fast\"}}";
+        MappingVersionRecord mapping = createMockMapping("map_1", sourceId, 1, mappingJson);
+        when(mappingRepo.findActiveBySourceId(sourceId)).thenReturn(Optional.of(mapping));
+        when(schemaService.tableExists("ulpf_events", "events_fail_fast")).thenReturn(true);
+        when(clickHouseRepo.countRawEventsForSource(eq(sourceId), any(), any())).thenReturn(10L);
+
+        // ClickHouse throws exception on readRawEventsChunk
+        when(clickHouseRepo.readRawEventsChunk(eq(sourceId), any(), any(), any(), any(), anyInt()))
+                .thenThrow(new RuntimeException("ClickHouse connection refused"));
+
+        replayService.triggerReplayAsync(sourceId, null);
+
+        ReplayJobStatus finalStatus = replayService.getJobStatus(sourceId).orElse(null);
+        assertNotNull(finalStatus);
+        assertEquals("FAILED", finalStatus.status());
+        assertTrue(finalStatus.errorMessage().contains("ClickHouse connection refused"));
+    }
+
+    @Test
+    void testReplayClickHouseCountFailureFailsFast() {
+        String sourceId = "src_count_fail";
+        SourceRecord source = createMockSource(sourceId, "ven_1", "count_fail_source");
+        when(sourceRepo.findById(sourceId)).thenReturn(Optional.of(source));
+
+        String mappingJson = "{\"metadata\":{\"target_table\":\"events_count_fail\"}}";
+        MappingVersionRecord mapping = createMockMapping("map_1", sourceId, 1, mappingJson);
+        when(mappingRepo.findActiveBySourceId(sourceId)).thenReturn(Optional.of(mapping));
+        when(schemaService.tableExists("ulpf_events", "events_count_fail")).thenReturn(true);
+
+        when(clickHouseRepo.countRawEventsForSource(eq(sourceId), any(), any()))
+                .thenThrow(new RuntimeException("ClickHouse DB down"));
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> {
+            replayService.triggerReplayAsync(sourceId, null);
+        });
+        assertTrue(ex.getMessage().contains("ClickHouse DB down"));
+    }
+
+    @Test
+    void testReplay30DayDefaultAndUpperTimeBound() {
+        String sourceId = "src_time_bound";
+        SourceRecord source = createMockSource(sourceId, "ven_1", "time_bound_source");
+        when(sourceRepo.findById(sourceId)).thenReturn(Optional.of(source));
+
+        String mappingJson = "{\"metadata\":{\"target_table\":\"events_time_bound\"}}";
+        MappingVersionRecord mapping = createMockMapping("map_1", sourceId, 1, mappingJson);
+        when(mappingRepo.findActiveBySourceId(sourceId)).thenReturn(Optional.of(mapping));
+        when(schemaService.tableExists("ulpf_events", "events_time_bound")).thenReturn(true);
+
+        ArgumentCaptor<LocalDateTime> fromCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<LocalDateTime> toCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        when(clickHouseRepo.countRawEventsForSource(eq(sourceId), fromCaptor.capture(), toCaptor.capture())).thenReturn(0L);
+
+        LocalDateTime beforeTrigger = LocalDateTime.now().minusSeconds(1);
+        replayService.triggerReplayAsync(sourceId, null);
+        LocalDateTime afterTrigger = LocalDateTime.now().plusSeconds(1);
+
+        LocalDateTime capturedTo = toCaptor.getValue();
+        LocalDateTime capturedFrom = fromCaptor.getValue();
+
+        assertNotNull(capturedTo);
+        assertNotNull(capturedFrom);
+        assertTrue(!capturedTo.isBefore(beforeTrigger) && !capturedTo.isAfter(afterTrigger));
+        assertTrue(Math.abs(java.time.Duration.between(capturedFrom, capturedTo.minusDays(30)).getSeconds()) < 5);
+    }
+
+    @Test
+    void testReplayAdaptiveThrottleOnHighMemory() {
+        String sourceId = "src_throttle";
+        SourceRecord source = createMockSource(sourceId, "ven_1", "throttle_source");
+        when(sourceRepo.findById(sourceId)).thenReturn(Optional.of(source));
+
+        String mappingJson = "{\"metadata\":{\"target_table\":\"events_throttle\"},\"host\":{\"canonicalField\":\"hostname\"}}";
+        MappingVersionRecord mapping = createMockMapping("map_1", sourceId, 1, mappingJson);
+        when(mappingRepo.findActiveBySourceId(sourceId)).thenReturn(Optional.of(mapping));
+        when(schemaService.tableExists("ulpf_events", "events_throttle")).thenReturn(true);
+        when(clickHouseRepo.countRawEventsForSource(eq(sourceId), any(), any())).thenReturn(1L);
+
+        when(clickHouseRepo.isMemoryPressureHigh()).thenReturn(true);
+
+        RawEventRecord raw = new RawEventRecord("evt_1", "lin_1", "ven_1", sourceId, null, LocalDateTime.now(), "{\"host\":\"srv1\"}");
+        when(clickHouseRepo.readRawEventsChunk(eq(sourceId), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(raw))
+                .thenReturn(Collections.emptyList());
+        when(clickHouseRepo.findExistingEventIds(eq("events_throttle"), anyCollection())).thenReturn(Collections.emptySet());
+        when(clickHouseRepo.batchInsertDynamicRecords(eq("events_throttle"), anyList())).thenReturn(1);
+
+        replayService.triggerReplayAsync(sourceId, null);
+
+        verify(clickHouseRepo, atLeastOnce()).isMemoryPressureHigh();
+        ReplayJobStatus finalStatus = replayService.getJobStatus(sourceId).orElse(null);
+        assertNotNull(finalStatus);
+        assertEquals("COMPLETED", finalStatus.status());
     }
 }

@@ -390,8 +390,8 @@ public class OnboardingService {
                         "Your onboarding request (ID: " + requestId
                                 + ") for log source has been APPROVED! Your API key is now ACTIVE.");
 
-                // 4. AUTOMATIC REPLAY TRIGGER:
-                if (replayBackfillService != null) {
+                // 4. AUTOMATIC REPLAY TRIGGER (only for new source onboarding, not schema updates per Q10/Q11):
+                if (replayBackfillService != null && !"SCHEMA_UPDATE".equalsIgnoreCase(req.requestType())) {
                     try {
                         log.info("Triggering automatic background replay for approved source {}", req.sourceId());
                         replayBackfillService.triggerReplayAsync(req.sourceId(), null);

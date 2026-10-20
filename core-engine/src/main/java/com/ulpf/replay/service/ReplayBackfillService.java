@@ -89,7 +89,17 @@ public class ReplayBackfillService {
     }
 
     public synchronized ReplayJobStatus triggerReplayAsync(String sourceId, ReplayRequest request) {
-        ReplayRequest req = request != null ? request : new ReplayRequest(null, null, 1000);
+        // Enforce upper time bound (now) and 30-day default window if not specified
+        LocalDateTime effectiveToTime = (request != null && request.toTime() != null)
+                ? request.toTime()
+                : LocalDateTime.now();
+        LocalDateTime effectiveFromTime = (request != null && request.fromTime() != null)
+                ? request.fromTime()
+                : effectiveToTime.minusDays(30);
+        int chunkSize = (request != null && request.chunkSize() != null)
+                ? request.chunkSize()
+                : 1000;
+        ReplayRequest req = new ReplayRequest(effectiveFromTime, effectiveToTime, chunkSize);
 
         // Guard: check if replay is already running for this source
         ReplayJobStatus existing = activeJobs.get(sourceId);
@@ -122,6 +132,8 @@ public class ReplayBackfillService {
             log.info("No raw events found to replay for sourceId {}", sourceId);
             ReplayJobStatus completed = ReplayJobStatus.initial(jobId, sourceId, targetTable, 0).completed(0, 0, 0, 0);
             activeJobs.put(sourceId, completed);
+            sendNotification(source, "Replay Completed",
+                    String.format("Replay completed for source '%s': 0 events (no historical data found).", source.sourceName()));
             return completed;
         }
 
@@ -182,6 +194,18 @@ public class ReplayBackfillService {
                     log.info("Replay job [{}] for source {} was cancelled.", jobId, sourceId);
                     activeJobs.compute(sourceId, (k, s) -> s != null ? s.cancelled() : ReplayJobStatus.initial(jobId, sourceId, targetTable, 0).cancelled());
                     return;
+                }
+
+                // Adaptive throttle: check ClickHouse memory pressure before reading/inserting chunk
+                if (clickHouseRepo.isMemoryPressureHigh()) {
+                    log.warn("ClickHouse memory pressure high (>80%), throttling replay for source {}", sourceId);
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.info("Replay job [{}] interrupted during throttling.", jobId);
+                        return;
+                    }
                 }
 
                 List<RawEventRecord> chunk = clickHouseRepo.readRawEventsChunk(
@@ -256,28 +280,32 @@ public class ReplayBackfillService {
             log.info("Replay job [{}] COMPLETED: processed={}, inserted={}, skipped={}, failed={}",
                     jobId, processed, inserted, skipped, failed);
 
-            if (notificationService != null) {
-                String notifyUserId = null;
-                if (vendorRepo != null && source.vendorId() != null) {
-                    notifyUserId = vendorRepo.findById(source.vendorId())
-                            .map(VendorRecord::ownerUserId)
-                            .orElse(null);
-                }
-                if (notifyUserId != null) {
-                    notificationService.createNotification(
-                            notifyUserId,
-                            "Replay Completed",
-                            String.format("Historical logs replayed for '%s'. Total: %d, Inserted: %d, Skipped: %d",
-                                    source.sourceName(), processed, inserted, skipped)
-                    );
-                }
-            }
+            sendNotification(source, "Replay Completed",
+                    String.format("Historical logs replayed for '%s'. Total: %d, Inserted: %d, Skipped: %d",
+                            source.sourceName(), processed, inserted, skipped));
 
         } catch (Exception e) {
             log.error("Replay job [{}] FAILED for source {}: {}", jobId, sourceId, e.getMessage(), e);
             activeJobs.compute(sourceId, (k, s) -> s != null ? s.failed(e.getMessage()) : ReplayJobStatus.initial(jobId, sourceId, targetTable, 0).failed(e.getMessage()));
         } finally {
             cancellationTokens.remove(sourceId);
+        }
+    }
+
+    private void sendNotification(SourceRecord source, String title, String message) {
+        if (notificationService == null) return;
+        try {
+            String notifyUserId = null;
+            if (vendorRepo != null && source.vendorId() != null) {
+                notifyUserId = vendorRepo.findById(source.vendorId())
+                        .map(VendorRecord::ownerUserId)
+                        .orElse(null);
+            }
+            if (notifyUserId != null) {
+                notificationService.createNotification(notifyUserId, title, message);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to send notification for source {}: {}", source.sourceId(), e.getMessage());
         }
     }
 
