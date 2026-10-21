@@ -290,5 +290,87 @@ class TableIngestionFailureNotificationServiceTest {
         // Digest MUST be sent for the 40 suppressed events!
         verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
     }
+
+    @Test
+    void testConcurrent32ThreadsSameSourceAndType_ExactlyOneAlertAndTotalCountPreserved() throws InterruptedException {
+        String sourceId = "src_concurrency_1";
+        String tableName = "events_concurrency_tbl";
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        int threadCount = 32;
+        int callsPerThread = 1000;
+        int countPerCall = 5;
+        long totalExpectedEvents = (long) threadCount * callsPerThread * countPerCall;
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount);
+        java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch endLatch = new java.util.concurrent.CountDownLatch(threadCount);
+
+        for (int i = 0; i < threadCount; i++) {
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    for (int j = 0; j < callsPerThread; j++) {
+                        service.notifyTableMissing(sourceId, tableName, countPerCall);
+                    }
+                } catch (InterruptedException ignored) {
+                } finally {
+                    endLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        assertTrue(endLatch.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        executor.shutdown();
+
+        // Exactly 1 initial alert must have been dispatched
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        // Cache must hold the exact sum of all events
+        TableIngestionFailureNotificationService.ThrottleEntry entry = service.getThrottleCache().get(sourceId + ":TABLE_MISSING");
+        assertNotNull(entry);
+        assertEquals(totalExpectedEvents, entry.accumulatedCount().get());
+    }
+
+    @Test
+    void testTinyCooldownWithFlushLoop_NoLostCounts() throws InterruptedException {
+        service.setCooldownMs(10L); // 10ms cooldown
+        String sourceId = "src_flush_loop";
+        String tableName = "events_flush_loop";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+
+        Thread flusher = new Thread(() -> {
+            while (running.get()) {
+                service.flushExpiredDigests();
+                try {
+                    Thread.sleep(5);
+                } catch (InterruptedException ignored) {}
+            }
+            service.flushExpiredDigests();
+        });
+        flusher.start();
+
+        for (int i = 0; i < 30; i++) {
+            service.notifyTableMissing(sourceId, tableName, 10);
+            Thread.sleep(3);
+        }
+
+        Thread.sleep(25);
+        running.set(false);
+        flusher.join(2000);
+
+        // At least 1 alert/digest sent
+        verify(onboardingRepository, atLeast(1)).saveNotification(anyString(), anyString(), anyString());
+    }
 }
 

@@ -4,10 +4,10 @@ import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.SourceRepository;
 import com.ulpf.common.db.SourceRepository.SourceRecord;
 import com.ulpf.common.db.UserRepository;
-import com.ulpf.common.db.VendorRepository;
-import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
+import com.ulpf.common.db.VendorRepository;
+import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,24 +19,21 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Service for detecting dynamic table ingestion failures (missing dynamic tables,
- * ClickHouse write exceptions, missing target_table metadata, missing mappings,
- * and missing table columns) and dispatching actionable notifications to system
- * administrators and vendor owners via NotificationService and optional Webhooks.
+ * Service responsible for alerting administrators and data source owners (vendors)
+ * when ClickHouse dynamic table operations fail during canonical log ingestion.
  *
- * Implements sliding-window throttling (default: 30 minutes) to prevent notification
- * storms during high-throughput log ingestion, with atomic accumulators to track
- * dropped/affected event counts and periodic summary digest dispatches.
+ * Implements thread-safe atomic throttling with digest summaries.
  */
 @Service
 public class TableIngestionFailureNotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(TableIngestionFailureNotificationService.class);
 
-    @Value("${ulpf.table-failure.cooldown-ms:1800000}")
     private long cooldownMs = 1800000L; // Default: 30 Minutes
 
     @Value("${ulpf.alert.webhook-url:}")
@@ -48,12 +45,21 @@ public class TableIngestionFailureNotificationService {
     private final UserRepository userRepository;
     private NotificationService notificationService;
 
+    @Autowired(required = false)
+    private AlertDispatcher alertDispatcher;
+
     public record ThrottleEntry(
             long firstAlertTime,
             Instant firstAlertInstant,
             int initialAlertCount,
             AtomicLong accumulatedCount,
             String lastDetails
+    ) {}
+
+    public record EvaluationResult(
+            boolean shouldAlert,
+            ThrottleEntry expiredPrevious,
+            Instant alertInstant
     ) {}
 
     // In-memory throttling cache: (sourceId + ":" + failureType) -> ThrottleEntry
@@ -73,6 +79,23 @@ public class TableIngestionFailureNotificationService {
     @Autowired(required = false)
     public void setNotificationService(NotificationService notificationService) {
         this.notificationService = notificationService;
+        if (this.alertDispatcher != null) {
+            this.alertDispatcher.setNotificationService(notificationService);
+        }
+    }
+
+    public void setAlertDispatcher(AlertDispatcher alertDispatcher) {
+        this.alertDispatcher = alertDispatcher;
+    }
+
+    public AlertDispatcher getAlertDispatcher() {
+        if (this.alertDispatcher == null) {
+            this.alertDispatcher = new AlertDispatcher(onboardingRepository, userRepository, notificationService, null);
+            if (webhookUrl != null) {
+                this.alertDispatcher.setWebhookUrl(webhookUrl);
+            }
+        }
+        return this.alertDispatcher;
     }
 
     public void setCooldownMs(long cooldownMs) {
@@ -85,6 +108,33 @@ public class TableIngestionFailureNotificationService {
 
     public void setWebhookUrl(String webhookUrl) {
         this.webhookUrl = webhookUrl;
+        if (this.alertDispatcher != null) {
+            this.alertDispatcher.setWebhookUrl(webhookUrl);
+        }
+    }
+
+    /**
+     * Atomic throttle evaluation helper. Returns whether to alert and any expired window entry.
+     */
+    private EvaluationResult evaluate(String cacheKey, int eventCount, String details) {
+        long now = System.currentTimeMillis();
+        Instant alertInstant = Instant.now();
+        AtomicBoolean startNewWindow = new AtomicBoolean(false);
+        AtomicReference<ThrottleEntry> expiredRef = new AtomicReference<>();
+
+        throttleCache.compute(cacheKey, (k, existing) -> {
+            if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
+                existing.accumulatedCount().addAndGet(eventCount);
+                return existing;
+            }
+            startNewWindow.set(true);
+            if (existing != null) {
+                expiredRef.set(existing);
+            }
+            return new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), details);
+        });
+
+        return new EvaluationResult(startNewWindow.get(), expiredRef.get(), alertInstant);
     }
 
     /**
@@ -95,23 +145,20 @@ public class TableIngestionFailureNotificationService {
 
         String failureType = "TABLE_MISSING";
         String cacheKey = sourceId + ":" + failureType;
-        long now = System.currentTimeMillis();
+        EvaluationResult eval = evaluate(cacheKey, eventCount, tableName);
 
-        ThrottleEntry existing = throttleCache.get(cacheKey);
-        if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
-            existing.accumulatedCount().addAndGet(eventCount);
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
             log.debug("Table missing alert suppressed (cooldown active) for source {}. Total accumulated: {}",
-                    sourceId, existing.accumulatedCount().get());
+                    sourceId, throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : eventCount);
             return;
         }
 
-        if (existing != null && existing.accumulatedCount().get() > existing.initialAlertCount()) {
-            sendDigestNotification(sourceId, failureType, tableName, existing.accumulatedCount().get(), existing.accumulatedCount().get() - existing.initialAlertCount());
-        }
-
-        Instant alertInstant = Instant.now();
-        throttleCache.put(cacheKey, new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), tableName));
-
+        Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
         String adminTitle = "[CRITICAL] Dynamic Table Missing: " + meta.sourceName();
@@ -122,12 +169,18 @@ public class TableIngestionFailureNotificationService {
                         "Action: Verify table schema or provision table, then trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
                 tableName, meta.sourceName(), sourceId, meta.vendorName(), eventCount, alertInstant, sourceId);
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage,
-                "Ingestion Alert: Dynamic Table Missing for " + meta.sourceName(),
-                String.format("Logs for source '%s' could not be loaded into dynamic analytics because table 'ulpf_events.%s' is missing. " +
+        String vendorTitle = "Ingestion Alert: Dynamic Table Missing for " + meta.sourceName();
+        String vendorMessage = String.format(
+                "Logs for source '%s' could not be loaded into dynamic analytics because table 'ulpf_events.%s' is missing. " +
                         "Your data is safely preserved in raw storage. Platform administrators have been notified to re-provision the table.",
-                        meta.sourceName(), tableName));
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+                meta.sourceName(), tableName);
+
+        AlertPayload payload = new AlertPayload(
+                failureType, "CRITICAL", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                tableName, "Dynamic table missing in ClickHouse", eventCount, Collections.emptySet(), alertInstant,
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
     /**
@@ -138,63 +191,64 @@ public class TableIngestionFailureNotificationService {
 
         String failureType = "INSERT_FAILURE";
         String cacheKey = sourceId + ":" + failureType;
-        long now = System.currentTimeMillis();
+        EvaluationResult eval = evaluate(cacheKey, eventCount, tableName + ":" + errorMessage);
 
-        ThrottleEntry existing = throttleCache.get(cacheKey);
-        if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
-            existing.accumulatedCount().addAndGet(eventCount);
-            log.debug("Dynamic insert failure alert suppressed (cooldown active) for source {}. Total accumulated: {}",
-                    sourceId, existing.accumulatedCount().get());
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
+            log.debug("Insert failure alert suppressed (cooldown active) for source {}. Total accumulated: {}",
+                    sourceId, throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : eventCount);
             return;
         }
 
-        if (existing != null && existing.accumulatedCount().get() > existing.initialAlertCount()) {
-            sendDigestNotification(sourceId, failureType, tableName, existing.accumulatedCount().get(), existing.accumulatedCount().get() - existing.initialAlertCount());
-        }
-
-        Instant alertInstant = Instant.now();
-        throttleCache.put(cacheKey, new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), errorMessage));
-
+        Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
-        String adminTitle = "[INGESTION FAILURE] Dynamic Table Insert Failed: " + meta.sourceName();
+        String adminTitle = "[INGESTION FAILURE] Dynamic Table Insert Failed for " + meta.sourceName();
         String adminMessage = String.format(
-                "Failed to insert batch of %d event(s) into dynamic table 'ulpf_events.%s' for source '%s' (ID: %s). " +
-                        "Error: %s. Events are safely preserved in 'ulpf_raw.raw_events' (started at: %s). " +
-                        "Action: Once database availability is restored, trigger Replay via POST /v1/admin/sources/%s/replay to recover.",
-                eventCount, tableName, meta.sourceName(), sourceId, errorMessage != null ? errorMessage : "Unknown error", alertInstant, sourceId);
+                "Batch insert into dynamic table 'ulpf_events.%s' failed for source '%s' (ID: %s, Vendor: %s). " +
+                        "%d event(s) could not be written to analytical storage (started at: %s). " +
+                        "Events are safely preserved in 'ulpf_raw.raw_events'. Error: %s. " +
+                        "Action: Review database errors and execute Replay via POST /v1/admin/sources/%s/replay after resolution.",
+                tableName, meta.sourceName(), sourceId, meta.vendorName(), eventCount, alertInstant, errorMessage, sourceId);
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage,
-                "Ingestion Alert: Database Write Issue for " + meta.sourceName(),
-                String.format("A temporary database write issue occurred while inserting %d event(s) for source '%s'. " +
-                        "Your events are safely recorded in raw storage and will be backfilled once database stability is confirmed.",
-                        eventCount, meta.sourceName()));
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+        String vendorTitle = "Ingestion Warning: Analytical Insert Failed for " + meta.sourceName();
+        String vendorMessage = String.format(
+                "Dynamic analytical writes for source '%s' (table 'ulpf_events.%s') experienced an insertion failure. " +
+                        "All incoming events are safely preserved in raw storage.",
+                meta.sourceName(), tableName);
+
+        AlertPayload payload = new AlertPayload(
+                failureType, "CRITICAL", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                tableName, errorMessage, eventCount, Collections.emptySet(), alertInstant,
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
     /**
-     * Notifies admin and vendor when an active source emits events but has no target_table defined in mapping metadata.
+     * Notifies admin and vendor when an event has an active mapping, but no 'target_table' is configured.
      */
     public void notifyNoTargetTable(String sourceId, int eventCount) {
         if (sourceId == null || eventCount <= 0) return;
 
         String failureType = "NO_TARGET_TABLE";
         String cacheKey = sourceId + ":" + failureType;
-        long now = System.currentTimeMillis();
+        EvaluationResult eval = evaluate(cacheKey, eventCount, "NO_TARGET_TABLE");
 
-        ThrottleEntry existing = throttleCache.get(cacheKey);
-        if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
-            existing.accumulatedCount().addAndGet(eventCount);
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
             return;
         }
 
-        if (existing != null && existing.accumulatedCount().get() > existing.initialAlertCount()) {
-            sendDigestNotification(sourceId, failureType, "NO_TARGET_TABLE", existing.accumulatedCount().get(), existing.accumulatedCount().get() - existing.initialAlertCount());
-        }
-
-        Instant alertInstant = Instant.now();
-        throttleCache.put(cacheKey, new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), "NO_TARGET_TABLE"));
-
+        Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
         String adminTitle = "[CONFIGURATION REQUIRED] No Target Table Defined: " + meta.sourceName();
@@ -205,11 +259,17 @@ public class TableIngestionFailureNotificationService {
                         "Action: Update the active mapping metadata with a valid target_table and trigger Replay via POST /v1/admin/sources/%s/replay.",
                 meta.sourceName(), sourceId, meta.vendorName(), eventCount, alertInstant, sourceId);
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage,
-                "Configuration Notice for " + meta.sourceName(),
-                String.format("Log events for source '%s' are currently not routed to an analytical table because no target table is configured in your mapping metadata. " +
-                        "Events are safely preserved in raw storage.", meta.sourceName()));
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+        String vendorTitle = "Configuration Notice for " + meta.sourceName();
+        String vendorMessage = String.format(
+                "Log events for source '%s' are currently not routed to an analytical table because no target table is configured in your mapping metadata. " +
+                        "Events are safely preserved in raw storage.", meta.sourceName());
+
+        AlertPayload payload = new AlertPayload(
+                failureType, "WARN", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                null, "No target_table in active mapping metadata", eventCount, Collections.emptySet(), alertInstant,
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
     /**
@@ -220,21 +280,18 @@ public class TableIngestionFailureNotificationService {
 
         String failureType = "MAPPING_MISSING";
         String cacheKey = sourceId + ":" + failureType;
-        long now = System.currentTimeMillis();
+        EvaluationResult eval = evaluate(cacheKey, eventCount, "MAPPING_MISSING");
 
-        ThrottleEntry existing = throttleCache.get(cacheKey);
-        if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
-            existing.accumulatedCount().addAndGet(eventCount);
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
             return;
         }
 
-        if (existing != null && existing.accumulatedCount().get() > existing.initialAlertCount()) {
-            sendDigestNotification(sourceId, failureType, "MAPPING_MISSING", existing.accumulatedCount().get(), existing.accumulatedCount().get() - existing.initialAlertCount());
-        }
-
-        Instant alertInstant = Instant.now();
-        throttleCache.put(cacheKey, new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), "MAPPING_MISSING"));
-
+        Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
         String adminTitle = "[ONBOARDING REQUIRED] Missing Schema Mapping: " + meta.sourceName();
@@ -250,8 +307,12 @@ public class TableIngestionFailureNotificationService {
                         "All logs are safely preserved in raw storage. Once approved, historical logs will be backfilled.",
                 meta.sourceName());
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage, vendorTitle, vendorMessage);
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+        AlertPayload payload = new AlertPayload(
+                failureType, "WARN", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                null, "No approved schema mapping", eventCount, Collections.emptySet(), alertInstant,
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
     /**
@@ -262,21 +323,18 @@ public class TableIngestionFailureNotificationService {
 
         String failureType = "MISSING_COLUMNS";
         String cacheKey = sourceId + ":" + failureType;
-        long now = System.currentTimeMillis();
+        EvaluationResult eval = evaluate(cacheKey, eventCount, String.join(",", missingColumns));
 
-        ThrottleEntry existing = throttleCache.get(cacheKey);
-        if (existing != null && (now - existing.firstAlertTime()) < cooldownMs) {
-            existing.accumulatedCount().addAndGet(eventCount);
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
             return;
         }
 
-        if (existing != null && existing.accumulatedCount().get() > existing.initialAlertCount()) {
-            sendDigestNotification(sourceId, failureType, String.join(",", missingColumns), existing.accumulatedCount().get(), existing.accumulatedCount().get() - existing.initialAlertCount());
-        }
-
-        Instant alertInstant = Instant.now();
-        throttleCache.put(cacheKey, new ThrottleEntry(now, alertInstant, eventCount, new AtomicLong(eventCount), String.join(",", missingColumns)));
-
+        Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
         String adminTitle = String.format("[SCHEMA MISMATCH] Table %s Missing Columns for %s", tableName, meta.sourceName());
@@ -293,28 +351,38 @@ public class TableIngestionFailureNotificationService {
                         "Data is preserved in raw storage. Platform administrators have been notified to add the columns.",
                 missingColumns, meta.sourceName());
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage, vendorTitle, vendorMessage);
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+        AlertPayload payload = new AlertPayload(
+                failureType, "WARN", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                tableName, "Table missing mapped columns: " + missingColumns, eventCount, missingColumns, alertInstant,
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
     /**
      * Periodic scheduled check running every 60 seconds to dispatch pending summary digests
      * when the throttling window expires, even if subsequent failures stop.
+     * Uses atomic computeIfPresent to eliminate race conditions between flush and incoming counts.
      */
     @Scheduled(fixedRate = 60000)
     public void flushExpiredDigests() {
         long now = System.currentTimeMillis();
-        for (Map.Entry<String, ThrottleEntry> entry : throttleCache.entrySet()) {
-            String key = entry.getKey();
-            ThrottleEntry state = entry.getValue();
-            if ((now - state.firstAlertTime()) >= cooldownMs) {
-                if (state.accumulatedCount().get() > state.initialAlertCount()) {
-                    String[] parts = key.split(":", 2);
-                    String sourceId = parts[0];
-                    String failureType = parts.length > 1 ? parts[1] : "INGESTION_FAILURE";
-                    sendDigestNotification(sourceId, failureType, state.lastDetails(), state.accumulatedCount().get(), state.accumulatedCount().get() - state.initialAlertCount());
+        for (String key : throttleCache.keySet()) {
+            AtomicReference<ThrottleEntry> removedRef = new AtomicReference<>();
+            throttleCache.computeIfPresent(key, (k, state) -> {
+                if ((now - state.firstAlertTime()) >= cooldownMs) {
+                    removedRef.set(state);
+                    return null;
                 }
-                throttleCache.remove(key);
+                return state;
+            });
+
+            ThrottleEntry removed = removedRef.get();
+            if (removed != null && removed.accumulatedCount().get() > removed.initialAlertCount()) {
+                String[] parts = key.split(":", 2);
+                String sourceId = parts[0];
+                String failureType = parts.length > 1 ? parts[1] : "INGESTION_FAILURE";
+                sendDigestNotification(sourceId, failureType, removed.lastDetails(), removed.accumulatedCount().get(), removed.accumulatedCount().get() - removed.initialAlertCount());
             }
         }
     }
@@ -330,121 +398,58 @@ public class TableIngestionFailureNotificationService {
 
         String vendorTitle = String.format("Summary Digest: Ingestion Failures for %s", meta.sourceName());
         String vendorMessage = String.format(
-                "During the last 30 minutes, %d event(s) for your source '%s' could not be loaded into analytical storage due to %s. " +
-                        "Events are safely preserved in raw storage. Platform administrators have been notified.",
-                suppressedCount, meta.sourceName(), failureType);
+                "During the last 30-minute window, %d total event(s) encountered %s. All events are safely preserved in raw storage.",
+                totalCount, failureType);
 
-        dispatchToAdminAndVendor(meta, adminTitle, adminMessage, vendorTitle, vendorMessage);
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, failureType);
+        AlertPayload payload = new AlertPayload(
+                "DIGEST_" + failureType, "INFO", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                details, "Digest summary", totalCount, Collections.emptySet(), Instant.now(),
+                adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
     }
 
-    private record SourceMeta(String sourceName, String vendorId, String vendorName, String vendorOwnerUserId) {}
+    public record SourceMeta(String sourceName, String vendorId, String vendorName, String ownerUserId) {}
 
-    private SourceMeta resolveSourceMeta(String sourceId) {
+    public SourceMeta resolveSourceMeta(String sourceId) {
         String sourceName = sourceId;
-        String vendorId = null;
-        String vendorName = "Vendor";
-        String vendorOwnerUserId = null;
+        String vendorId = "unknown";
+        String vendorName = "Unknown Vendor";
+        String ownerUserId = null;
 
         try {
             Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
             if (srcOpt.isPresent()) {
                 sourceName = srcOpt.get().sourceName();
                 vendorId = srcOpt.get().vendorId();
-                if (vendorId != null) {
-                    Optional<VendorRecord> vOpt = vendorRepository.findById(vendorId);
-                    if (vOpt.isPresent()) {
-                        vendorName = vOpt.get().vendorName();
-                        vendorOwnerUserId = vOpt.get().ownerUserId();
-                    }
+                Optional<VendorRecord> venOpt = vendorRepository.findById(vendorId);
+                if (venOpt.isPresent()) {
+                    vendorName = venOpt.get().vendorName();
+                    ownerUserId = venOpt.get().ownerUserId();
                 }
             }
         } catch (Exception e) {
-            log.warn("Could not resolve source metadata for source {}: {}", sourceId, e.getMessage());
+            log.warn("Failed to resolve metadata for sourceId {}: {}", sourceId, e.getMessage());
         }
 
-        return new SourceMeta(sourceName, vendorId, vendorName, vendorOwnerUserId);
-    }
-
-    private void dispatchToAdminAndVendor(SourceMeta meta, String adminTitle, String adminMessage, String vendorTitle, String vendorMessage) {
-        // Dispatch to all system admins
-        List<String> adminUserIds = resolveAdminUserIds();
-        for (String adminId : adminUserIds) {
-            if (!adminId.equals(meta.vendorOwnerUserId())) {
-                saveNotificationSafely(adminId, adminTitle, adminMessage);
-            }
-        }
-
-        // Dispatch to vendor owner
-        if (meta.vendorOwnerUserId() != null) {
-            saveNotificationSafely(meta.vendorOwnerUserId(), vendorTitle, vendorMessage);
-        }
-    }
-
-    private List<String> resolveAdminUserIds() {
-        if (userRepository != null) {
-            try {
-                List<User> admins = userRepository.findUsersByRole(Role.ADMIN);
-                if (!admins.isEmpty()) {
-                    return admins.stream().map(User::userId).toList();
-                }
-            } catch (Exception e) {
-                log.warn("Failed to lookup admin users: {}", e.getMessage());
-            }
-        }
-        return List.of("admin");
-    }
-
-    private void saveNotificationSafely(String userId, String title, String message) {
-        try {
-            if (notificationService != null) {
-                notificationService.createNotification(userId, title, message);
-            } else if (onboardingRepository != null) {
-                onboardingRepository.saveNotification(userId, title, message);
-            }
-            log.info("Dispatched Table Ingestion Failure Notification to user {}: {}", userId, title);
-        } catch (Exception e) {
-            log.warn("Failed to persist notification for user {}: {}", userId, e.getMessage());
-        }
-    }
-
-    private void sendWebhookAlertSafely(String title, String message, String sourceId, String alertType) {
-        if (webhookUrl == null || webhookUrl.isBlank()) {
-            return;
-        }
-        try {
-            log.info("Dispatching webhook alert to [{}]: type={}, sourceId={}, title={}", webhookUrl, alertType, sourceId, title);
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            String payload = String.format("{\"alertType\":\"%s\",\"sourceId\":\"%s\",\"title\":\"%s\",\"timestamp\":\"%s\"}",
-                    alertType, sourceId, title.replace("\"", "\\\""), Instant.now().toString());
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(webhookUrl))
-                    .header("Content-Type", "application/json")
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(payload))
-                    .timeout(java.time.Duration.ofSeconds(3))
-                    .build();
-            client.sendAsync(request, java.net.http.HttpResponse.BodyHandlers.discarding())
-                    .exceptionally(ex -> {
-                        log.debug("Webhook alert delivery failed to {}: {}", webhookUrl, ex.getMessage());
-                        return null;
-                    });
-        } catch (Exception e) {
-            log.debug("Could not dispatch webhook alert: {}", e.getMessage());
-        }
+        return new SourceMeta(sourceName, vendorId, vendorName, ownerUserId);
     }
 
     public long getSuppressedCount(String sourceId, String failureType) {
         ThrottleEntry entry = throttleCache.get(sourceId + ":" + failureType);
-        return entry != null ? entry.accumulatedCount().get() : 0L;
+        return entry != null ? entry.accumulatedCount().get() : 0;
     }
 
     public boolean isThrottled(String sourceId, String failureType) {
         ThrottleEntry entry = throttleCache.get(sourceId + ":" + failureType);
-        if (entry == null) return false;
-        return (System.currentTimeMillis() - entry.firstAlertTime()) < cooldownMs;
+        return entry != null && (System.currentTimeMillis() - entry.firstAlertTime()) < cooldownMs;
     }
 
     public void clearCache() {
         throttleCache.clear();
+    }
+
+    public Map<String, ThrottleEntry> getThrottleCache() {
+        return throttleCache;
     }
 }

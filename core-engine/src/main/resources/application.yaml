@@ -18,6 +18,9 @@ ulpf:
   admin:
     username: ${ULPF_ADMIN_USERNAME:admin}
     password: ${ULPF_ADMIN_PASSWORD:Admin@12345}
+  alert:
+    webhook-url: ${ULPF_ALERT_WEBHOOK_URL:}
+    webhook-secret: ${ULPF_ALERT_WEBHOOK_SECRET:}
 
 jwt:
   secret: ${JWT_SECRET:super-secret-jwt-signing-key-for-ulpf-dev-12345-minimum-256-bits}

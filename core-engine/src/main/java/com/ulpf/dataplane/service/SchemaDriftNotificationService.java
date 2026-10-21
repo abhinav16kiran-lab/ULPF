@@ -58,8 +58,28 @@ public class SchemaDriftNotificationService {
     private String webhookUrl;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AlertDispatcher alertDispatcher;
+
+    public void setAlertDispatcher(AlertDispatcher alertDispatcher) {
+        this.alertDispatcher = alertDispatcher;
+    }
+
+    public AlertDispatcher getAlertDispatcher() {
+        if (this.alertDispatcher == null) {
+            this.alertDispatcher = new AlertDispatcher(onboardingRepository, userRepository, notificationService, null);
+            if (webhookUrl != null) {
+                this.alertDispatcher.setWebhookUrl(webhookUrl);
+            }
+        }
+        return this.alertDispatcher;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setNotificationService(com.ulpf.controlplane.service.NotificationService notificationService) {
         this.notificationService = notificationService;
+        if (this.alertDispatcher != null) {
+            this.alertDispatcher.setNotificationService(notificationService);
+        }
     }
 
     public void setWebhookUrl(String webhookUrl) {
@@ -178,20 +198,23 @@ public class SchemaDriftNotificationService {
                     sourceId, vendorName, sortedKeys, driftInstant);
         }
 
-        // 1. Dispatch to Vendor Owner (if found)
-        if (vendorOwnerUserId != null) {
-            saveNotificationSafely(vendorOwnerUserId, vendorTitle, vendorMessage);
-        }
+        AlertPayload payload = new AlertPayload(
+                isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT",
+                isTotalDrift ? "CRITICAL" : (driftPercent > 30 ? "WARN" : "INFO"),
+                sourceId,
+                sourceId,
+                null,
+                vendorName,
+                null,
+                isTotalDrift ? "100% of payload fields unmapped" : driftPercent + "% unmapped fields",
+                sortedKeys.size(),
+                unmappedKeys,
+                driftInstant,
+                adminMessage,
+                "POST /v1/admin/sources/" + sourceId + "/replay"
+        );
 
-        // 2. Dispatch to System Admins
-        List<String> adminUserIds = resolveAdminUserIds();
-        for (String adminId : adminUserIds) {
-            if (!adminId.equals(vendorOwnerUserId)) { // Avoid duplicate notification if owner is admin
-                saveNotificationSafely(adminId, adminTitle, adminMessage);
-            }
-        }
-
-        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT");
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, vendorOwnerUserId, vendorTitle, vendorMessage, true);
     }
 
     public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {
@@ -307,16 +330,7 @@ public class SchemaDriftNotificationService {
     }
 
     private void saveNotificationSafely(String userId, String title, String message) {
-        try {
-            if (notificationService != null) {
-                notificationService.createNotification(userId, title, message);
-            } else if (onboardingRepository != null) {
-                onboardingRepository.saveNotification(userId, title, message);
-            }
-            log.info("Dispatched Schema Drift Notification to user {}: {}", userId, title);
-        } catch (Exception e) {
-            log.warn("Failed to persist notification for user {}: {}", userId, e.getMessage());
-        }
+        getAlertDispatcher().saveNotificationSafely(userId, title, message);
     }
 
     private void sendWebhookAlertSafely(String title, String message, String sourceId, String alertType) {
