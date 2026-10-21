@@ -369,53 +369,90 @@ This notification system directly completes the lifecycle with our newly merged 
 
 ### 8.1 Component Breakdown & Class Design
 
-The system is implemented as two specialized services working in tandem:
+The system is implemented as specialized components working in tandem:
 
 #### 1. `TableIngestionFailureNotificationService`
 * **Package**: `com.ulpf.dataplane.service`
 * **Responsibilities**:
   * Detecting table write failures, unprovisioned tables, missing target tables, unapproved mappings, and missing table columns.
-  * Dispatching actionable notifications to `NotificationService` and optional external webhooks (`ULPF_ALERT_WEBHOOK_URL`).
-  * In-memory sliding-window throttling (default: 30 minutes) keyed by `sourceId:failureType`.
+  * In-memory sliding-window throttling (default: 30 minutes, `ulpf.table-failure.cooldown-ms`) keyed by `sourceId:failureType`.
+  * Race-condition-free evaluation using `ConcurrentHashMap.compute()` returning atomic `EvaluationResult` without timestamp race conditions.
   * Atomic event drop accumulator (`accumulatedCount` and `initialAlertCount`).
   * Periodic background digest delivery (`@Scheduled(fixedRate = 60000)` via `flushExpiredDigests()`) dispatched to both admins and vendor owners even if failures stop.
+  * Ingestion incident lifecycle tracking: opens incident on first alert of a window, updates counts at digest time, and resolves incident on recovery.
 * **Public Methods**:
   * `notifyTableMissing(String sourceId, String tableName, int eventCount)`
   * `notifyInsertFailure(String sourceId, String tableName, int eventCount, String errorMessage)`
   * `notifyNoTargetTable(String sourceId, int eventCount)` (Scenario 2: mapping exists, but target_table is null)
   * `notifyMissingMapping(String sourceId, int eventCount)` (Scenario 5: source emits events without approved mapping)
   * `notifyMissingColumns(String sourceId, String tableName, Set<String> missingColumns, int eventCount)`
+  * `markRecovered(String sourceId, String tableName)` (Resolves incident on successful flush and dispatches recovery notification with replay window)
   * `flushExpiredDigests()` (Scheduled runner every 60s)
 
 #### 2. `SchemaDriftNotificationService`
 * **Package**: `com.ulpf.dataplane.service`
 * **Responsibilities**:
   * Detecting live log schema drift, total drift (100% unmapped keys), and high drift ratio (>30%).
-  * Thread-safe atomic throttling using `compute()` on concurrent ingestion threads.
-  * Storing `driftInstant` / `driftStartTime` to provide exact `fromTime` replay commands.
-  * Webhook alert delivery for critical and high schema drift.
+  * **30-Minute Sliding Cooldown Window** (`ulpf.schema-drift.cooldown-ms`, default: 1,800,000 ms, updated from 1 hour).
+  * Keyed per source: `sourceId:SCHEMA_DRIFT` (and `sourceId:TOTAL_DRIFT` for immediate critical escalation).
+  * `DriftState` tracking `firstSeen`, `lastSeen`, `eventCount`, and a set of accumulated unmapped keys (capped at 50).
+  * Scheduled minute-interval digest flush (`flushExpiredDigests()`) summarizing drift counts and new keys over the 30-minute window.
 * **Public Methods**:
   * `checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys, int totalKeys, boolean isTotalDrift)`
   * `notifyHistoricalFallback(...)`
+  * `flushExpiredDigests()` (Scheduled runner every 60s)
 
-#### 3. Integration Points in Existing Code
+#### 3. `AlertDispatcher` & Webhook Subsystem
+* **Package**: `com.ulpf.dataplane.service`
+* **Responsibilities**:
+  * Shared alert delivery hub used by both `TableIngestionFailureNotificationService` and `SchemaDriftNotificationService`.
+  * Resolves administrative users (`UserRepository`) and source vendor owners (`VendorRepository`).
+  * Dual-delivery routing: internal in-app notifications (`NotificationService` / `OnboardingRepository`) and external HTTP webhooks.
+  * **Jackson JSON Serialization**: Uses Jackson `ObjectMapper` for well-formed JSON payloads with quotes, special characters, and newlines properly escaped.
+  * **HMAC-SHA256 Webhook Signatures**: Computes HMAC-SHA256 signature using `ulpf.alert.webhook-secret` (`ULPF_ALERT_WEBHOOK_SECRET`) and transmits it in the `X-ULPF-Signature` header.
+  * Non-blocking, resilient HTTP client with 3-second timeout and 1 automatic retry.
+
+#### 4. `IngestionIncidentRepository` & Persistent Incident Tracking
+* **Package**: `com.ulpf.common.db`
+* **Table**: `ingestion_alert_incidents` (defined in `schema.sql` and `sqlite/schema.sql`):
+  ```sql
+  CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
+      incident_id     TEXT PRIMARY KEY,
+      source_id       TEXT NOT NULL,
+      failure_type    TEXT NOT NULL,
+      table_name      TEXT,
+      started_at      TEXT NOT NULL,
+      last_seen_at    TEXT NOT NULL,
+      resolved_at     TEXT,
+      affected_count  INTEGER NOT NULL DEFAULT 0,
+      status          TEXT NOT NULL DEFAULT 'OPEN',
+      details         TEXT
+  );
+  ```
+* **Lifecycle & Write Policy**:
+  * Incident opened on the **first alert of a window** (`status = 'OPEN'`).
+  * Counts and `last_seen_at` updated at window expiry / digest time (zero DB writes per event).
+  * Incident resolved (`status = 'RESOLVED'`, `resolved_at` recorded) when ClickHouse ingestion succeeds.
+  * Loaded into memory on startup (`@PostConstruct`) so recovery tracking survives service restarts.
+
+#### 5. Integration Points in Existing Code
 
 | Target File | Change Description |
 | :--- | :--- |
-| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Cache Fix**: `getColumnsForTable()` does not cache empty column lists, preventing permanent stale cache when tables are provisioned.<br>2. **Fallback**: When `rec.targetTable()` is null, if mapping exists, checks candidate table `constructTableName()` before alerting.<br>3. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, and `notifyInsertFailure`.<br>4. **Dynamic Column Reconciliation**: Checks if mapped fields are missing from ClickHouse columns and invokes `dynamicSchemaProvisioningService.addColumnIfNotExists()`. |
-| **`EventIngestionService.java`** | In `extractUnmappedFields()`: Computes total payload keys and evaluates `isTotalDrift` and drift percentage, passing them to `schemaDriftNotificationService.checkAndNotifyDrift()`. |
+| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Cache Fix**: `getColumnsForTable()` does not cache empty column lists, preventing permanent stale cache when tables are provisioned.<br>2. **Fallback**: When `rec.targetTable()` is null, if mapping exists, checks candidate table `constructTableName()` before alerting.<br>3. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, `notifyInsertFailure`, and `notifyMissingColumns`.<br>4. **Dynamic Column Validation & Cache**: Validates dynamic column names against `^[a-z_][a-z0-9_]*$` before ALTER, and caches failed ALTERs for 10 minutes to prevent repetitive failed ALTER attempts.<br>5. **Recovery Hook**: On successful batch insert, invokes `tableFailureNotificationService.markRecovered(sourceId, tableName)`. |
+| **`EventIngestionService.java`** | In `extractUnmappedFields()`: Computes total payload keys and evaluates `isTotalDrift` and drift percentage, passing them to `schemaDriftNotificationService.checkAndNotifyDrift()`. **Skips drift alerting when source has no active mapping** (`mappingOpt.isEmpty()`) to prevent redundant alerts alongside `notifyMissingMapping`. |
 | **`DynamicSchemaProvisioningService.java`** | Exposes `addColumnIfNotExists(tableName, columnName, columnType)` and invalidates ClickHouse column cache upon table creation or alteration. |
 
-#### 4. Automatic Remediation & Replay Workflow
-When an alert is issued:
-1. **Metadata Persistence**: The alert records the exact timestamp when the failure/drift started (`driftStartTime` / `alertInstant`).
-2. **One-Click Replay Endpoint**:
+#### 6. Automatic Remediation & Replay Workflow
+When an incident recovers:
+1. **Exact Timestamp Window**: The recovery notification provides the true start time of the incident (`started_at`) and resolution time (`resolved_at`) formatted in server `LocalDateTime`.
+2. **Ready-to-Execute Replay Command**:
    - The notification provides an actionable replay call:
      ```http
      POST /v1/admin/sources/{sourceId}/replay
      {
-       "fromTime": "<driftStartTime>",
-       "toTime": "<resolvedTime>"
+       "fromTime": "2026-10-21T10:15:30.123",
+       "toTime": "2026-10-21T10:45:00.456"
      }
      ```
 3. **Execution**: The `ReplayBackfillService` streams the gap events from `ulpf_raw.raw_events`, applies the updated mapping, and populates the dynamic table without data loss.
@@ -424,25 +461,61 @@ When an alert is issued:
 
 ### 8.2 Testing Strategy & Test Suites
 
-1. **`TableIngestionFailureNotificationServiceTest.java`**:
-   - `testAlertThrottlingSuppressesRapidDuplicateNotifications`: 1,000 rapid calls result in exactly 1 alert, correctly accumulating 10,990 events.
+The test suite contains 277 automated tests verifying every aspect of alerting, throttling, persistence, and recovery:
+
+1. **`TableIngestionFailureNotificationServiceTest.java`** (14 tests):
+   - `testAlertThrottlingSuppressesRapidDuplicateNotifications`: Rapid calls result in exactly 1 alert, accumulating suppressed events.
    - `testIndependentThrottlingPerSourceAndFailureType`: Independent throttling across sources and failure types.
-   - `testDigestNotificationDispatchedUponWindowExpiry`: Digest delivery after window expiry.
+   - `testDigestDispatchedWhenWindowExpires`: Digest delivery after window expiry.
    - `testNotifyMissingMapping_DispatchesExpectedAlerts`: Scenario 5 missing mapping alert.
    - `testNotifyMissingColumns_DispatchesExpectedAlerts`: Missing required columns alert.
    - `testScheduledDigestDispatchesForExpiredWindowWithoutNewEvents`: Periodic scheduled digest worker dispatch.
+   - `testConcurrent32ThreadsSameSourceAndType_ExactlyOneAlertAndTotalCountPreserved`: 32 concurrent threads $\times$ 1,000 calls race condition verification.
+   - `testTinyCooldownWithFlushLoop_NoLostCounts`: Continuous background flusher with rapid calls ensures zero lost counts.
+   - `testFailureThenSuccess_IncidentLifecycleAndRecoveryReplayMessage`: Full lifecycle (failure $\rightarrow$ incident OPEN $\rightarrow$ recovery $\rightarrow$ incident RESOLVED with ready replay window).
+   - `testSuccessWithNoOpenIncident_NothingSent`: Zero overhead and no notifications sent when no open incident exists.
+   - `testTwoFailureWindows_CreatesTwoIncidents`: Successive failure windows create distinct incidents.
 
-2. **`SchemaDriftNotificationServiceTest.java`**:
+2. **`SchemaDriftNotificationServiceTest.java`** (13 tests):
    - `testTotalSchemaDriftDispatchesCriticalAlert`: 100% unmapped fields critical alert.
    - `testHighSchemaDriftRatioAlert`: High drift ratio (>30%) alert.
-   - `testDuplicateSchemaDriftSuppressedWithinCooldownWindow`: Thread-safe duplicate suppression.
+   - `testDuplicateSchemaDriftSuppressedWithinCooldownWindow`: Thread-safe duplicate suppression with AtomicBoolean.
+   - `testDistinctUnmappedKeysThrottledTogetherWithinWindow`: Drift keys within 30-min window added to digest rather than spamming alerts.
+   - `testRapid10kConcurrentDriftCallsExactlyOneNotification`: 10,000 rapid calls produce exactly 1 notification.
+   - `testDriftThenTotalDriftEscalatesImmediately`: Escalation from partial drift to total drift alerts immediately.
+   - `testWindowExpiryWithNoNewEventsScheduledFlushSendsDigest`: Scheduled digest flush sends summary with accumulated keys.
+   - `testBoundaryDriftThreshold3Of10NormalVersus4Of10HighDrift`: Boundary verification (3/10 normal vs 4/10 high drift).
+   - `testRoutingThroughNotificationService`: Routes via `NotificationService` when injected.
 
-3. **`ClickHouseIngestionRepositoryTest.java`**:
+3. **`AlertDispatcherTest.java`** (4 tests):
+   - Webhook delivery using JDK `HttpServer`.
+   - Valid JSON payload formatting with special character escaping.
+   - HMAC-SHA256 signature verification in `X-ULPF-Signature` header.
+   - Dead/failing webhook resilience (non-blocking, never throws).
+
+4. **`IngestionIncidentRepositoryTest.java`** (5 tests):
+   - Incident record CRUD operations.
+   - Status transitions (`OPEN` $\rightarrow$ `RESOLVED`).
+   - Querying open incidents by source, type, and system-wide.
+
+5. **`EventIngestionServiceDriftTest.java`** (6 tests):
+   - Ingestion-level drift detection (10 keys / 2 mapped $\rightarrow$ 8 unmapped, total 10).
+   - All keys unmapped $\rightarrow$ `isTotalDrift = true`.
+   - All keys mapped $\rightarrow$ drift service never called.
+   - Exactly 30% unmapped boundary condition.
+   - Nested payload (`event.network.src_ip`) top-level drift.
+   - Missing active mapping $\rightarrow$ drift service not called.
+
+6. **`ClickHouseIngestionRepositoryTest.java`** (13 tests):
    - `testFlushCanonical_MissingTargetTable_TriggersNotifyNoTargetTable`: Alert on missing target table.
    - `testFlushCanonical_MissingTable_TriggersNotifyTableMissing`: Alert on unprovisioned ClickHouse table.
    - `testFlushCanonical_BatchInsertException_TriggersNotifyInsertFailure`: Alert on batch insert exception.
    - `testFlushCanonical_MissingMapping_TriggersNotifyMissingMapping`: Alert on unmapped stream.
-   - `testFlushCanonical_MissingColumns_ReconcilesViaDynamicSchemaProvisioningService`: Automatic column addition via dynamic schema evolution.
-   - `testFlushCanonical_Success_NoFailureNotification`: Clean zero-false-positive path.
+   - `testFlushCanonical_MissingColumns_ReconcilesViaDynamicSchemaProvisioningService`: Column addition when ALTER succeeds.
+   - `testFlushCanonical_FailedAlter_TriggersNotifyMissingColumns`: Alert when ALTER returns false.
+   - `testFlushCanonical_InvalidColumnName_RejectsAlterAndTriggersAlert`: Regex validation rejection.
+   - `testFlushCanonical_FailedColumnCached_AlterAttemptedOnlyOnce`: 10-minute failed column cache.
+   - `testFlushCanonical_Success_NoFailureNotification`: Verifies `markRecovered` is invoked on success.
+
 
 
