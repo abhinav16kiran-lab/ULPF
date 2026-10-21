@@ -123,6 +123,12 @@ public class ClickHouseIngestionRepository {
     }
 
     private final java.util.Map<String, List<String>> tableColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Long> failedAlterColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long FAILED_ALTER_COOLDOWN_MS = 10 * 60 * 1000L; // 10 minutes
+
+    public void clearFailedAlterCache() {
+        failedAlterColumnsCache.clear();
+    }
 
     public void invalidateColumnsCache(String tableName) {
         if (tableName != null) {
@@ -375,13 +381,40 @@ public class ClickHouseIngestionRepository {
                 }
 
                 if (!missingCols.isEmpty()) {
+                    Set<String> failedCols = new HashSet<>();
                     if (dynamicSchemaProvisioningService != null) {
+                        long now = System.currentTimeMillis();
                         for (String missingCol : missingCols) {
-                            dynamicSchemaProvisioningService.addColumnIfNotExists(tableName, missingCol, "Nullable(String)");
+                            String cacheKey = tableName + ":" + missingCol;
+                            Long lastFailed = failedAlterColumnsCache.get(cacheKey);
+                            if (lastFailed != null && (now - lastFailed) < FAILED_ALTER_COOLDOWN_MS) {
+                                failedCols.add(missingCol);
+                                continue;
+                            }
+
+                            if (!missingCol.matches("^[a-z_][a-z0-9_]*$")) {
+                                log.warn("Invalid dynamic column name '{}' for table ulpf_events.{}. Skipping ALTER TABLE.", missingCol, tableName);
+                                failedAlterColumnsCache.put(cacheKey, now);
+                                failedCols.add(missingCol);
+                                continue;
+                            }
+
+                            boolean added = dynamicSchemaProvisioningService.addColumnIfNotExists(tableName, missingCol, "Nullable(String)");
+                            if (added) {
+                                failedAlterColumnsCache.remove(cacheKey);
+                                log.info("Successfully added missing column '{}' to table ulpf_events.{}", missingCol, tableName);
+                            } else {
+                                failedAlterColumnsCache.put(cacheKey, now);
+                                failedCols.add(missingCol);
+                            }
                         }
                         invalidateColumnsCache(tableName);
                         cols = getColumnsForTable(tableName);
-                    } else if (tableFailureNotificationService != null) {
+                    } else {
+                        failedCols.addAll(missingCols);
+                    }
+
+                    if (!failedCols.isEmpty() && tableFailureNotificationService != null) {
                         java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
                         for (CanonicalEventRecord r : tableBatch) {
                             if (r.sourceId() != null) {
@@ -389,7 +422,7 @@ public class ClickHouseIngestionRepository {
                             }
                         }
                         countsBySource.forEach((sourceId, count) ->
-                                tableFailureNotificationService.notifyMissingColumns(sourceId, tableName, missingCols, count));
+                                tableFailureNotificationService.notifyMissingColumns(sourceId, tableName, failedCols, count));
                     }
                 }
 

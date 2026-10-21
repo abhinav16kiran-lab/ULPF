@@ -9,13 +9,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 class ClickHouseIngestionRepositoryTest {
 
@@ -246,8 +244,10 @@ class ClickHouseIngestionRepositoryTest {
     @Test
     @SuppressWarnings("unchecked")
     void testFlushCanonical_MissingColumns_ReconcilesViaDynamicSchemaProvisioningService() {
+        ingestionRepository.clearFailedAlterCache();
         com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
                 Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        Mockito.when(dynamicSchemaService.addColumnIfNotExists(anyString(), anyString(), anyString())).thenReturn(true);
         ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
 
         // ClickHouse table currently only has event_id and timestamp
@@ -266,8 +266,106 @@ class ClickHouseIngestionRepositoryTest {
         ingestionRepository.enqueueCanonical(record);
         ingestionRepository.flushCanonical();
 
-        // Verify dynamic column addition was triggered for client_ip!
+        // Verify dynamic column addition was triggered for client_ip and succeeded
         verify(dynamicSchemaService).addColumnIfNotExists("events_evolution_tbl", "client_ip", "Nullable(String)");
+        // ALTER returned true -> no notifyMissingColumns alert sent!
+        verify(failureNotificationService, never()).notifyMissingColumns(anyString(), anyString(), anySet(), anyInt());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MissingColumns_AlterFails_SendsAlert() {
+        ingestionRepository.clearFailedAlterCache();
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        Mockito.when(dynamicSchemaService.addColumnIfNotExists(anyString(), anyString(), anyString())).thenReturn(false);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_failed_alter_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_failed_alter_tbl", "evt-7", "lin-7", "ven-7", "src-fail-alter", 1,
+                        LocalDateTime.now(), 7.0, "{}", "{}", java.util.Map.of("broken_col", "some_value")
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        // ALTER returned false -> notifyMissingColumns alert sent!
+        verify(failureNotificationService).notifyMissingColumns("src-fail-alter", "events_failed_alter_tbl", Set.of("broken_col"), 1);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MissingColumns_InvalidColumnName_RejectsWithoutAlter() {
+        ingestionRepository.clearFailedAlterCache();
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_invalid_col_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        // Column name with invalid character (hyphen/special char)
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_invalid_col_tbl", "evt-8", "lin-8", "ven-8", "src-invalid-col", 1,
+                        LocalDateTime.now(), 8.0, "{}", "{}", java.util.Map.of("invalid-col!", "value")
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        // Dynamic column addition is rejected prior to SQL injection risk -> no addColumnIfNotExists call!
+        verify(dynamicSchemaService, never()).addColumnIfNotExists(anyString(), anyString(), anyString());
+        // Alert is still dispatched for missing columns
+        verify(failureNotificationService).notifyMissingColumns("src-invalid-col", "events_invalid_col_tbl", Set.of("invalid-col!"), 1);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MissingColumns_SameFailingColumnTwiceIn10Min_TriesAlterOnce() {
+        ingestionRepository.clearFailedAlterCache();
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        Mockito.when(dynamicSchemaService.addColumnIfNotExists(anyString(), anyString(), anyString())).thenReturn(false);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_cooldown_col_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord record1 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_cooldown_col_tbl", "evt-9a", "lin-9", "ven-9", "src-cooldown-col", 1,
+                        LocalDateTime.now(), 9.0, "{}", "{}", java.util.Map.of("flaky_col", "val1")
+                );
+        ClickHouseIngestionRepository.CanonicalEventRecord record2 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_cooldown_col_tbl", "evt-9b", "lin-9", "ven-9", "src-cooldown-col", 1,
+                        LocalDateTime.now(), 9.1, "{}", "{}", java.util.Map.of("flaky_col", "val2")
+                );
+
+        // First flush
+        ingestionRepository.enqueueCanonical(record1);
+        ingestionRepository.flushCanonical();
+
+        // Second flush immediately after
+        ingestionRepository.enqueueCanonical(record2);
+        ingestionRepository.flushCanonical();
+
+        // Even though flushed twice, addColumnIfNotExists should only have been tried ONCE within the 10 min window!
+        verify(dynamicSchemaService, times(1)).addColumnIfNotExists("events_cooldown_col_tbl", "flaky_col", "Nullable(String)");
     }
 }
 

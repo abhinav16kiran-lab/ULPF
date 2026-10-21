@@ -57,6 +57,7 @@ public class SchemaDriftNotificationService {
     @org.springframework.beans.factory.annotation.Value("${ulpf.alert.webhook-url:}")
     private String webhookUrl;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setNotificationService(com.ulpf.controlplane.service.NotificationService notificationService) {
         this.notificationService = notificationService;
     }

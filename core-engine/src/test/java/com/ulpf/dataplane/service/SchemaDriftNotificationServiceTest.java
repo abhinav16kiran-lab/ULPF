@@ -239,4 +239,23 @@ class SchemaDriftNotificationServiceTest {
         assertTrue(titleCaptor.getAllValues().get(0).contains("Schema Drift Alert (40%)"));
         assertTrue(titleCaptor.getAllValues().get(1).contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
     }
+
+    @Test
+    void testRoutingThroughNotificationService() {
+        com.ulpf.controlplane.service.NotificationService notificationService =
+                mock(com.ulpf.controlplane.service.NotificationService.class);
+        driftNotificationService.setNotificationService(notificationService);
+
+        String sourceId = "src_fw_routing";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("unmapped_col"));
+
+        // Verify createNotification on NotificationService was called
+        verify(notificationService, atLeastOnce()).createNotification(anyString(), anyString(), anyString());
+
+        // Verify fallback onboardingRepository.saveNotification was NOT called
+        verify(onboardingRepository, never()).saveNotification(anyString(), anyString(), anyString());
+    }
 }
+
