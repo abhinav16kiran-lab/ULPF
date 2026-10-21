@@ -339,7 +339,7 @@ public class EventIngestionService {
             }
 
             if (!unmappedNode.isEmpty()) {
-                if (schemaDriftNotificationService != null && sourceId != null) {
+                if (mappingOpt.isPresent() && schemaDriftNotificationService != null && sourceId != null) {
                     java.util.Set<String> unmappedKeys = new java.util.HashSet<>();
                     var fieldNames = unmappedNode.fieldNames();
                     while (fieldNames.hasNext()) {
