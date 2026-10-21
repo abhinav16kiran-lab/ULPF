@@ -95,15 +95,17 @@ public class SchemaDriftNotificationService {
 
         String cacheKey = sourceId + ":" + (isTotalDrift ? "TOTAL_DRIFT:" : "") + String.join(",", sortedKeys);
         long now = System.currentTimeMillis();
+        java.util.concurrent.atomic.AtomicBoolean shouldNotify = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        Long computed = lastNotifiedCache.compute(cacheKey, (k, prev) -> {
+        lastNotifiedCache.compute(cacheKey, (k, prev) -> {
             if (prev != null && (now - prev) < cooldownMs) {
                 return prev;
             }
+            shouldNotify.set(true);
             return now;
         });
 
-        if (computed != now) {
+        if (!shouldNotify.get()) {
             log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
             return;
         }
