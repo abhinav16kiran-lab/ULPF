@@ -220,6 +220,24 @@ POST /v1/events ──► enqueue(RawEventRecord) ──► [ ConcurrentLinkedQu
 ##### `int getQueueSize()`
 * **Description:** Returns current number of buffered events waiting in memory.
 
+##### `List<RawEventRecord> readRawEventsChunk(String sourceId, LocalDateTime from, LocalDateTime to, LocalDateTime cursorTime, String cursorEventId, int limit)`
+* **Description:** Performs composite cursor-paginated streaming of historical raw events from `ulpf_raw.raw_events` using indexed `(received_at, event_id)` ordering. Ensures constant $O(1)$ RAM usage during large replays.
+
+##### `Set<String> findExistingEventIds(String tableName, Collection<String> eventIds)`
+* **Description:** Performs a batch primary key membership query (`SELECT event_id FROM ulpf_events.{table} WHERE event_id IN (...)`) to detect records already inserted, preventing duplicate insertions on job retries.
+
+##### `int batchInsertDynamicRecords(String tableName, List<CanonicalEventRecord> records)`
+* **Description:** Executes high-speed bulk JDBC batch inserts into dynamic canonical tables (`ulpf_events.{tableName}`) during replay backfills.
+
+##### `boolean isMemoryPressureHigh()`
+* **Description:** Queries ClickHouse `system.metrics` (`MemoryTracking`) to check if cluster memory pressure exceeds 80%, enabling adaptive backpressure throttling in background replay jobs.
+
+##### `long countRawEventsForSource(String sourceId, LocalDateTime fromTime, LocalDateTime toTime)`
+* **Description:** Counts total raw events within a time range for a source to provide accurate progress tracking percentages.
+
+##### `void invalidateColumnsCache(String tableName)`
+* **Description:** Evicts the cached column list for a dynamic table from the in-memory `ConcurrentHashMap`, forcing a refresh from `system.columns` upon dynamic schema alterations.
+
 ---
 
 ## 4. How to Use in Application Services

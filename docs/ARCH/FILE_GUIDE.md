@@ -37,7 +37,8 @@ core-engine/
 │   ├── controlplane/     # Auth (login/signup), onboarding workflows, notification dispatch & admin governance
 │   ├── dataplane/        # High-throughput event ingestion, protocol autodetector & micro-batch pipeline
 │   ├── integrity/        # Cryptographic Merkle tree forensic audit engine & bulk tamper detection
-│   └── mapping/          # 4-layer AI schema mapping engine & human feedback loop
+│   ├── mapping/          # 4-layer AI schema mapping engine, shared transformer & human feedback loop
+│   └── replay/           # Asynchronous historical log replay, cursor streaming & backfill service
 ├── src/main/resources/
 │   ├── sqlite/schema.sql # Baseline SQLite control plane DDL script
 │   └── application.yaml  # Spring Boot configuration

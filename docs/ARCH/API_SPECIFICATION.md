@@ -38,6 +38,9 @@
 | `/v1/integrity/blocks` | `GET` | Authenticated | List all cryptographic batch integrity blocks |
 | `/v1/integrity/verify/{blockId}` | `POST` | Authenticated | Re-verify cryptographic Merkle root hash for specific block |
 | `/v1/integrity/verify-all` | `POST` | `ADMIN` | Execute live forensic Merkle tree cryptographic bulk audit |
+| `/v1/admin/sources/{sourceId}/replay` | `POST` | `ADMIN` | Trigger asynchronous historical replay & backfill from raw events |
+| `/v1/admin/sources/{sourceId}/replay/status` | `GET` | `ADMIN` | Check real-time progress and status of source replay job |
+| `/v1/admin/sources/{sourceId}/replay` | `DELETE` | `ADMIN` | Request cancellation of currently running replay job |
 
 ---
 
@@ -299,6 +302,86 @@ Executes full-scale Merkle tree cryptographic audit across ClickHouse raw log ba
     "tamperedBlocks": []
   }
   ```
+
+---
+
+### 3.8 Replay & Backfill Engine
+
+Administrative endpoints to manage historical log replay from `ulpf_raw.raw_events` into dynamic canonical tables (`ulpf_events.{tableName}`).
+
+#### `POST /v1/admin/sources/{sourceId}/replay`
+Triggers an asynchronous historical backfill job for a given log source.
+
+* **Path Parameters**:
+  - `sourceId` (string, required): Unique identifier of the log source.
+* **Request Body** (optional):
+  ```json
+  {
+    "fromTime": "2026-09-01T00:00:00",
+    "toTime": "2026-09-15T23:59:59",
+    "chunkSize": 5000
+  }
+  ```
+  *If omitted, `toTime` defaults to current timestamp, `fromTime` defaults to `toTime - 30 days`, and `chunkSize` defaults to 1,000 records.*
+* **Response (202 ACCEPTED)**:
+  ```json
+  {
+    "jobId": "replay_a1b2c3d4",
+    "sourceId": "src_123456",
+    "targetTable": "events_crowdstrike_falcon_edr",
+    "status": "RUNNING",
+    "eventsTotal": 450000,
+    "eventsProcessed": 0,
+    "eventsInserted": 0,
+    "eventsSkipped": 0,
+    "eventsFailed": 0,
+    "startTime": "2026-10-21T08:00:00",
+    "endTime": null,
+    "errorMessage": null
+  }
+  ```
+* **Error Responses**:
+  - `404 NOT FOUND`: Source or active mapping version does not exist.
+  - `409 CONFLICT`: A replay job is already active (`RUNNING` or `QUEUED`) for this source.
+
+#### `GET /v1/admin/sources/{sourceId}/replay/status`
+Queries the real-time progress and status of a source's replay job.
+
+* **Path Parameters**:
+  - `sourceId` (string, required): Unique identifier of the log source.
+* **Response (200 OK)**:
+  ```json
+  {
+    "jobId": "replay_a1b2c3d4",
+    "sourceId": "src_123456",
+    "targetTable": "events_crowdstrike_falcon_edr",
+    "status": "COMPLETED",
+    "eventsTotal": 450000,
+    "eventsProcessed": 450000,
+    "eventsInserted": 448500,
+    "eventsSkipped": 1500,
+    "eventsFailed": 0,
+    "startTime": "2026-10-21T08:00:00",
+    "endTime": "2026-10-21T08:02:15",
+    "errorMessage": null
+  }
+  ```
+* **Error Responses**:
+  - `404 NOT FOUND`: No active or past replay job recorded for this source.
+
+#### `DELETE /v1/admin/sources/{sourceId}/replay`
+Requests immediate cancellation of a currently executing replay job.
+
+* **Path Parameters**:
+  - `sourceId` (string, required): Unique identifier of the log source.
+* **Response (200 OK)**:
+  ```json
+  {
+    "message": "Cancellation requested for replay job on source src_123456"
+  }
+  ```
+* **Error Responses**:
+  - `404 NOT FOUND`: No active running replay job found for this source.
 
 ---
 
