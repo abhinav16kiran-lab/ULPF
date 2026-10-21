@@ -349,4 +349,22 @@ public class DynamicSchemaProvisioningService {
             return false;
         }
     }
+
+    public boolean addColumnIfNotExists(String tableName, String columnName, String columnType) {
+        if (clickhouseJdbcTemplate == null || tableName == null || columnName == null) {
+            return false;
+        }
+        String cleanCol = normalizeColumnName(columnName);
+        if (cleanCol.isBlank()) return false;
+        String type = (columnType != null && !columnType.isBlank()) ? columnType : "Nullable(String)";
+        try {
+            String sql = "ALTER TABLE ulpf_events." + tableName + " ADD COLUMN IF NOT EXISTS " + cleanCol + " " + type;
+            log.info("Executing dynamic column addition: {}", sql);
+            clickhouseJdbcTemplate.execute(sql);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to add column {} to ulpf_events.{}: {}", cleanCol, tableName, e.getMessage());
+            return false;
+        }
+    }
 }

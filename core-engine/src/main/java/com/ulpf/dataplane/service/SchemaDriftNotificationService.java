@@ -66,6 +66,13 @@ public class SchemaDriftNotificationService {
      * Deduplicates alerts per sourceId and key set within a cooldown window.
      */
     public void checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys) {
+        checkAndNotifyDrift(sourceId, unmappedKeys, unmappedKeys != null ? unmappedKeys.size() : 0, false);
+    }
+
+    /**
+     * Overloaded method with total drift detection and unmapped ratio threshold support.
+     */
+    public void checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys, int totalKeys, boolean isTotalDrift) {
         if (sourceId == null || unmappedKeys == null || unmappedKeys.isEmpty()) {
             return;
         }
@@ -73,7 +80,7 @@ public class SchemaDriftNotificationService {
         List<String> sortedKeys = new ArrayList<>(unmappedKeys);
         Collections.sort(sortedKeys);
 
-        String cacheKey = sourceId + ":" + String.join(",", sortedKeys);
+        String cacheKey = sourceId + ":" + (isTotalDrift ? "TOTAL_DRIFT:" : "") + String.join(",", sortedKeys);
         long now = System.currentTimeMillis();
 
         Long lastNotified = lastNotifiedCache.get(cacheKey);
@@ -100,30 +107,77 @@ public class SchemaDriftNotificationService {
             log.warn("Could not resolve vendor info for source {}: {}", sourceId, e.getMessage());
         }
 
-        // 1. Dispatch Informative Alert to Vendor Owner (Read-Only)
-        if (vendorOwnerUserId != null) {
-            String vendorTitle = "Schema Drift Alert: " + sourceId;
-            String vendorMessage = String.format(
+        int driftPercent = totalKeys > 0 ? (int) Math.round(((double) sortedKeys.size() / totalKeys) * 100) : 0;
+
+        String vendorTitle;
+        String vendorMessage;
+        String adminTitle;
+        String adminMessage;
+
+        if (isTotalDrift) {
+            vendorTitle = "[CRITICAL] Total Schema Drift: " + sourceId;
+            vendorMessage = String.format(
+                    "All payload fields %s for source %s failed to match your approved schema mapping. " +
+                            "All analytical table columns are currently NULL. Logs are safely preserved in raw_unmapped JSON. " +
+                            "Please contact your ULPF administrator or update your mapping schema. " +
+                            "Once updated, administrators can trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
+                    sortedKeys, sourceId, sourceId);
+
+            adminTitle = "[CRITICAL ACTION REQUIRED] Total Schema Drift: " + sourceId;
+            adminMessage = String.format(
+                    "100%% of payload fields %s for source %s (Vendor: %s) failed to match the approved schema mapping! " +
+                            "All analytical table columns are currently NULL. Logs are preserved in raw_unmapped JSON. " +
+                            "Action: Update the mapping schema at /admin and trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
+                    sortedKeys, sourceId, vendorName, sourceId);
+        } else if (driftPercent >= 30) {
+            vendorTitle = String.format("Schema Drift Alert (%d%%): %s", driftPercent, sourceId);
+            vendorMessage = String.format(
+                    "%d%% of vendor payload fields %s in source %s were unmapped. " +
+                            "The fields are safely preserved in raw_unmapped JSON storage without data loss. " +
+                            "If you wish to promote these fields to canonical columns, please contact your ULPF Administrator.",
+                    driftPercent, sortedKeys, sourceId);
+
+            adminTitle = String.format("[ADMIN ACTION REQUIRED] High Schema Drift (%d%%): %s", driftPercent, sourceId);
+            adminMessage = String.format(
+                    "Source %s (Vendor: %s) exceeded the schema drift threshold with %d%% of fields unmapped (%s). " +
+                            "Fields are preserved in raw_unmapped JSON. Inspect candidate mappings at /admin, and trigger Replay via POST /v1/admin/sources/%s/replay to backfill once promoted.",
+                    sourceId, vendorName, driftPercent, sortedKeys, sourceId);
+        } else {
+            vendorTitle = "Schema Drift Alert: " + sourceId;
+            vendorMessage = String.format(
                     "New unmapped vendor payload fields %s were detected in your live log stream for source %s. " +
                             "The fields are safely preserved in raw_unmapped JSON storage without data loss. " +
                             "If you wish to promote these fields to canonical columns, please contact your ULPF Administrator.",
                     sortedKeys, sourceId);
+
+            adminTitle = "[ADMIN ACTION REQUIRED] Schema Drift: " + sourceId;
+            adminMessage = String.format(
+                    "Source %s (Vendor: %s) sent new unmapped fields %s in live ingestion. " +
+                            "Fields are preserved in raw_unmapped JSON. Open the Admin Control Panel (/admin) to inspect candidate mappings and promote fields.",
+                    sourceId, vendorName, sortedKeys);
+        }
+
+        // 1. Dispatch to Vendor Owner (if found)
+        if (vendorOwnerUserId != null) {
             saveNotificationSafely(vendorOwnerUserId, vendorTitle, vendorMessage);
         }
 
-        // 2. Dispatch Actionable Governance Alert to System Admins
-        String adminTitle = "[ADMIN ACTION REQUIRED] Schema Drift: " + sourceId;
-        String adminMessage = String.format(
-                "Source %s (Vendor: %s) sent new unmapped fields %s in live ingestion. " +
-                        "Fields are preserved in raw_unmapped JSON. Open the Admin Control Panel (/admin) to inspect candidate mappings and promote fields.",
-                sourceId, vendorName, sortedKeys);
-
+        // 2. Dispatch to System Admins
         List<String> adminUserIds = resolveAdminUserIds();
         for (String adminId : adminUserIds) {
             if (!adminId.equals(vendorOwnerUserId)) { // Avoid duplicate notification if owner is admin
                 saveNotificationSafely(adminId, adminTitle, adminMessage);
             }
         }
+    }
+
+    public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {
+        if (sourceId == null || unmappedKeys == null || unmappedKeys.isEmpty()) return false;
+        List<String> sortedKeys = new ArrayList<>(unmappedKeys);
+        Collections.sort(sortedKeys);
+        String cacheKey = sourceId + ":" + String.join(",", sortedKeys);
+        Long lastNotified = lastNotifiedCache.get(cacheKey);
+        return lastNotified != null && (System.currentTimeMillis() - lastNotified) < cooldownMs;
     }
 
     /**

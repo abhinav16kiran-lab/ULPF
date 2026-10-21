@@ -182,4 +182,61 @@ class SchemaDriftNotificationServiceTest {
         assertEquals("Schema Version Resumed: " + sourceId, titles.get(1));
         assertTrue(messages.get(1).contains("resumed using active mapping version v2"));
     }
+
+    @Test
+    void testTotalSchemaDriftDispatchesCriticalAlert() {
+        String sourceId = "src_fw_total";
+        String vendorId = "ven_total";
+        String ownerUserId = "usr_vendor_total";
+
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Firewall Total", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Vendor Total", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 5 keys in payload, all 5 unmapped -> isTotalDrift = true
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k1", "k2", "k3", "k4", "k5"), 5, true);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(onboardingRepository, times(2)).saveNotification(
+                anyString(),
+                titleCaptor.capture(),
+                msgCaptor.capture()
+        );
+
+        List<String> titles = titleCaptor.getAllValues();
+        List<String> messages = msgCaptor.getAllValues();
+
+        assertTrue(titles.get(0).contains("[CRITICAL] Total Schema Drift"));
+        assertTrue(messages.get(0).contains("All payload fields"));
+        assertTrue(messages.get(0).contains("/replay"));
+
+        assertTrue(titles.get(1).contains("[CRITICAL ACTION REQUIRED] Total Schema Drift"));
+        assertTrue(messages.get(1).contains("100% of payload fields"));
+    }
+
+    @Test
+    void testHighSchemaDriftRatioAlert() {
+        String sourceId = "src_fw_high_ratio";
+        String vendorId = "ven_high";
+        String ownerUserId = "usr_vendor_high";
+
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Firewall Ratio", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Vendor High", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 4 unmapped out of 10 total keys = 40% drift (exceeds 30% threshold)
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("f1", "f2", "f3", "f4"), 10, false);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), titleCaptor.capture(), anyString());
+
+        assertTrue(titleCaptor.getAllValues().get(0).contains("Schema Drift Alert (40%)"));
+        assertTrue(titleCaptor.getAllValues().get(1).contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
+    }
 }

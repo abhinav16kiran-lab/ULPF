@@ -33,6 +33,7 @@ public class ClickHouseIngestionRepository {
 
     private final JdbcTemplate clickhouseJdbcTemplate;
     private com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService;
+    private com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService;
     private final Queue<RawEventRecord> bufferQueue = new ConcurrentLinkedQueue<>();
     private final Queue<CanonicalEventRecord> canonicalQueue = new ConcurrentLinkedQueue<>();
     
@@ -51,6 +52,11 @@ public class ClickHouseIngestionRepository {
     @org.springframework.beans.factory.annotation.Autowired
     public void setBatchIntegrityService(com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService) {
         this.batchIntegrityService = batchIntegrityService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTableFailureNotificationService(com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService) {
+        this.tableFailureNotificationService = tableFailureNotificationService;
     }
 
     public record RawEventRecord(
@@ -275,14 +281,22 @@ public class ClickHouseIngestionRepository {
 
         // Group batch by dynamic targetTable
         java.util.Map<String, List<CanonicalEventRecord>> byTable = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> missingTargetTableCounts = new java.util.HashMap<>();
+
         for (CanonicalEventRecord rec : batch) {
             if (rec.targetTable() != null && !rec.targetTable().isBlank()) {
                 byTable.computeIfAbsent(rec.targetTable(), k -> new ArrayList<>()).add(rec);
             } else {
-                // If targetTable is not defined (e.g. unmapped source or no table provisioned yet),
-                // it is already safely preserved in ulpf_raw.raw_events. No fallback table needed.
+                if (rec.sourceId() != null) {
+                    missingTargetTableCounts.merge(rec.sourceId(), 1, Integer::sum);
+                }
                 log.debug("Skipping dynamic table insert for event {} (no targetTable defined)", rec.eventId());
             }
+        }
+
+        if (tableFailureNotificationService != null && !missingTargetTableCounts.isEmpty()) {
+            missingTargetTableCounts.forEach((sourceId, count) ->
+                    tableFailureNotificationService.notifyNoTargetTable(sourceId, count));
         }
 
         for (java.util.Map.Entry<String, List<CanonicalEventRecord>> entry : byTable.entrySet()) {
@@ -297,6 +311,16 @@ public class ClickHouseIngestionRepository {
                 List<String> cols = getColumnsForTable(tableName);
                 if (cols.isEmpty()) {
                     log.debug("Table ulpf_events.{} has no known columns or does not exist yet. Skipping flush of {} events.", tableName, tableBatch.size());
+                    if (tableFailureNotificationService != null) {
+                        java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
+                        for (CanonicalEventRecord r : tableBatch) {
+                            if (r.sourceId() != null) {
+                                countsBySource.merge(r.sourceId(), 1, Integer::sum);
+                            }
+                        }
+                        countsBySource.forEach((sourceId, count) ->
+                                tableFailureNotificationService.notifyTableMissing(sourceId, tableName, count));
+                    }
                     continue;
                 }
 
@@ -345,6 +369,16 @@ public class ClickHouseIngestionRepository {
                 log.info("Successfully flushed {} dynamic events into ulpf_events.{}", tableBatch.size(), tableName);
             } catch (Exception e) {
                 log.warn("Failed to flush dynamic events to ulpf_events.{}: {}", tableName, e.getMessage());
+                if (tableFailureNotificationService != null) {
+                    java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
+                    for (CanonicalEventRecord r : tableBatch) {
+                        if (r.sourceId() != null) {
+                            countsBySource.merge(r.sourceId(), 1, Integer::sum);
+                        }
+                    }
+                    countsBySource.forEach((sourceId, count) ->
+                            tableFailureNotificationService.notifyInsertFailure(sourceId, tableName, count, e.getMessage()));
+                }
             }
         }
 
