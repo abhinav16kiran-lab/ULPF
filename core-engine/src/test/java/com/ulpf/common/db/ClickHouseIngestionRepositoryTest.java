@@ -432,6 +432,267 @@ class ClickHouseIngestionRepositoryTest {
         verify(failureNotificationService, times(1)).markRecovered("src-A", "events_multi_src_tbl");
         verify(failureNotificationService, times(1)).markRecovered("src-B", "events_multi_src_tbl");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFallbackFindsTableBySourceName() {
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        String sourceId = "src-fallback";
+        String sourceName = "Custom Firewall";
+        String candidateTable = "events_custom_firewall";
+
+        com.ulpf.dataplane.service.TableIngestionFailureNotificationService.SourceMeta meta =
+                new com.ulpf.dataplane.service.TableIngestionFailureNotificationService.SourceMeta(
+                        sourceName, "ven-1", "Vendor 1", "user-1");
+
+        Mockito.when(failureNotificationService.resolveSourceMeta(sourceId)).thenReturn(meta);
+        Mockito.when(dynamicSchemaService.constructTableName(sourceName)).thenReturn(candidateTable);
+
+        // ClickHouse table exists and has columns
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(candidateTable)
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        null, "evt-fb-1", "lin-1", "ven-1", sourceId, 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        // Should route to candidateTable
+        verify(clickhouseJdbcTemplate).batchUpdate(
+                Mockito.contains("INSERT INTO ulpf_events." + candidateTable),
+                Mockito.any(),
+                Mockito.eq(1),
+                Mockito.any()
+        );
+        // NO_TARGET_TABLE alert should NOT be triggered
+        verify(failureNotificationService, never()).notifyNoTargetTable(anyString(), anyInt());
+        verify(failureNotificationService).markRecovered(sourceId, candidateTable);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testBatchOf500RecordsWithNoTargetTable_RunsAtMostOneSourceLookupAndOneColumnsQueryPerDistinctSource() {
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        String sourceId = "src-bulk-500";
+        String sourceName = "Bulk High Volume Source";
+        String candidateTable = "events_bulk_high_volume";
+
+        com.ulpf.dataplane.service.TableIngestionFailureNotificationService.SourceMeta meta =
+                new com.ulpf.dataplane.service.TableIngestionFailureNotificationService.SourceMeta(
+                        sourceName, "ven-bulk", "Vendor Bulk", "user-bulk");
+
+        Mockito.when(failureNotificationService.resolveSourceMeta(sourceId)).thenReturn(meta);
+        Mockito.when(dynamicSchemaService.constructTableName(sourceName)).thenReturn(candidateTable);
+
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(candidateTable)
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        for (int i = 0; i < 500; i++) {
+            ingestionRepository.enqueueCanonical(new ClickHouseIngestionRepository.CanonicalEventRecord(
+                    null, "evt-bulk-" + i, "lin-" + i, "ven-bulk", sourceId, 1,
+                    LocalDateTime.now(), (double) i, "{}", "{}", java.util.Collections.emptyMap()
+            ));
+        }
+
+        ingestionRepository.flushCanonical();
+
+        // At most 1 source lookup
+        verify(failureNotificationService, times(1)).resolveSourceMeta(sourceId);
+        // At most 1 constructTableName call
+        verify(dynamicSchemaService, times(1)).constructTableName(sourceName);
+        // At most 1 ClickHouse columns query
+        verify(clickhouseJdbcTemplate, times(1)).query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(candidateTable)
+        );
+        // No missing target table alerts
+        verify(failureNotificationService, never()).notifyNoTargetTable(anyString(), anyInt());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testCandidateTableExists_CreatesNoNoTargetTableAlertOrIncident() {
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        String sourceId = "src-no-alert";
+        String sourceName = "Candidate Verified";
+        String candidateTable = "events_candidate_verified";
+
+        Mockito.when(failureNotificationService.resolveSourceMeta(sourceId))
+                .thenReturn(new com.ulpf.dataplane.service.TableIngestionFailureNotificationService.SourceMeta(
+                        sourceName, "ven-1", "Vendor", "usr-1"));
+        Mockito.when(dynamicSchemaService.constructTableName(sourceName)).thenReturn(candidateTable);
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(candidateTable)
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        ingestionRepository.enqueueCanonical(new ClickHouseIngestionRepository.CanonicalEventRecord(
+                null, "evt-no-alert", "lin-1", "ven-1", sourceId, 1,
+                LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+        ));
+
+        ingestionRepository.flushCanonical();
+
+        verify(failureNotificationService, never()).notifyNoTargetTable(anyString(), anyInt());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testBatchWithOneBadRecord_HealthyRecordsInsertedBadDegradedAndAlerted() {
+        String tableName = "events_bad_rec_tbl";
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(tableName)
+        )).thenReturn(List.of("event_id", "timestamp", "field_a"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord goodRecord =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        tableName, "evt-good", "lin-1", "ven-1", "src-bad", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Map.of("field_a", "valid")
+                );
+        ClickHouseIngestionRepository.CanonicalEventRecord badRecord =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        tableName, "evt-bad", "lin-2", "ven-1", "src-bad", 1,
+                        LocalDateTime.now(), 2.0, "{\"raw\":\"bad\"}", "{\"bad\":\"val\"}", java.util.Map.of("field_a", "malformed_number")
+                );
+
+        Mockito.doAnswer(invocation -> {
+            List<ClickHouseIngestionRepository.CanonicalEventRecord> batch = invocation.getArgument(1);
+            if (batch.size() > 1) {
+                throw new RuntimeException("ClickHouse DB error: Type coercion failure for field_a");
+            }
+            ClickHouseIngestionRepository.CanonicalEventRecord single = batch.get(0);
+            if ("evt-bad".equals(single.eventId()) && !single.mappedFields().isEmpty()) {
+                throw new RuntimeException("ClickHouse DB error: Type coercion failure for field_a");
+            }
+            return new int[][]{{1}};
+        }).when(clickhouseJdbcTemplate).batchUpdate(
+                Mockito.contains("INSERT INTO ulpf_events." + tableName),
+                Mockito.anyList(),
+                Mockito.anyInt(),
+                Mockito.any()
+        );
+
+        ingestionRepository.enqueueCanonical(goodRecord);
+        ingestionRepository.enqueueCanonical(badRecord);
+        ingestionRepository.flushCanonical();
+
+        // Verify degraded notification sent for badRecord
+        verify(failureNotificationService).notifyDegradedRecords(
+                eq("src-bad"), eq(tableName), eq(1), eq("evt-bad"), Mockito.contains("Type coercion failure")
+        );
+        // Systemic insert failure alert must NOT be sent
+        verify(failureNotificationService, never()).notifyInsertFailure(anyString(), anyString(), anyInt(), anyString());
+        // markRecovered called because records were successfully inserted (both good and degraded)
+        verify(failureNotificationService).markRecovered("src-bad", tableName);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testSystemicFailureBothHalvesFail_SingleInsertFailureWithNoMoreThanTwoExtraAttempts() {
+        String tableName = "events_systemic_fail_tbl";
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(tableName)
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        Mockito.doThrow(new RuntimeException("ClickHouse table corrupt: File not found"))
+                .when(clickhouseJdbcTemplate)
+                .batchUpdate(Mockito.contains("INSERT INTO ulpf_events." + tableName), Mockito.anyList(), Mockito.anyInt(), Mockito.any());
+
+        for (int i = 0; i < 4; i++) {
+            ingestionRepository.enqueueCanonical(new ClickHouseIngestionRepository.CanonicalEventRecord(
+                    tableName, "evt-sys-" + i, "lin-" + i, "ven-1", "src-systemic", 1,
+                    LocalDateTime.now(), (double) i, "{}", "{}", java.util.Collections.emptyMap()
+            ));
+        }
+
+        ingestionRepository.flushCanonical();
+
+        // 1 initial (batch size 4) + 1 (first half size 2) + 1 (second half size 2) = exactly 3 attempts
+        verify(clickhouseJdbcTemplate, times(3)).batchUpdate(
+                Mockito.contains("INSERT INTO ulpf_events." + tableName),
+                Mockito.anyList(),
+                Mockito.anyInt(),
+                Mockito.any()
+        );
+
+        // Verify single notifyInsertFailure dispatched for the whole batch
+        verify(failureNotificationService, times(1)).notifyInsertFailure(
+                eq("src-systemic"), eq(tableName), eq(4), Mockito.contains("ClickHouse table corrupt")
+        );
+        verify(failureNotificationService, never()).markRecovered(anyString(), anyString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testReplayWithBadRecordDoesntFailWholeRun() {
+        String tableName = "events_replay_bad_tbl";
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq(tableName)
+        )).thenReturn(List.of("event_id", "timestamp", "val"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord r1 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        tableName, "evt-rep-1", "lin-1", "ven-1", "src-replay", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Map.of("val", "ok")
+                );
+        ClickHouseIngestionRepository.CanonicalEventRecord r2 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        tableName, "evt-rep-2", "lin-2", "ven-1", "src-replay", 1,
+                        LocalDateTime.now(), 2.0, "{}", "{}", java.util.Map.of("val", "bad_data")
+                );
+
+        Mockito.doAnswer(invocation -> {
+            List<ClickHouseIngestionRepository.CanonicalEventRecord> batch = invocation.getArgument(1);
+            if (batch.size() > 1) {
+                throw new RuntimeException("Batch failure");
+            }
+            ClickHouseIngestionRepository.CanonicalEventRecord single = batch.get(0);
+            if ("evt-rep-2".equals(single.eventId()) && !single.mappedFields().isEmpty()) {
+                throw new RuntimeException("Malformed val");
+            }
+            return new int[][]{{1}};
+        }).when(clickhouseJdbcTemplate).batchUpdate(
+                Mockito.contains("INSERT INTO ulpf_events." + tableName),
+                Mockito.anyList(),
+                Mockito.anyInt(),
+                Mockito.any()
+        );
+
+        // Replay call: does not throw, returns 2 (1 healthy + 1 degraded)
+        int inserted = ingestionRepository.batchInsertDynamicRecords(tableName, List.of(r1, r2));
+        assertEquals(2, inserted);
+
+        verify(failureNotificationService).notifyDegradedRecords(
+                eq("src-replay"), eq(tableName), eq(1), eq("evt-rep-2"), Mockito.contains("Malformed val")
+        );
+    }
 }
 
 

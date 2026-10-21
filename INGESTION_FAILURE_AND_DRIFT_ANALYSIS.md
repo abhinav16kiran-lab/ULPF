@@ -455,21 +455,24 @@ The system is implemented as specialized components working in tandem:
   ```
 * **Lifecycle & Write Policy**:
   * Incident opened on the **first alert of a window** (`status = 'OPEN'`).
-  * Counts and `last_seen_at` updated at window expiry / digest time (zero DB writes per event).
-  * Incident resolved (`status = 'RESOLVED'`, `resolved_at` recorded) when ClickHouse ingestion succeeds.
-  * Loaded into memory on startup (`@PostConstruct`) so recovery tracking survives service restarts.
+  * On every failure (including throttled/suppressed failures), `lastFailureAt` is updated on the matching active incident.
+  * `markRecovered` is cheap and non-blocking: it only records `lastSuccessAt = now`. It does not resolve incidents or clear throttles immediately.
+  * **Quiet-Period Recovery Resolution**: Checked periodically (every 60s) in `resolveQuietIncidents()`. An incident is resolved when `lastSuccessAt > lastFailureAt` and `now - lastFailureAt >= recoveryQuietMs` (default: 300,000ms / 5 minutes). This prevents alert storms from flapping failures.
+  * On resolution: un-digested events from the throttle entry are accumulated into the incident total, the incident is persisted as `RESOLVED`, the throttle entry is cleared, and a recovery notice is dispatched with corrected replay window: `fromTime = startedAt - margin`, `toTime = min(now, lastFailureAt + margin)`.
+  * **Stale Incident 24h Reminders**: If an incident remains open with no success since `lastFailureAt` for $\ge 24\text{ hours}$, a reminder alert is sent once every 24 hours.
+  * **Restart Resilience**: Open incidents loaded on startup (`@PostConstruct init()`) initialize `lastFailureAt` from `last_seen_at`.
 
 #### 5. Integration Points in Existing Code
 
 | Target File | Change Description |
 | :--- | :--- |
-| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Cache Fix**: `getColumnsForTable()` does not cache empty column lists, preventing permanent stale cache when tables are provisioned.<br>2. **Fallback**: When `rec.targetTable()` is null, if mapping exists, checks candidate table `constructTableName()` before alerting.<br>3. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, `notifyInsertFailure`, and `notifyMissingColumns`.<br>4. **Dynamic Column Validation & Cache**: Validates dynamic column names against `^[a-z_][a-z0-9_]*$` before ALTER, and caches failed ALTERs for 10 minutes to prevent repetitive failed ALTER attempts.<br>5. **Protected Recovery Hook**: `markRecovered` is moved outside the insert `try/catch` block, guarded by `if (inserted && tableFailureNotificationService != null)`. A failure in alert code can never cause a false `INSERT_FAILURE` alert. |
+| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Candidate Table Fallback**: When `rec.targetTable()` is null, looks up the source name once per flush via `resolveSourceMeta(sourceId).sourceName()`, computes candidate table via `constructTableName(sourceName)`, and queries ClickHouse columns once per distinct candidate. If the table exists, routes records to the candidate table and suppresses `NO_TARGET_TABLE` alerts.<br>2. **Bad-Record Isolation**: Uses `insertWithIsolation()` in both `flushCanonical()` and `batchInsertDynamicRecords()` (replay). When a batch fails, splits in half. If both halves fail, halts immediately (systemic failure, $\le 2$ extra attempts). If one half fails, halves recursively until single failing records are isolated. Failing records are retried in degraded form (mapped columns NULL, preserving values in `canonical_payload` and `raw_unmapped`) and trigger `notifyDegradedRecords()`.<br>3. **Cache Maintenance**: Prunes `failedAlterColumnsCache` when its size exceeds 1000.<br>4. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, `notifyInsertFailure`, `notifyMissingColumns`, and `notifyDegradedRecords`.<br>5. **Protected Recovery Hook**: `markRecovered` sets `lastSuccessAt = now` cleanly without touching throttles or database transactions. |
 | **`EventIngestionService.java`** | In `extractUnmappedFields()`: Computes total payload keys and evaluates `isTotalDrift` and drift percentage, passing them to `schemaDriftNotificationService.checkAndNotifyDrift()`. **Skips drift alerting when source has no active mapping** (`mappingOpt.isEmpty()`) to prevent redundant alerts alongside `notifyMissingMapping`. |
 | **`DynamicSchemaProvisioningService.java`** | Exposes `addColumnIfNotExists(tableName, columnName, columnType)` and invalidates ClickHouse column cache upon table creation or alteration. |
 
 #### 6. Automatic Remediation & Replay Workflow
 When an incident recovers:
-1. **Safety Replay Margin Window**: The recovery notification provides `fromTime = started_at - margin` (default: 5 minutes) and resolution time (`resolved_at`) formatted in server `LocalDateTime`.
+1. **Safety Replay Margin Window**: The recovery notification provides `fromTime = started_at - margin` (default: 5 minutes) and `toTime = min(now, lastFailureAt + margin)` formatted in server `LocalDateTime`. Capping `toTime` at `lastFailureAt + margin` ensures the replay window does not stretch indefinitely into subsequent quiet periods.
 2. **Ready-to-Execute Replay Command**:
    - The notification provides an actionable replay call:
      ```http
@@ -479,7 +482,7 @@ When an incident recovers:
        "toTime": "2026-10-21T10:45:00.456"
      }
      ```
-3. **Execution**: The `ReplayBackfillService` streams the gap events from `ulpf_raw.raw_events`, applies the updated mapping, and populates the dynamic table without data loss.
+3. **Execution**: The `ReplayBackfillService` streams the gap events from `ulpf_raw.raw_events`, applies the updated mapping, and populates the dynamic table without data loss. Replay uses `insertWithIsolation()`, ensuring malformed records in historical data are degraded and never abort the entire replay job.
 
 #### 7. Configuration Reference
 
@@ -487,6 +490,7 @@ When an incident recovers:
 ulpf:
   table-failure:
     cooldown-ms: ${ULPF_TABLE_FAILURE_COOLDOWN_MS:1800000}          # 30-minute cooldown per source:failureType
+    recovery-quiet-ms: ${ULPF_TABLE_FAILURE_RECOVERY_QUIET_MS:300000} # 5-minute quiet period before resolving flapping failures
     replay-margin-minutes: ${ULPF_TABLE_FAILURE_REPLAY_MARGIN_MIN:5} # 5-minute replay buffer before incident started_at
   schema-drift:
     cooldown-ms: ${ULPF_SCHEMA_DRIFT_COOLDOWN_MS:1800000}          # 30-minute cooldown for drift alerts
@@ -494,6 +498,13 @@ ulpf:
     webhook-url: ${ULPF_ALERT_WEBHOOK_URL:}                        # Optional outbound alert webhook (Slack, Teams, etc.)
     webhook-secret: ${ULPF_ALERT_WEBHOOK_SECRET:}                  # Optional HMAC-SHA256 signing secret
 ```
+
+#### 8. Accepted System Limits & Operational Boundaries
+
+1. **Single Table Per Source Assumption**: A source normally routes to one dynamic table. A second failing table for the same source within the same throttle window is aggregated under the source throttle until the window ends.
+2. **Per-Instance In-Memory Throttling**: Throttle caches (`throttleCache`) and active in-memory incident tracking operate per application node. Long-term state is persisted in SQLite (`ingestion_incidents`), and open incidents reload on restart.
+3. **Unbounded Raw Batch Re-Queue**: The existing re-queue mechanism for failed raw Kafka/buffer batches remains intact and is outside the scope of this notification and dynamic isolation system.
+4. **Manual Replay Trigger**: Replays are never triggered automatically by the system upon recovery; an administrator or external automation must review the recovery notification and issue `POST /v1/admin/sources/{id}/replay`.
 
 ---
 

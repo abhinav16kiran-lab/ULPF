@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,6 +41,9 @@ public class TableIngestionFailureNotificationService {
 
     @Value("${ulpf.table-failure.replay-margin-minutes:5}")
     private long replayMarginMinutes = 5;
+
+    @Value("${ulpf.table-failure.recovery-quiet-ms:300000}")
+    private long recoveryQuietMs = 300000L; // Default: 5 Minutes quiet period
 
     @Value("${ulpf.alert.webhook-url:}")
     private String webhookUrl;
@@ -76,7 +80,10 @@ public class TableIngestionFailureNotificationService {
             String failureType,
             String tableName,
             LocalDateTime startedAt,
-            AtomicLong affectedCount
+            AtomicLong affectedCount,
+            AtomicLong lastFailureAt,
+            AtomicLong lastSuccessAt,
+            AtomicLong lastReminderAt
     ) {}
 
     // In-memory throttling cache: (sourceId + ":" + failureType) -> ThrottleEntry
@@ -102,8 +109,19 @@ public class TableIngestionFailureNotificationService {
             try {
                 List<IngestionIncidentRepository.IncidentRecord> open = incidentRepository.findAllOpen();
                 for (var rec : open) {
+                    long lastFailure = rec.lastSeenAt() != null
+                            ? rec.lastSeenAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            : (rec.startedAt() != null
+                                ? rec.startedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                                : System.currentTimeMillis());
                     openIncidents.put(rec.sourceId() + ":" + rec.failureType(),
-                            new ActiveIncident(rec.incidentId(), rec.sourceId(), rec.failureType(), rec.tableName(), rec.startedAt(), new AtomicLong(rec.affectedCount())));
+                            new ActiveIncident(
+                                    rec.incidentId(), rec.sourceId(), rec.failureType(), rec.tableName(), rec.startedAt(),
+                                    new AtomicLong(rec.affectedCount()),
+                                    new AtomicLong(lastFailure),
+                                    new AtomicLong(0),
+                                    new AtomicLong(lastFailure)
+                            ));
                 }
                 log.info("Initialized {} active ingestion incidents from database.", open.size());
             } catch (Exception e) {
@@ -154,6 +172,14 @@ public class TableIngestionFailureNotificationService {
         return this.replayMarginMinutes;
     }
 
+    public void setRecoveryQuietMs(long recoveryQuietMs) {
+        this.recoveryQuietMs = recoveryQuietMs;
+    }
+
+    public long getRecoveryQuietMs() {
+        return this.recoveryQuietMs;
+    }
+
     public void setWebhookUrl(String webhookUrl) {
         this.webhookUrl = webhookUrl;
         if (this.alertDispatcher != null) {
@@ -185,15 +211,36 @@ public class TableIngestionFailureNotificationService {
         return new EvaluationResult(startNewWindow.get(), expiredRef.get(), alertInstant);
     }
 
-    private void recordIncidentOnAlert(String cacheKey, String sourceId, String failureType, String tableName, int eventCount) {
+    private void recordFailure(String cacheKey, String sourceId, String failureType, String tableName, int eventCount, boolean shouldAlert) {
+        long now = System.currentTimeMillis();
+        if (shouldAlert) {
+            recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount, now);
+        } else {
+            ActiveIncident inc = openIncidents.get(cacheKey);
+            if (inc != null) {
+                long failTime = Math.max(now, inc.lastSuccessAt().get() + 1);
+                inc.lastFailureAt().set(failTime);
+            }
+        }
+    }
+
+    private void recordIncidentOnAlert(String cacheKey, String sourceId, String failureType, String tableName, int eventCount, long now) {
         openIncidents.compute(cacheKey, (k, existing) -> {
             if (existing != null) {
                 existing.affectedCount().addAndGet(eventCount);
+                long failTime = Math.max(now, existing.lastSuccessAt().get() + 1);
+                existing.lastFailureAt().set(failTime);
                 return existing;
             }
             String incidentId = "inc-" + UUID.randomUUID().toString().substring(0, 8);
             LocalDateTime startedAt = LocalDateTime.now();
-            ActiveIncident newInc = new ActiveIncident(incidentId, sourceId, failureType, tableName, startedAt, new AtomicLong(eventCount));
+            ActiveIncident newInc = new ActiveIncident(
+                    incidentId, sourceId, failureType, tableName, startedAt,
+                    new AtomicLong(eventCount),
+                    new AtomicLong(now),
+                    new AtomicLong(0),
+                    new AtomicLong(now)
+            );
             if (incidentRepository != null) {
                 try {
                     incidentRepository.createIncident(new IngestionIncidentRepository.IncidentRecord(
@@ -223,12 +270,13 @@ public class TableIngestionFailureNotificationService {
         }
 
         if (!eval.shouldAlert()) {
+            recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, false);
             log.debug("Table missing alert suppressed (cooldown active) for source {}. Total accumulated: {}",
                     sourceId, throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : eventCount);
             return;
         }
 
-        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
+        recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, true);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -271,12 +319,13 @@ public class TableIngestionFailureNotificationService {
         }
 
         if (!eval.shouldAlert()) {
+            recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, false);
             log.debug("Insert failure alert suppressed (cooldown active) for source {}. Total accumulated: {}",
                     sourceId, throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : eventCount);
             return;
         }
 
-        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
+        recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, true);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -319,10 +368,11 @@ public class TableIngestionFailureNotificationService {
         }
 
         if (!eval.shouldAlert()) {
+            recordFailure(cacheKey, sourceId, failureType, null, eventCount, false);
             return;
         }
 
-        recordIncidentOnAlert(cacheKey, sourceId, failureType, null, eventCount);
+        recordFailure(cacheKey, sourceId, failureType, null, eventCount, true);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -364,10 +414,11 @@ public class TableIngestionFailureNotificationService {
         }
 
         if (!eval.shouldAlert()) {
+            recordFailure(cacheKey, sourceId, failureType, null, eventCount, false);
             return;
         }
 
-        recordIncidentOnAlert(cacheKey, sourceId, failureType, null, eventCount);
+        recordFailure(cacheKey, sourceId, failureType, null, eventCount, true);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -409,10 +460,11 @@ public class TableIngestionFailureNotificationService {
         }
 
         if (!eval.shouldAlert()) {
+            recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, false);
             return;
         }
 
-        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
+        recordFailure(cacheKey, sourceId, failureType, tableName, eventCount, true);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -440,11 +492,59 @@ public class TableIngestionFailureNotificationService {
     }
 
     /**
-     * Periodic scheduled check running every 60 seconds to dispatch pending summary digests
-     * when the throttling window expires, even if subsequent failures stop.
-     * Uses atomic computeIfPresent to eliminate race conditions between flush and incoming counts.
+     * Notifies admin and vendor when a single record fails dynamic insertion and is degraded into raw storage.
+     * Uses its own throttle key (DEGRADED_RECORDS) and creates no incident, so it never affects recovery.
+     */
+    public void notifyDegradedRecords(String sourceId, String tableName, int count, String sampleEventId, String error) {
+        if (sourceId == null || count <= 0) return;
+        String failureType = "DEGRADED_RECORDS";
+        String cacheKey = sourceId + ":" + failureType;
+        EvaluationResult eval = evaluate(cacheKey, count, "Sample ID: " + sampleEventId);
+
+        if (eval.expiredPrevious() != null && eval.expiredPrevious().accumulatedCount().get() > eval.expiredPrevious().initialAlertCount()) {
+            ThrottleEntry prev = eval.expiredPrevious();
+            sendDigestNotification(sourceId, failureType, prev.lastDetails(), prev.accumulatedCount().get(), prev.accumulatedCount().get() - prev.initialAlertCount());
+        }
+
+        if (!eval.shouldAlert()) {
+            log.debug("Degraded records alert suppressed for source {}. Total accumulated: {}", sourceId,
+                    throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : count);
+            return;
+        }
+
+        SourceMeta meta = resolveSourceMeta(sourceId);
+        String adminTitle = String.format("[DEGRADED] Malformed Record(s) Degraded for %s", meta.sourceName());
+        String adminMessage = String.format(
+                "Source '%s' (table '%s') had %d malformed record(s) degraded into raw storage due to error: %s. " +
+                        "Sample event ID: %s. Mapped columns were stored as NULL; raw payload is preserved in raw_unmapped.",
+                meta.sourceName(), tableName != null ? tableName : "N/A", count, error != null ? error : "Type coercion failure", sampleEventId);
+
+        String vendorTitle = String.format("Data Notice: Partial Log Format Mismatch for %s", meta.sourceName());
+        String vendorMessage = String.format(
+                "Some records for source '%s' could not be fully mapped into analytics columns due to a value type mismatch. " +
+                        "Raw logs are safely preserved. Sample event ID: %s.",
+                meta.sourceName(), sampleEventId);
+
+        AlertPayload payload = new AlertPayload(
+                "DEGRADED_RECORDS", "WARN", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                tableName, "Record degraded to NULL mapped fields: " + error, (long) count, Collections.emptySet(),
+                Instant.now(), adminMessage, "Inspect raw_unmapped and update mapping type definitions."
+        );
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
+    }
+
+    /**
+     * Periodic scheduled check running every 60 seconds to dispatch pending summary digests,
+     * resolve quiet incidents after the 5-minute recovery quiet window, and send 24h reminders.
      */
     @Scheduled(fixedRate = 60000)
+    public void scheduledMaintenance() {
+        flushExpiredDigests();
+        resolveQuietIncidents();
+        sendStaleIncidentReminders();
+    }
+
     public void flushExpiredDigests() {
         long now = System.currentTimeMillis();
         for (String key : throttleCache.keySet()) {
@@ -503,21 +603,44 @@ public class TableIngestionFailureNotificationService {
     }
 
     /**
-     * Called on successful canonical batch flush to mark any open ingestion failure incidents
-     * as RESOLVED and notify administrators and vendors with a ready replay command window.
+     * Cheap recovery marker: sets lastSuccessAt = now on matching open incidents.
+     * Does not resolve the incident immediately or touch the throttle cache.
+     * Actual resolution occurs in resolveQuietIncidents() after recoveryQuietMs has elapsed.
      */
     public void markRecovered(String sourceId, String tableName) {
         if (openIncidents.isEmpty() || sourceId == null) {
             return;
         }
 
-        List<String> toResolve = new ArrayList<>();
-        for (Map.Entry<String, ActiveIncident> entry : openIncidents.entrySet()) {
-            ActiveIncident inc = entry.getValue();
+        long now = System.currentTimeMillis();
+        for (ActiveIncident inc : openIncidents.values()) {
             if (inc.sourceId().equals(sourceId)) {
                 if (tableName == null || inc.tableName() == null || inc.tableName().equals(tableName)) {
-                    toResolve.add(entry.getKey());
+                    long successTime = Math.max(now, inc.lastFailureAt().get() + 1);
+                    inc.lastSuccessAt().set(successTime);
                 }
+            }
+        }
+    }
+
+    /**
+     * Resolves incidents that have experienced success and have remained quiet for >= recoveryQuietMs.
+     */
+    public void resolveQuietIncidents() {
+        if (openIncidents.isEmpty()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        List<String> toResolve = new ArrayList<>();
+
+        for (Map.Entry<String, ActiveIncident> entry : openIncidents.entrySet()) {
+            ActiveIncident inc = entry.getValue();
+            long lastSuccess = inc.lastSuccessAt().get();
+            long lastFailure = inc.lastFailureAt().get();
+            long effectiveNow = Math.max(now, lastSuccess);
+            if (lastSuccess > lastFailure && (effectiveNow - lastFailure) >= recoveryQuietMs) {
+                toResolve.add(entry.getKey());
             }
         }
 
@@ -549,16 +672,19 @@ public class TableIngestionFailureNotificationService {
                     }
                 }
 
-                // 3. Clear throttleCache for this key so the next failure starts a fresh alert and incident
+                // 3. Clear throttleCache for this key so subsequent failures start a fresh incident
                 throttleCache.remove(key);
 
-                // 4. Compute fromTime with replayMarginMinutes buffer
+                // 4. Compute fromTime = startedAt - margin, toTime = min(now, lastFailureAt + margin)
                 LocalDateTime fromTime = inc.startedAt().minusMinutes(replayMarginMinutes);
-                LocalDateTime toTime = resolvedAt;
+                long lastFailure = inc.lastFailureAt().get();
+                LocalDateTime lastFailureTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(lastFailure), ZoneId.systemDefault());
+                LocalDateTime failurePlusMargin = lastFailureTime.plusMinutes(replayMarginMinutes);
+                LocalDateTime toTime = resolvedAt.isBefore(failurePlusMargin) ? resolvedAt : failurePlusMargin;
 
-                // 5. & 6. Safe metadata lookup and dispatch
+                // 5. Send recovery notice
                 try {
-                    SourceMeta meta = resolveSourceMeta(sourceId);
+                    SourceMeta meta = resolveSourceMeta(inc.sourceId());
                     String adminTitle = String.format("[RECOVERED] Ingestion Recovered for %s (%s)", meta.sourceName(), inc.failureType());
                     String adminMessage = String.format(
                             "Ingestion for source '%s' (table '%s') has recovered successfully at %s. " +
@@ -567,7 +693,7 @@ public class TableIngestionFailureNotificationService {
                                     "POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
                             meta.sourceName(), inc.tableName() != null ? inc.tableName() : "N/A", resolvedAt,
                             inc.affectedCount().get(), fromTime, toTime,
-                            sourceId, fromTime, toTime);
+                            inc.sourceId(), fromTime, toTime);
 
                     String vendorTitle = String.format("Ingestion Resumed: %s", meta.sourceName());
                     String vendorMessage = String.format(
@@ -576,16 +702,56 @@ public class TableIngestionFailureNotificationService {
                             meta.sourceName());
 
                     AlertPayload payload = new AlertPayload(
-                            "RECOVERY_" + inc.failureType(), "INFO", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                            "RECOVERY_" + inc.failureType(), "INFO", inc.sourceId(), meta.sourceName(), meta.vendorId(), meta.vendorName(),
                             inc.tableName(), "Incident resolved", inc.affectedCount().get(), Collections.emptySet(),
                             Instant.now(), adminMessage,
                             String.format("POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
-                                    sourceId, fromTime, toTime)
+                                    inc.sourceId(), fromTime, toTime)
                     );
 
                     getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
                 } catch (Exception e) {
-                    log.warn("Failed to dispatch recovery alert for source {} (key {}): {}", sourceId, key, e.getMessage());
+                    log.warn("Failed to dispatch recovery alert for source {} (key {}): {}", inc.sourceId(), key, e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * Stale incidents: sends a 24-hour reminder for incidents that remain open without any recovery.
+     */
+    public void sendStaleIncidentReminders() {
+        if (openIncidents.isEmpty()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long reminderIntervalMs = 24 * 60 * 60 * 1000L; // 24 hours
+
+        for (ActiveIncident inc : openIncidents.values()) {
+            if (inc.lastSuccessAt().get() <= inc.lastFailureAt().get()
+                    && (now - inc.lastReminderAt().get()) >= reminderIntervalMs) {
+                inc.lastReminderAt().set(now);
+                try {
+                    SourceMeta meta = resolveSourceMeta(inc.sourceId());
+                    String adminTitle = String.format("[UNRESOLVED] Ingestion Failure Persisting for %s (%s)", meta.sourceName(), inc.failureType());
+                    String adminMessage = String.format(
+                            "Ingestion failure for source '%s' (table '%s', failure '%s') has remained unresolved for >24 hours. " +
+                                    "Total affected events so far: %d (started at: %s). " +
+                                    "Action required: Check database and source configuration, then trigger Replay via POST /v1/admin/sources/%s/replay.",
+                            meta.sourceName(), inc.tableName() != null ? inc.tableName() : "N/A", inc.failureType(),
+                            inc.affectedCount().get(), inc.startedAt(), inc.sourceId());
+
+                    AlertPayload payload = new AlertPayload(
+                            "UNRESOLVED_" + inc.failureType(), "WARN", inc.sourceId(), meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                            inc.tableName(), "Incident unresolved after 24h", inc.affectedCount().get(), Collections.emptySet(),
+                            Instant.now(), adminMessage,
+                            String.format("POST /v1/admin/sources/%s/replay", inc.sourceId())
+                    );
+
+                    getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, null, null, null);
+                } catch (Exception e) {
+                    log.warn("Failed to dispatch reminder for incident {}: {}", inc.incidentId(), e.getMessage());
                 }
             }
         }

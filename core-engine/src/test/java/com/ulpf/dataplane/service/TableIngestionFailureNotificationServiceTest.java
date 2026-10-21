@@ -419,8 +419,10 @@ class TableIngestionFailureNotificationServiceTest {
 
         assertEquals(1, service.getOpenIncidents().size());
 
-        // 2. Recovery happens -> incident marked RESOLVED, replay notification dispatched
+        // 2. Recovery happens -> markRecovered called, and quiet period resolution triggered
+        service.setRecoveryQuietMs(0);
         service.markRecovered(sourceId, tableName);
+        service.resolveQuietIncidents();
 
         verify(incidentRepo, times(1)).resolveIncident(eq(opened.incidentId()), any(LocalDateTime.class));
         assertTrue(service.getOpenIncidents().isEmpty());
@@ -461,6 +463,7 @@ class TableIngestionFailureNotificationServiceTest {
         com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
         service.setIncidentRepository(incidentRepo);
         service.setReplayMarginMinutes(10); // Custom 10-minute margin
+        service.setRecoveryQuietMs(0);
 
         String sourceId = "src_margin_test";
         String tableName = "events_margin_test";
@@ -479,6 +482,7 @@ class TableIngestionFailureNotificationServiceTest {
         LocalDateTime expectedFromTime = startedAt.minusMinutes(10);
 
         service.markRecovered(sourceId, tableName);
+        service.resolveQuietIncidents();
 
         ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
         verify(onboardingRepository, times(2)).saveNotification(eq("admin_1"), anyString(), msgCaptor.capture());
@@ -491,6 +495,7 @@ class TableIngestionFailureNotificationServiceTest {
     void testFailureRecoveryThenFailureInsideWindow_GivesTwoAlertsAndTwoIncidents() {
         com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
         service.setIncidentRepository(incidentRepo);
+        service.setRecoveryQuietMs(0);
 
         String sourceId = "src_flapping";
         String tableName = "events_flapping";
@@ -506,6 +511,7 @@ class TableIngestionFailureNotificationServiceTest {
 
         // 2. Incident recovers -> throttle cache removed for key
         service.markRecovered(sourceId, tableName);
+        service.resolveQuietIncidents();
         assertTrue(service.getOpenIncidents().isEmpty());
 
         // 3. New failure immediately (inside the 30-min window, without calling clearCache()) -> alert 2, incident 2!
@@ -556,7 +562,9 @@ class TableIngestionFailureNotificationServiceTest {
         service.notifyTableMissing(sourceId, tableName, 30);
 
         // Recover before window 2 expires -> should add un-digested 30 events -> 170 + 30 = 200 total!
+        service.setRecoveryQuietMs(0);
         service.markRecovered(sourceId, tableName);
+        service.resolveQuietIncidents();
 
         ArgumentCaptor<Long> countCaptor = ArgumentCaptor.forClass(Long.class);
         verify(incidentRepo, atLeastOnce()).updateCountsAndLastSeen(anyString(), countCaptor.capture(), any());
@@ -583,12 +591,16 @@ class TableIngestionFailureNotificationServiceTest {
 
         org.springframework.test.util.ReflectionTestUtils.setField(service, "replayMarginMinutes", 15L);
         assertEquals(15L, service.getReplayMarginMinutes());
+
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "recoveryQuietMs", 60000L);
+        assertEquals(60000L, service.getRecoveryQuietMs());
     }
 
     @Test
     void testTwoFailureWindows_CreatesTwoIncidents() {
         com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
         service.setIncidentRepository(incidentRepo);
+        service.setRecoveryQuietMs(0);
 
         String sourceId = "src_two_win";
         String tableName = "events_two_win";
@@ -604,6 +616,7 @@ class TableIngestionFailureNotificationServiceTest {
 
         // Recover Window 1
         service.markRecovered(sourceId, tableName);
+        service.resolveQuietIncidents();
         assertTrue(service.getOpenIncidents().isEmpty());
 
         // Clear throttle cache to simulate new window
@@ -620,6 +633,165 @@ class TableIngestionFailureNotificationServiceTest {
         List<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> records = incidentCaptor.getAllValues();
         assertEquals(2, records.size());
         assertNotEquals(records.get(0).incidentId(), records.get(1).incidentId());
+    }
+
+    @Test
+    void testFlapping_FailSuccessFailWithinQuietPeriod_SingleAlertSingleIncidentNoRecoveryNotice() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+        service.setRecoveryQuietMs(300_000); // 5-minute quiet window
+
+        String sourceId = "src_flap_seq";
+        String tableName = "events_flap_seq";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // 1. Initial failure -> 1 alert, 1 incident created
+        service.notifyTableMissing(sourceId, tableName, 10);
+        assertEquals(1, service.getOpenIncidents().size());
+        verify(incidentRepo, times(1)).createIncident(any());
+
+        // 2. Success arrives -> markRecovered records success timestamp cheaply
+        service.markRecovered(sourceId, tableName);
+
+        // 3. Maintenance job runs -> quiet period hasn't passed (now - lastFailure < 5m)
+        service.resolveQuietIncidents();
+        assertEquals(1, service.getOpenIncidents().size(), "Incident must remain open during quiet window");
+        verify(incidentRepo, never()).resolveIncident(anyString(), any());
+
+        // 4. Failure again within 5 minutes -> suppressed in throttle, updates lastFailureAt
+        service.notifyTableMissing(sourceId, tableName, 5);
+
+        // 5. Maintenance runs again -> lastFailureAt > lastSuccessAt, so cannot resolve!
+        service.resolveQuietIncidents();
+        assertEquals(1, service.getOpenIncidents().size(), "Incident must not resolve while flapping");
+        verify(incidentRepo, never()).resolveIncident(anyString(), any());
+
+        // Total failure alerts sent = 1 (second was suppressed), recovery notices = 0
+        verify(onboardingRepository, times(1)).saveNotification(eq("admin_1"), anyString(), anyString());
+    }
+
+    @Test
+    void testFailThenQuietPeriodWithSuccess_RecoveryNoticeArrivesReplayWindowCappedThrottleCleared() throws Exception {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+        service.setRecoveryQuietMs(20); // 20ms quiet window for test
+        service.setReplayMarginMinutes(5);
+
+        String sourceId = "src_quiet_recov";
+        String tableName = "events_quiet_recov";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // 1. Failure occurs
+        service.notifyTableMissing(sourceId, tableName, 50);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // 2. Mark recovered (success)
+        service.markRecovered(sourceId, tableName);
+
+        // 3. Wait for quiet window >= 20ms
+        Thread.sleep(30);
+
+        // 4. resolveQuietIncidents resolves the incident
+        service.resolveQuietIncidents();
+        assertTrue(service.getOpenIncidents().isEmpty(), "Incident must be resolved after quiet window");
+        verify(incidentRepo, times(1)).resolveIncident(anyString(), any());
+
+        // 5. Verify recovery notice arrived with toTime capped
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(eq("admin_1"), anyString(), msgCaptor.capture());
+        String recoveryMsg = msgCaptor.getAllValues().get(1);
+        assertTrue(recoveryMsg.contains("[RECOVERED]") || recoveryMsg.contains("/replay"));
+        assertTrue(recoveryMsg.contains("toTime"));
+
+        // 6. Verify throttle entry is cleared: next failure immediately creates a new alert and new incident!
+        service.notifyTableMissing(sourceId, tableName, 25);
+        assertEquals(1, service.getOpenIncidents().size());
+        verify(incidentRepo, times(2)).createIncident(any());
+    }
+
+    @Test
+    void testStaleIncident_RemindersDispatchedEvery24HoursNotMoreOften() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        String sourceId = "src_stale";
+        String tableName = "events_stale";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // Initial failure -> incident opened
+        service.notifyTableMissing(sourceId, tableName, 100);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // Immediately run stale reminders -> < 24h old, no reminder
+        service.sendStaleIncidentReminders();
+        verify(onboardingRepository, times(1)).saveNotification(eq("admin_1"), anyString(), anyString());
+
+        // Age the incident's lastReminderAt by 25 hours
+        TableIngestionFailureNotificationService.ActiveIncident active =
+                service.getOpenIncidents().values().iterator().next();
+        active.lastReminderAt().set(System.currentTimeMillis() - (25 * 3600 * 1000L));
+
+        // Run reminders -> 1 reminder dispatched
+        service.sendStaleIncidentReminders();
+        verify(onboardingRepository, times(2)).saveNotification(eq("admin_1"), anyString(), anyString());
+
+        // Run again immediately -> should NOT dispatch another reminder
+        service.sendStaleIncidentReminders();
+        verify(onboardingRepository, times(2)).saveNotification(eq("admin_1"), anyString(), anyString());
+    }
+
+    @Test
+    void testRestartReloadsOpenIncidentsWithLastFailureAtFromLastSeenAt() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        LocalDateTime lastSeen = LocalDateTime.of(2026, 10, 20, 12, 0, 0);
+        com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord existingOpen =
+                new com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord(
+                        "inc-restart-1", "src_restart", "TABLE_MISSING", "events_restart",
+                        lastSeen.minusHours(1), lastSeen, null, 50, "OPEN", "Details"
+                );
+
+        when(incidentRepo.findAllOpen()).thenReturn(List.of(existingOpen));
+
+        service.init();
+
+        assertEquals(1, service.getOpenIncidents().size());
+        TableIngestionFailureNotificationService.ActiveIncident loaded =
+                service.getOpenIncidents().get("src_restart:TABLE_MISSING");
+        assertNotNull(loaded);
+        assertEquals("inc-restart-1", loaded.incidentId());
+        assertEquals(50, loaded.affectedCount().get());
+
+        long expectedFailureAt = lastSeen.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        assertEquals(expectedFailureAt, loaded.lastFailureAt().get());
+    }
+
+    @Test
+    void testNotifyDegradedRecords_DispatchesAlertWithoutAffectingIncident() {
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        service.notifyDegradedRecords("src_deg", "events_deg", 1, "evt-deg-1", "Type coercion error");
+
+        // Creates no incident
+        assertTrue(service.getOpenIncidents().isEmpty());
+
+        // Alert dispatched
+        verify(onboardingRepository, atLeastOnce()).saveNotification(eq("admin_1"), contains("[DEGRADED]"), contains("evt-deg-1"));
     }
 }
 
