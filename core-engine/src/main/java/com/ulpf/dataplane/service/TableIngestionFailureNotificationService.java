@@ -1,14 +1,14 @@
 package com.ulpf.dataplane.service;
 
+import com.ulpf.common.db.IngestionIncidentRepository;
 import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.SourceRepository;
 import com.ulpf.common.db.SourceRepository.SourceRecord;
 import com.ulpf.common.db.UserRepository;
-import com.ulpf.controlplane.model.Role;
-import com.ulpf.controlplane.model.User;
 import com.ulpf.common.db.VendorRepository;
 import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.service.NotificationService;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +17,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * Service responsible for alerting administrators and data source owners (vendors)
  * when ClickHouse dynamic table operations fail during canonical log ingestion.
  *
- * Implements thread-safe atomic throttling with digest summaries.
+ * Implements thread-safe atomic throttling with digest summaries and incident lifecycle tracking.
  */
 @Service
 public class TableIngestionFailureNotificationService {
@@ -48,6 +49,9 @@ public class TableIngestionFailureNotificationService {
     @Autowired(required = false)
     private AlertDispatcher alertDispatcher;
 
+    @Autowired(required = false)
+    private IngestionIncidentRepository incidentRepository;
+
     public record ThrottleEntry(
             long firstAlertTime,
             Instant firstAlertInstant,
@@ -62,8 +66,20 @@ public class TableIngestionFailureNotificationService {
             Instant alertInstant
     ) {}
 
+    public record ActiveIncident(
+            String incidentId,
+            String sourceId,
+            String failureType,
+            String tableName,
+            LocalDateTime startedAt,
+            AtomicLong affectedCount
+    ) {}
+
     // In-memory throttling cache: (sourceId + ":" + failureType) -> ThrottleEntry
     private final Map<String, ThrottleEntry> throttleCache = new ConcurrentHashMap<>();
+
+    // In-memory active incident tracking: (sourceId + ":" + failureType) -> ActiveIncident
+    private final Map<String, ActiveIncident> openIncidents = new ConcurrentHashMap<>();
 
     public TableIngestionFailureNotificationService(
             SourceRepository sourceRepository,
@@ -74,6 +90,22 @@ public class TableIngestionFailureNotificationService {
         this.vendorRepository = vendorRepository;
         this.onboardingRepository = onboardingRepository;
         this.userRepository = userRepository;
+    }
+
+    @PostConstruct
+    public void init() {
+        if (incidentRepository != null) {
+            try {
+                List<IngestionIncidentRepository.IncidentRecord> open = incidentRepository.findAllOpen();
+                for (var rec : open) {
+                    openIncidents.put(rec.sourceId() + ":" + rec.failureType(),
+                            new ActiveIncident(rec.incidentId(), rec.sourceId(), rec.failureType(), rec.tableName(), rec.startedAt(), new AtomicLong(rec.affectedCount())));
+                }
+                log.info("Initialized {} active ingestion incidents from database.", open.size());
+            } catch (Exception e) {
+                log.warn("Could not load open incidents on startup: {}", e.getMessage());
+            }
+        }
     }
 
     @Autowired(required = false)
@@ -96,6 +128,10 @@ public class TableIngestionFailureNotificationService {
             }
         }
         return this.alertDispatcher;
+    }
+
+    public void setIncidentRepository(IngestionIncidentRepository incidentRepository) {
+        this.incidentRepository = incidentRepository;
     }
 
     public void setCooldownMs(long cooldownMs) {
@@ -137,6 +173,24 @@ public class TableIngestionFailureNotificationService {
         return new EvaluationResult(startNewWindow.get(), expiredRef.get(), alertInstant);
     }
 
+    private void recordIncidentOnAlert(String cacheKey, String sourceId, String failureType, String tableName, int eventCount) {
+        openIncidents.computeIfAbsent(cacheKey, k -> {
+            String incidentId = "inc-" + UUID.randomUUID().toString().substring(0, 8);
+            LocalDateTime startedAt = LocalDateTime.now();
+            ActiveIncident newInc = new ActiveIncident(incidentId, sourceId, failureType, tableName, startedAt, new AtomicLong(eventCount));
+            if (incidentRepository != null) {
+                try {
+                    incidentRepository.createIncident(new IngestionIncidentRepository.IncidentRecord(
+                            incidentId, sourceId, failureType, tableName, startedAt, startedAt, null, eventCount, "OPEN", failureType
+                    ));
+                } catch (Exception e) {
+                    log.warn("Failed to persist incident {} to database: {}", incidentId, e.getMessage());
+                }
+            }
+            return newInc;
+        });
+    }
+
     /**
      * Notifies admin and vendor when an analytical dynamic table does not exist or has no columns in ClickHouse.
      */
@@ -157,6 +211,8 @@ public class TableIngestionFailureNotificationService {
                     sourceId, throttleCache.get(cacheKey) != null ? throttleCache.get(cacheKey).accumulatedCount().get() : eventCount);
             return;
         }
+
+        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -204,6 +260,8 @@ public class TableIngestionFailureNotificationService {
             return;
         }
 
+        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
+
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
@@ -248,6 +306,8 @@ public class TableIngestionFailureNotificationService {
             return;
         }
 
+        recordIncidentOnAlert(cacheKey, sourceId, failureType, null, eventCount);
+
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
@@ -291,6 +351,8 @@ public class TableIngestionFailureNotificationService {
             return;
         }
 
+        recordIncidentOnAlert(cacheKey, sourceId, failureType, null, eventCount);
+
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
 
@@ -333,6 +395,8 @@ public class TableIngestionFailureNotificationService {
         if (!eval.shouldAlert()) {
             return;
         }
+
+        recordIncidentOnAlert(cacheKey, sourceId, failureType, tableName, eventCount);
 
         Instant alertInstant = eval.alertInstant();
         SourceMeta meta = resolveSourceMeta(sourceId);
@@ -390,6 +454,19 @@ public class TableIngestionFailureNotificationService {
     private void sendDigestNotification(String sourceId, String failureType, String details, long totalCount, long suppressedCount) {
         if (suppressedCount <= 0) return;
         SourceMeta meta = resolveSourceMeta(sourceId);
+
+        ActiveIncident inc = openIncidents.get(sourceId + ":" + failureType);
+        if (inc != null) {
+            inc.affectedCount().set(totalCount);
+            if (incidentRepository != null) {
+                try {
+                    incidentRepository.updateCountsAndLastSeen(inc.incidentId(), totalCount, LocalDateTime.now());
+                } catch (Exception e) {
+                    log.warn("Failed to update incident {} in database: {}", inc.incidentId(), e.getMessage());
+                }
+            }
+        }
+
         String adminTitle = String.format("[DIGEST] Ingestion Failures Summary for %s (%s)", meta.sourceName(), failureType);
         String adminMessage = String.format(
                 "During the last 30-minute window, source '%s' (ID: %s, Vendor: %s) experienced %d total affected event(s) (%d suppressed during window) due to %s (%s). " +
@@ -407,6 +484,72 @@ public class TableIngestionFailureNotificationService {
                 adminMessage, "POST /v1/admin/sources/" + sourceId + "/replay");
 
         getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
+    }
+
+    /**
+     * Called on successful canonical batch flush to mark any open ingestion failure incidents
+     * as RESOLVED and notify administrators and vendors with a ready replay command window.
+     */
+    public void markRecovered(String sourceId, String tableName) {
+        if (openIncidents.isEmpty() || sourceId == null) {
+            return;
+        }
+
+        List<String> toResolve = new ArrayList<>();
+        for (Map.Entry<String, ActiveIncident> entry : openIncidents.entrySet()) {
+            ActiveIncident inc = entry.getValue();
+            if (inc.sourceId().equals(sourceId)) {
+                if (tableName == null || inc.tableName() == null || inc.tableName().equals(tableName)) {
+                    toResolve.add(entry.getKey());
+                }
+            }
+        }
+
+        if (toResolve.isEmpty()) {
+            return;
+        }
+
+        LocalDateTime resolvedAt = LocalDateTime.now();
+
+        for (String key : toResolve) {
+            ActiveIncident inc = openIncidents.remove(key);
+            if (inc != null) {
+                if (incidentRepository != null) {
+                    try {
+                        incidentRepository.resolveIncident(inc.incidentId(), resolvedAt);
+                    } catch (Exception e) {
+                        log.warn("Failed to mark incident {} resolved in database: {}", inc.incidentId(), e.getMessage());
+                    }
+                }
+
+                SourceMeta meta = resolveSourceMeta(sourceId);
+                String adminTitle = String.format("[RECOVERED] Ingestion Recovered for %s (%s)", meta.sourceName(), inc.failureType());
+                String adminMessage = String.format(
+                        "Ingestion for source '%s' (table '%s') has recovered successfully at %s. " +
+                                "Total affected events during incident: %d (from %s to %s). " +
+                                "To backfill omitted events, trigger Replay via: " +
+                                "POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
+                        meta.sourceName(), inc.tableName() != null ? inc.tableName() : "N/A", resolvedAt,
+                        inc.affectedCount().get(), inc.startedAt(), resolvedAt,
+                        sourceId, inc.startedAt(), resolvedAt);
+
+                String vendorTitle = String.format("Ingestion Resumed: %s", meta.sourceName());
+                String vendorMessage = String.format(
+                        "Live log ingestion for source '%s' has recovered and is now streaming successfully. " +
+                                "Platform administrators will backfill any unmapped records from raw storage.",
+                        meta.sourceName());
+
+                AlertPayload payload = new AlertPayload(
+                        "RECOVERY_" + inc.failureType(), "INFO", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                        inc.tableName(), "Incident resolved", inc.affectedCount().get(), Collections.emptySet(),
+                        Instant.now(), adminMessage,
+                        String.format("POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
+                                sourceId, inc.startedAt(), resolvedAt)
+                );
+
+                getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
+            }
+        }
     }
 
     public record SourceMeta(String sourceName, String vendorId, String vendorName, String ownerUserId) {}
@@ -447,9 +590,14 @@ public class TableIngestionFailureNotificationService {
 
     public void clearCache() {
         throttleCache.clear();
+        openIncidents.clear();
     }
 
     public Map<String, ThrottleEntry> getThrottleCache() {
         return throttleCache;
+    }
+
+    public Map<String, ActiveIncident> getOpenIncidents() {
+        return openIncidents;
     }
 }

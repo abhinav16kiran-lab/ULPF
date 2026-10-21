@@ -114,3 +114,21 @@ CREATE TABLE IF NOT EXISTS batch_integrity_blocks (
 
 CREATE INDEX IF NOT EXISTS idx_integrity_source_created ON batch_integrity_blocks(source_id, created_at);
 
+-- 11. Ingestion Alert Incidents table: Tracks operational failures, affected counts, and recovery replay windows.
+CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
+    incident_id     TEXT PRIMARY KEY,
+    source_id       TEXT NOT NULL,
+    failure_type    TEXT NOT NULL,
+    table_name      TEXT,
+    started_at      TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    resolved_at     TEXT,
+    affected_count  INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'OPEN',
+    details         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_source_status ON ingestion_alert_incidents(source_id, status);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON ingestion_alert_incidents(status);
+
+

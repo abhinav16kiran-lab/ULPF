@@ -43,6 +43,14 @@ class TableIngestionFailureNotificationServiceTest {
                 onboardingRepository,
                 userRepository
         );
+
+        // Warm up Mockito bytecode/classloading so timing-dependent tests don't suffer cold-start jitter
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("warmup_admin", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+        service.notifyTableMissing("src_warmup", "tbl_warmup", 1);
+        service.clearCache();
+        reset(onboardingRepository, userRepository, sourceRepository, vendorRepository);
     }
 
     @Test
@@ -262,7 +270,7 @@ class TableIngestionFailureNotificationServiceTest {
 
     @Test
     void testScheduledDigestDispatchesForExpiredWindowWithoutNewEvents() {
-        service.setCooldownMs(50L); // 50ms cooldown for fast test
+        service.setCooldownMs(100L); // 100ms cooldown for fast test
         String sourceId = "src_quiet_recovery";
         String tableName = "events_quiet_recovery";
 
@@ -273,21 +281,22 @@ class TableIngestionFailureNotificationServiceTest {
 
         // Initial alert
         service.notifyTableMissing(sourceId, tableName, 10);
-        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
 
-        // Suppressed event
+        // Suppressed event (immediately follows, well within 100ms)
         service.notifyTableMissing(sourceId, tableName, 40);
+
+        // Exactly 1 alert was sent so far (the 40 events were suppressed)
         verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
 
         // Wait for cooldown to expire without any subsequent events arriving
         try {
-            Thread.sleep(70);
+            Thread.sleep(150);
         } catch (InterruptedException ignored) {}
 
         // Scheduled worker runs
         service.flushExpiredDigests();
 
-        // Digest MUST be sent for the 40 suppressed events!
+        // Digest MUST be sent for the 40 suppressed events -> 2 notifications total!
         verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
     }
 
@@ -371,6 +380,127 @@ class TableIngestionFailureNotificationServiceTest {
 
         // At least 1 alert/digest sent
         verify(onboardingRepository, atLeast(1)).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testFailureThenSuccess_IncidentLifecycleAndRecoveryReplayMessage() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        String sourceId = "src_recov_1";
+        String vendorId = "ven_recov_1";
+        String ownerUserId = "usr_vendor_recov";
+        String tableName = "events_recov";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(
+                new SourceRecord(sourceId, vendorId, "Recov Source", "SYSLOG", "ACTIVE", LocalDateTime.now())
+        ));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(
+                new VendorRecord(vendorId, ownerUserId, "Recov Vendor", "ACTIVE", LocalDateTime.now())
+        ));
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // 1. Failure happens -> incident opened
+        service.notifyTableMissing(sourceId, tableName, 100);
+
+        ArgumentCaptor<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> incidentCaptor =
+                ArgumentCaptor.forClass(com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord.class);
+        verify(incidentRepo, times(1)).createIncident(incidentCaptor.capture());
+
+        com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord opened = incidentCaptor.getValue();
+        assertEquals(sourceId, opened.sourceId());
+        assertEquals("TABLE_MISSING", opened.failureType());
+        assertEquals(tableName, opened.tableName());
+        assertEquals("OPEN", opened.status());
+        assertEquals(100, opened.affectedCount());
+        assertNotNull(opened.startedAt());
+
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // 2. Recovery happens -> incident marked RESOLVED, replay notification dispatched
+        service.markRecovered(sourceId, tableName);
+
+        verify(incidentRepo, times(1)).resolveIncident(eq(opened.incidentId()), any(LocalDateTime.class));
+        assertTrue(service.getOpenIncidents().isEmpty());
+
+        // 2 initial alert notifications (admin + vendor) + 2 recovery notifications (admin + vendor) = 4 total
+        ArgumentCaptor<String> userCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(onboardingRepository, times(4)).saveNotification(
+                userCaptor.capture(),
+                titleCaptor.capture(),
+                msgCaptor.capture()
+        );
+
+        List<String> titles = titleCaptor.getAllValues();
+        List<String> messages = msgCaptor.getAllValues();
+
+        // Recovery Admin Notification
+        String recoveryAdminTitle = titles.get(2);
+        String recoveryAdminMsg = messages.get(2);
+        assertTrue(recoveryAdminTitle.contains("[RECOVERED]"));
+        assertTrue(recoveryAdminMsg.contains("fromTime"));
+        assertTrue(recoveryAdminMsg.contains("toTime"));
+        assertTrue(recoveryAdminMsg.contains("/replay"));
+        assertTrue(recoveryAdminMsg.contains(opened.startedAt().toString()));
+
+        // Recovery Vendor Notification
+        String recoveryVendorTitle = titles.get(3);
+        String recoveryVendorMsg = messages.get(3);
+        assertTrue(recoveryVendorTitle.contains("Ingestion Resumed"));
+        assertTrue(recoveryVendorMsg.contains("Recov Source"));
+    }
+
+    @Test
+    void testSuccessWithNoOpenIncident_NothingSent() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        service.markRecovered("src_clean", "events_clean");
+
+        verifyNoInteractions(incidentRepo);
+        verifyNoInteractions(onboardingRepository);
+    }
+
+    @Test
+    void testTwoFailureWindows_CreatesTwoIncidents() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        String sourceId = "src_two_win";
+        String tableName = "events_two_win";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // Window 1 failure -> incident 1
+        service.notifyTableMissing(sourceId, tableName, 50);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // Recover Window 1
+        service.markRecovered(sourceId, tableName);
+        assertTrue(service.getOpenIncidents().isEmpty());
+
+        // Clear throttle cache to simulate new window
+        service.clearCache();
+
+        // Window 2 failure -> incident 2
+        service.notifyTableMissing(sourceId, tableName, 80);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        ArgumentCaptor<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> incidentCaptor =
+                ArgumentCaptor.forClass(com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord.class);
+        verify(incidentRepo, times(2)).createIncident(incidentCaptor.capture());
+
+        List<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> records = incidentCaptor.getAllValues();
+        assertEquals(2, records.size());
+        assertNotEquals(records.get(0).incidentId(), records.get(1).incidentId());
     }
 }
 

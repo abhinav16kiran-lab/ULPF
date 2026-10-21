@@ -470,6 +470,17 @@ public class ClickHouseIngestionRepository {
                 });
 
                 log.info("Successfully flushed {} dynamic events into ulpf_events.{}", tableBatch.size(), tableName);
+                if (tableFailureNotificationService != null) {
+                    Set<String> distinctSources = new HashSet<>();
+                    for (CanonicalEventRecord r : tableBatch) {
+                        if (r.sourceId() != null) {
+                            distinctSources.add(r.sourceId());
+                        }
+                    }
+                    for (String src : distinctSources) {
+                        tableFailureNotificationService.markRecovered(src, tableName);
+                    }
+                }
             } catch (Exception e) {
                 log.warn("Failed to flush dynamic events to ulpf_events.{}: {}", tableName, e.getMessage());
                 if (tableFailureNotificationService != null) {

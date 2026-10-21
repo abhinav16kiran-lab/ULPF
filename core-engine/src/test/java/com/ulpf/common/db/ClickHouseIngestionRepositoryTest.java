@@ -223,7 +223,11 @@ class ClickHouseIngestionRepositoryTest {
                 Mockito.eq(1),
                 Mockito.any()
         );
-        Mockito.verifyNoInteractions(failureNotificationService);
+        Mockito.verify(failureNotificationService).markRecovered("src-success-tbl", "events_success_tbl");
+        Mockito.verify(failureNotificationService, Mockito.never()).notifyInsertFailure(Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any());
+        Mockito.verify(failureNotificationService, Mockito.never()).notifyTableMissing(Mockito.any(), Mockito.any(), Mockito.anyInt());
+        Mockito.verify(failureNotificationService, Mockito.never()).notifyNoTargetTable(Mockito.any(), Mockito.anyInt());
+        Mockito.verify(failureNotificationService, Mockito.never()).notifyMissingColumns(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt());
     }
 
     @Test
