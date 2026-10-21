@@ -351,5 +351,70 @@ class SchemaDriftNotificationServiceTest {
         verify(onboardingRepository, times(2)).saveNotification(anyString(), highTitleCaptor.capture(), anyString());
         assertTrue(highTitleCaptor.getValue().contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
     }
+
+    @Test
+    void testOneThousandSuppressedDriftCalls_SourceLookupCalledExactlyOnce() {
+        String sourceId = "src_fw_hot_path";
+        String vendorId = "ven_hot_path";
+        String ownerUserId = "usr_vendor_hot_path";
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Hot Path Source", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Hot Path Vendor", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 1st call -> alerts, invokes sourceRepository.findById and vendorRepository.findById
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("new_key_1"));
+
+        // 1000 suppressed calls -> suppressed on hot path, should NOT invoke sourceRepository.findById
+        for (int i = 0; i < 1000; i++) {
+            driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("new_key_1"));
+        }
+
+        // Verify sourceRepository.findById was called exactly once in total!
+        verify(sourceRepository, times(1)).findById(sourceId);
+        verify(vendorRepository, times(1)).findById(vendorId);
+    }
+
+    @Test
+    void testDigestAfterWindowExpiry_ResolvesVendorAndKeys() throws InterruptedException {
+        String sourceId = "src_fw_digest_test";
+        String vendorId = "ven_digest_test";
+        String ownerUserId = "usr_vendor_digest";
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Digest Source", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Digest Vendor Inc", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        driftNotificationService.setCooldownMs(40L); // 40ms cooldown
+
+        // Call 1: initial alert
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("alpha_key"));
+
+        // Call 2: suppressed during window, accumulates beta_key
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("beta_key"));
+
+        // Wait for cooldown to expire
+        Thread.sleep(60);
+
+        // Scheduled flush of expired digests
+        driftNotificationService.flushExpiredDigests();
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        // 2 notifications from initial alert (vendor + admin) + 2 from digest (admin + vendor) = 4 total
+        verify(onboardingRepository, times(4)).saveNotification(
+                anyString(),
+                titleCaptor.capture(),
+                msgCaptor.capture()
+        );
+
+        List<String> messages = msgCaptor.getAllValues();
+        // The digest message should mention the resolved vendor name and the accumulated keys
+        boolean foundVendorInDigest = messages.stream().anyMatch(m -> m.contains("Digest Vendor Inc") && m.contains("alpha_key") && m.contains("beta_key"));
+        assertTrue(foundVendorInDigest, "Digest notification should resolve vendor name and include accumulated unmapped keys");
+    }
 }
 

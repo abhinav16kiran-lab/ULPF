@@ -347,6 +347,7 @@ public class ClickHouseIngestionRepository {
                 continue;
             }
 
+            boolean inserted = false;
             try {
                 List<String> cols = getColumnsForTable(tableName);
                 if (cols.isEmpty()) {
@@ -470,17 +471,7 @@ public class ClickHouseIngestionRepository {
                 });
 
                 log.info("Successfully flushed {} dynamic events into ulpf_events.{}", tableBatch.size(), tableName);
-                if (tableFailureNotificationService != null) {
-                    Set<String> distinctSources = new HashSet<>();
-                    for (CanonicalEventRecord r : tableBatch) {
-                        if (r.sourceId() != null) {
-                            distinctSources.add(r.sourceId());
-                        }
-                    }
-                    for (String src : distinctSources) {
-                        tableFailureNotificationService.markRecovered(src, tableName);
-                    }
-                }
+                inserted = true;
             } catch (Exception e) {
                 log.warn("Failed to flush dynamic events to ulpf_events.{}: {}", tableName, e.getMessage());
                 if (tableFailureNotificationService != null) {
@@ -492,6 +483,22 @@ public class ClickHouseIngestionRepository {
                     }
                     countsBySource.forEach((sourceId, count) ->
                             tableFailureNotificationService.notifyInsertFailure(sourceId, tableName, count, e.getMessage()));
+                }
+            }
+
+            if (inserted && tableFailureNotificationService != null) {
+                Set<String> distinctSources = new HashSet<>();
+                for (CanonicalEventRecord r : tableBatch) {
+                    if (r.sourceId() != null) {
+                        distinctSources.add(r.sourceId());
+                    }
+                }
+                for (String src : distinctSources) {
+                    try {
+                        tableFailureNotificationService.markRecovered(src, tableName);
+                    } catch (Exception ex) {
+                        log.warn("Error marking source {} recovered: {}", src, ex.getMessage());
+                    }
                 }
             }
         }

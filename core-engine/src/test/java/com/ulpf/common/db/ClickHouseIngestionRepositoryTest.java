@@ -371,6 +371,67 @@ class ClickHouseIngestionRepositoryTest {
         // Even though flushed twice, addColumnIfNotExists should only have been tried ONCE within the 10 min window!
         verify(dynamicSchemaService, times(1)).addColumnIfNotExists("events_cooldown_col_tbl", "flaky_col", "Nullable(String)");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MarkRecoveredThrows_DoesNotTriggerInsertFailureAlert() {
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_recov_throw_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        Mockito.doThrow(new RuntimeException("Simulated alert dispatcher failure"))
+                .when(failureNotificationService)
+                .markRecovered(anyString(), anyString());
+
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_recov_throw_tbl", "evt-throw", "lin-1", "ven-1", "src-recov-throw", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        verify(failureNotificationService).markRecovered("src-recov-throw", "events_recov_throw_tbl");
+        verify(failureNotificationService, never()).notifyInsertFailure(any(), any(), anyInt(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MarkRecoveredCalledOncePerDistinctSource() {
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_multi_src_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"));
+
+        // Enqueue 3 records: 2 from src-A, 1 from src-B, all into events_multi_src_tbl
+        ClickHouseIngestionRepository.CanonicalEventRecord rec1 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_multi_src_tbl", "evt-m1", "lin-1", "ven-1", "src-A", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+        ClickHouseIngestionRepository.CanonicalEventRecord rec2 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_multi_src_tbl", "evt-m2", "lin-1", "ven-1", "src-A", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+        ClickHouseIngestionRepository.CanonicalEventRecord rec3 =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_multi_src_tbl", "evt-m3", "lin-1", "ven-1", "src-B", 1,
+                        LocalDateTime.now(), 1.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+
+        ingestionRepository.enqueueCanonical(rec1);
+        ingestionRepository.enqueueCanonical(rec2);
+        ingestionRepository.enqueueCanonical(rec3);
+        ingestionRepository.flushCanonical();
+
+        verify(failureNotificationService, times(1)).markRecovered("src-A", "events_multi_src_tbl");
+        verify(failureNotificationService, times(1)).markRecovered("src-B", "events_multi_src_tbl");
+    }
 }
 
 

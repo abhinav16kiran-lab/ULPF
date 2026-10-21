@@ -50,14 +50,15 @@ public class SchemaDriftNotificationService {
     @Autowired(required = false)
     private AlertDispatcher alertDispatcher;
 
+    public record VendorInfo(String name, String ownerUserId) {}
+
     public record DriftState(
             long firstSeen,
             AtomicLong lastSeen,
             int initialEventCount,
             AtomicLong eventCount,
             Set<String> accumulatedKeys,
-            String vendorName,
-            String vendorOwnerUserId
+            AtomicReference<VendorInfo> vendor
     ) {}
 
     // Throttle state per sourceId:SCHEMA_DRIFT or sourceId:TOTAL_DRIFT
@@ -136,27 +137,9 @@ public class SchemaDriftNotificationService {
         long now = System.currentTimeMillis();
         Instant driftInstant = Instant.now();
 
-        String vendorName = "Vendor";
-        String vendorOwnerUserId = null;
-
-        try {
-            Optional<SourceRecord> sourceOpt = sourceRepository.findById(sourceId);
-            if (sourceOpt.isPresent()) {
-                Optional<VendorRecord> vendorOpt = vendorRepository.findById(sourceOpt.get().vendorId());
-                if (vendorOpt.isPresent()) {
-                    vendorName = vendorOpt.get().vendorName();
-                    vendorOwnerUserId = vendorOpt.get().ownerUserId();
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Could not resolve vendor info for source {}: {}", sourceId, e.getMessage());
-        }
-
-        final String finalVendorName = vendorName;
-        final String finalVendorOwnerUserId = vendorOwnerUserId;
-
         AtomicBoolean shouldNotify = new AtomicBoolean(false);
         AtomicReference<DriftState> expiredRef = new AtomicReference<>();
+        AtomicReference<DriftState> activeStateRef = new AtomicReference<>();
 
         driftStateCache.compute(cacheKey, (k, state) -> {
             if (state != null && (now - state.firstSeen()) < cooldownMs) {
@@ -182,7 +165,9 @@ public class SchemaDriftNotificationService {
                     initialKeys.add(key);
                 }
             }
-            return new DriftState(now, new AtomicLong(now), 1, new AtomicLong(1), initialKeys, finalVendorName, finalVendorOwnerUserId);
+            DriftState newState = new DriftState(now, new AtomicLong(now), 1, new AtomicLong(1), initialKeys, new AtomicReference<>(null));
+            activeStateRef.set(newState);
+            return newState;
         });
 
         // If an expired window was closed, send its summary digest
@@ -195,6 +180,15 @@ public class SchemaDriftNotificationService {
             log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
             return;
         }
+
+        // Resolves vendor info only on alert path (off the hot path)
+        VendorInfo vendorInfo = resolveVendorInfo(sourceId);
+        DriftState activeState = activeStateRef.get();
+        if (activeState != null) {
+            activeState.vendor().set(vendorInfo);
+        }
+        String vendorName = vendorInfo.name();
+        String vendorOwnerUserId = vendorInfo.ownerUserId();
 
         double driftRatio = totalKeys > 0 ? ((double) sortedKeys.size() / totalKeys) : 0.0;
         int driftPercent = totalKeys > 0 ? (int) Math.round(driftRatio * 100) : 0;
@@ -293,10 +287,36 @@ public class SchemaDriftNotificationService {
         }
     }
 
+    private VendorInfo resolveVendorInfo(String sourceId) {
+        String vendorName = "Vendor";
+        String vendorOwnerUserId = null;
+        try {
+            Optional<SourceRecord> sourceOpt = sourceRepository.findById(sourceId);
+            if (sourceOpt.isPresent()) {
+                Optional<VendorRecord> vendorOpt = vendorRepository.findById(sourceOpt.get().vendorId());
+                if (vendorOpt.isPresent()) {
+                    vendorName = vendorOpt.get().vendorName();
+                    vendorOwnerUserId = vendorOpt.get().ownerUserId();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not resolve vendor info for source {}: {}", sourceId, e.getMessage());
+        }
+        return new VendorInfo(vendorName, vendorOwnerUserId);
+    }
+
     private void sendDriftDigest(String sourceId, boolean isTotalDrift, DriftState state) {
         long totalCount = state.eventCount().get();
         long suppressedCount = totalCount - state.initialEventCount();
         if (suppressedCount <= 0) return;
+
+        VendorInfo vendorInfo = state.vendor().get();
+        if (vendorInfo == null) {
+            vendorInfo = resolveVendorInfo(sourceId);
+            state.vendor().set(vendorInfo);
+        }
+        String vendorName = vendorInfo.name();
+        String vendorOwnerUserId = vendorInfo.ownerUserId();
 
         List<String> sortedKeys = new ArrayList<>(state.accumulatedKeys());
         Collections.sort(sortedKeys);
@@ -305,7 +325,7 @@ public class SchemaDriftNotificationService {
         String adminMessage = String.format(
                 "During the last 30-minute window, source '%s' (Vendor: %s) had %d drifted events (%d suppressed during window). Accumulated unmapped keys (%d): %s. " +
                         "Logs are preserved in raw_unmapped JSON. Review candidate mappings at /admin, and trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
-                sourceId, state.vendorName(), totalCount, suppressedCount, sortedKeys.size(), sortedKeys, sourceId);
+                sourceId, vendorName, totalCount, suppressedCount, sortedKeys.size(), sortedKeys, sourceId);
 
         String vendorTitle = String.format("Summary Digest: Schema Drift for %s", sourceId);
         String vendorMessage = String.format(
@@ -319,7 +339,7 @@ public class SchemaDriftNotificationService {
                 sourceId,
                 sourceId,
                 null,
-                state.vendorName(),
+                vendorName,
                 null,
                 "Drift digest summary",
                 totalCount,
@@ -329,7 +349,7 @@ public class SchemaDriftNotificationService {
                 "POST /v1/admin/sources/" + sourceId + "/replay"
         );
 
-        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, state.vendorOwnerUserId(), vendorTitle, vendorMessage, true);
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, vendorOwnerUserId, vendorTitle, vendorMessage, true);
     }
 
     public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {

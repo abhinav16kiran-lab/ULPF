@@ -446,13 +446,123 @@ class TableIngestionFailureNotificationServiceTest {
         assertTrue(recoveryAdminMsg.contains("fromTime"));
         assertTrue(recoveryAdminMsg.contains("toTime"));
         assertTrue(recoveryAdminMsg.contains("/replay"));
-        assertTrue(recoveryAdminMsg.contains(opened.startedAt().toString()));
+        LocalDateTime expectedFromTime = opened.startedAt().minusMinutes(service.getReplayMarginMinutes());
+        assertTrue(recoveryAdminMsg.contains(expectedFromTime.toString()));
 
         // Recovery Vendor Notification
         String recoveryVendorTitle = titles.get(3);
         String recoveryVendorMsg = messages.get(3);
         assertTrue(recoveryVendorTitle.contains("Ingestion Resumed"));
         assertTrue(recoveryVendorMsg.contains("Recov Source"));
+    }
+
+    @Test
+    void testRecoveryReplayWindow_IncludesMarginMinutes() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+        service.setReplayMarginMinutes(10); // Custom 10-minute margin
+
+        String sourceId = "src_margin_test";
+        String tableName = "events_margin_test";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        service.notifyTableMissing(sourceId, tableName, 100);
+
+        ArgumentCaptor<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> incidentCaptor =
+                ArgumentCaptor.forClass(com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord.class);
+        verify(incidentRepo).createIncident(incidentCaptor.capture());
+        LocalDateTime startedAt = incidentCaptor.getValue().startedAt();
+        LocalDateTime expectedFromTime = startedAt.minusMinutes(10);
+
+        service.markRecovered(sourceId, tableName);
+
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(eq("admin_1"), anyString(), msgCaptor.capture());
+
+        String recoveryMsg = msgCaptor.getAllValues().get(1);
+        assertTrue(recoveryMsg.contains(expectedFromTime.toString()), "Replay fromTime must equal startedAt - 10 minutes");
+    }
+
+    @Test
+    void testFailureRecoveryThenFailureInsideWindow_GivesTwoAlertsAndTwoIncidents() {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+
+        String sourceId = "src_flapping";
+        String tableName = "events_flapping";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // 1. Initial failure -> alert 1, incident 1
+        service.notifyTableMissing(sourceId, tableName, 10);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // 2. Incident recovers -> throttle cache removed for key
+        service.markRecovered(sourceId, tableName);
+        assertTrue(service.getOpenIncidents().isEmpty());
+
+        // 3. New failure immediately (inside the 30-min window, without calling clearCache()) -> alert 2, incident 2!
+        service.notifyTableMissing(sourceId, tableName, 15);
+        assertEquals(1, service.getOpenIncidents().size());
+
+        // Verify two separate incidents were created
+        ArgumentCaptor<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> captor =
+                ArgumentCaptor.forClass(com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord.class);
+        verify(incidentRepo, times(2)).createIncident(captor.capture());
+        List<com.ulpf.common.db.IngestionIncidentRepository.IncidentRecord> records = captor.getAllValues();
+        assertNotEquals(records.get(0).incidentId(), records.get(1).incidentId());
+        assertEquals(10, records.get(0).affectedCount());
+        assertEquals(15, records.get(1).affectedCount());
+
+        // Verify 2 failure alerts were dispatched to admin
+        verify(onboardingRepository, times(3)).saveNotification(eq("admin_1"), anyString(), anyString());
+        // (1st failure alert + 1 recovery alert + 2nd failure alert = 3 admin notifications)
+    }
+
+    @Test
+    void testTwoWindowsThenRecovery_IncidentTotalIncludesUndigestedEvents() throws Exception {
+        com.ulpf.common.db.IngestionIncidentRepository incidentRepo = mock(com.ulpf.common.db.IngestionIncidentRepository.class);
+        service.setIncidentRepository(incidentRepo);
+        service.setCooldownMs(20); // 20ms cooldown
+
+        String sourceId = "src_two_win_sum";
+        String tableName = "events_two_win_sum";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // Window 1: first failure (100 events)
+        service.notifyTableMissing(sourceId, tableName, 100);
+        // Window 1: second failure suppressed (20 events)
+        service.notifyTableMissing(sourceId, tableName, 20);
+
+        // Wait for window 1 to expire
+        Thread.sleep(35);
+
+        // Window 2: first failure of window 2 triggers digest for window 1 (adds 20 suppressed),
+        // and adds 50 for the new alert -> total should be 100 + 20 + 50 = 170
+        service.notifyTableMissing(sourceId, tableName, 50);
+
+        // Window 2: second failure suppressed (30 events) -> un-digested in window 2
+        service.notifyTableMissing(sourceId, tableName, 30);
+
+        // Recover before window 2 expires -> should add un-digested 30 events -> 170 + 30 = 200 total!
+        service.markRecovered(sourceId, tableName);
+
+        ArgumentCaptor<Long> countCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(incidentRepo, atLeastOnce()).updateCountsAndLastSeen(anyString(), countCaptor.capture(), any());
+        List<Long> capturedCounts = countCaptor.getAllValues();
+        // The last update before resolution should be 200
+        assertEquals(200L, capturedCounts.get(capturedCounts.size() - 1));
     }
 
     @Test
@@ -464,6 +574,15 @@ class TableIngestionFailureNotificationServiceTest {
 
         verifyNoInteractions(incidentRepo);
         verifyNoInteractions(onboardingRepository);
+    }
+
+    @Test
+    void testCooldownLoadsFromProperty() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "cooldownMs", 123456L);
+        assertEquals(123456L, service.getCooldownMs());
+
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "replayMarginMinutes", 15L);
+        assertEquals(15L, service.getReplayMarginMinutes());
     }
 
     @Test

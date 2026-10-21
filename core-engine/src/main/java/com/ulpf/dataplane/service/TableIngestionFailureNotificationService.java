@@ -35,7 +35,11 @@ public class TableIngestionFailureNotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(TableIngestionFailureNotificationService.class);
 
+    @Value("${ulpf.table-failure.cooldown-ms:1800000}")
     private long cooldownMs = 1800000L; // Default: 30 Minutes
+
+    @Value("${ulpf.table-failure.replay-margin-minutes:5}")
+    private long replayMarginMinutes = 5;
 
     @Value("${ulpf.alert.webhook-url:}")
     private String webhookUrl;
@@ -142,6 +146,14 @@ public class TableIngestionFailureNotificationService {
         return this.cooldownMs;
     }
 
+    public void setReplayMarginMinutes(long replayMarginMinutes) {
+        this.replayMarginMinutes = replayMarginMinutes;
+    }
+
+    public long getReplayMarginMinutes() {
+        return this.replayMarginMinutes;
+    }
+
     public void setWebhookUrl(String webhookUrl) {
         this.webhookUrl = webhookUrl;
         if (this.alertDispatcher != null) {
@@ -174,7 +186,11 @@ public class TableIngestionFailureNotificationService {
     }
 
     private void recordIncidentOnAlert(String cacheKey, String sourceId, String failureType, String tableName, int eventCount) {
-        openIncidents.computeIfAbsent(cacheKey, k -> {
+        openIncidents.compute(cacheKey, (k, existing) -> {
+            if (existing != null) {
+                existing.affectedCount().addAndGet(eventCount);
+                return existing;
+            }
             String incidentId = "inc-" + UUID.randomUUID().toString().substring(0, 8);
             LocalDateTime startedAt = LocalDateTime.now();
             ActiveIncident newInc = new ActiveIncident(incidentId, sourceId, failureType, tableName, startedAt, new AtomicLong(eventCount));
@@ -457,10 +473,10 @@ public class TableIngestionFailureNotificationService {
 
         ActiveIncident inc = openIncidents.get(sourceId + ":" + failureType);
         if (inc != null) {
-            inc.affectedCount().set(totalCount);
+            inc.affectedCount().addAndGet(suppressedCount);
             if (incidentRepository != null) {
                 try {
-                    incidentRepository.updateCountsAndLastSeen(inc.incidentId(), totalCount, LocalDateTime.now());
+                    incidentRepository.updateCountsAndLastSeen(inc.incidentId(), inc.affectedCount().get(), LocalDateTime.now());
                 } catch (Exception e) {
                     log.warn("Failed to update incident {} in database: {}", inc.incidentId(), e.getMessage());
                 }
@@ -514,40 +530,63 @@ public class TableIngestionFailureNotificationService {
         for (String key : toResolve) {
             ActiveIncident inc = openIncidents.remove(key);
             if (inc != null) {
+                // 1. Read throttle entry for that key: add un-digested events to incident total
+                ThrottleEntry throttle = throttleCache.get(key);
+                if (throttle != null) {
+                    long unDigested = throttle.accumulatedCount().get() - throttle.initialAlertCount();
+                    if (unDigested > 0) {
+                        inc.affectedCount().addAndGet(unDigested);
+                    }
+                }
+
+                // 2. Persist total and resolve incident in database
                 if (incidentRepository != null) {
                     try {
+                        incidentRepository.updateCountsAndLastSeen(inc.incidentId(), inc.affectedCount().get(), resolvedAt);
                         incidentRepository.resolveIncident(inc.incidentId(), resolvedAt);
                     } catch (Exception e) {
                         log.warn("Failed to mark incident {} resolved in database: {}", inc.incidentId(), e.getMessage());
                     }
                 }
 
-                SourceMeta meta = resolveSourceMeta(sourceId);
-                String adminTitle = String.format("[RECOVERED] Ingestion Recovered for %s (%s)", meta.sourceName(), inc.failureType());
-                String adminMessage = String.format(
-                        "Ingestion for source '%s' (table '%s') has recovered successfully at %s. " +
-                                "Total affected events during incident: %d (from %s to %s). " +
-                                "To backfill omitted events, trigger Replay via: " +
-                                "POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
-                        meta.sourceName(), inc.tableName() != null ? inc.tableName() : "N/A", resolvedAt,
-                        inc.affectedCount().get(), inc.startedAt(), resolvedAt,
-                        sourceId, inc.startedAt(), resolvedAt);
+                // 3. Clear throttleCache for this key so the next failure starts a fresh alert and incident
+                throttleCache.remove(key);
 
-                String vendorTitle = String.format("Ingestion Resumed: %s", meta.sourceName());
-                String vendorMessage = String.format(
-                        "Live log ingestion for source '%s' has recovered and is now streaming successfully. " +
-                                "Platform administrators will backfill any unmapped records from raw storage.",
-                        meta.sourceName());
+                // 4. Compute fromTime with replayMarginMinutes buffer
+                LocalDateTime fromTime = inc.startedAt().minusMinutes(replayMarginMinutes);
+                LocalDateTime toTime = resolvedAt;
 
-                AlertPayload payload = new AlertPayload(
-                        "RECOVERY_" + inc.failureType(), "INFO", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
-                        inc.tableName(), "Incident resolved", inc.affectedCount().get(), Collections.emptySet(),
-                        Instant.now(), adminMessage,
-                        String.format("POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
-                                sourceId, inc.startedAt(), resolvedAt)
-                );
+                // 5. & 6. Safe metadata lookup and dispatch
+                try {
+                    SourceMeta meta = resolveSourceMeta(sourceId);
+                    String adminTitle = String.format("[RECOVERED] Ingestion Recovered for %s (%s)", meta.sourceName(), inc.failureType());
+                    String adminMessage = String.format(
+                            "Ingestion for source '%s' (table '%s') has recovered successfully at %s. " +
+                                    "Total affected events during incident: %d (from %s to %s). " +
+                                    "To backfill omitted events, trigger Replay via: " +
+                                    "POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
+                            meta.sourceName(), inc.tableName() != null ? inc.tableName() : "N/A", resolvedAt,
+                            inc.affectedCount().get(), fromTime, toTime,
+                            sourceId, fromTime, toTime);
 
-                getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
+                    String vendorTitle = String.format("Ingestion Resumed: %s", meta.sourceName());
+                    String vendorMessage = String.format(
+                            "Live log ingestion for source '%s' has recovered and is now streaming successfully. " +
+                                    "Platform administrators will backfill any unmapped records from raw storage.",
+                            meta.sourceName());
+
+                    AlertPayload payload = new AlertPayload(
+                            "RECOVERY_" + inc.failureType(), "INFO", sourceId, meta.sourceName(), meta.vendorId(), meta.vendorName(),
+                            inc.tableName(), "Incident resolved", inc.affectedCount().get(), Collections.emptySet(),
+                            Instant.now(), adminMessage,
+                            String.format("POST /v1/admin/sources/%s/replay { \"fromTime\": \"%s\", \"toTime\": \"%s\" }",
+                                    sourceId, fromTime, toTime)
+                    );
+
+                    getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, meta.ownerUserId(), vendorTitle, vendorMessage);
+                } catch (Exception e) {
+                    log.warn("Failed to dispatch recovery alert for source {} (key {}): {}", sourceId, key, e.getMessage());
+                }
             }
         }
     }

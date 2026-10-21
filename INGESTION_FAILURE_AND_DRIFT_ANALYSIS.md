@@ -375,11 +375,20 @@ The system is implemented as specialized components working in tandem:
 * **Package**: `com.ulpf.dataplane.service`
 * **Responsibilities**:
   * Detecting table write failures, unprovisioned tables, missing target tables, unapproved mappings, and missing table columns.
-  * In-memory sliding-window throttling (default: 30 minutes, `ulpf.table-failure.cooldown-ms`) keyed by `sourceId:failureType`.
+  * In-memory sliding-window throttling (default: 30 minutes, configurable via `ulpf.table-failure.cooldown-ms`) keyed by `sourceId:failureType`.
   * Race-condition-free evaluation using `ConcurrentHashMap.compute()` returning atomic `EvaluationResult` without timestamp race conditions.
   * Atomic event drop accumulator (`accumulatedCount` and `initialAlertCount`).
+  * **Incident Count Accounting Rules**:
+    * Initial count is recorded at alert time via atomic `compute`: new incidents initialize with `eventCount`; successive alert windows accumulate via `affectedCount().addAndGet(eventCount)`.
+    * Suppressed events are added at digest time: `inc.affectedCount().addAndGet(suppressedCount)` and persisted to database via `updateCountsAndLastSeen`.
+    * Nothing is double-counted.
   * Periodic background digest delivery (`@Scheduled(fixedRate = 60000)` via `flushExpiredDigests()`) dispatched to both admins and vendor owners even if failures stop.
-  * Ingestion incident lifecycle tracking: opens incident on first alert of a window, updates counts at digest time, and resolves incident on recovery.
+  * **Recovery & Re-arm (`markRecovered`)**:
+    * Resolves incident on successful ClickHouse flush.
+    * Reads the throttle entry for the resolving key: if `accumulated - initialAlertCount > 0`, adds un-digested events from the current window to the incident total and updates database before resolving.
+    * Calls `throttleCache.remove(key)` to re-arm alerting: subsequent failures immediately start a fresh alert and incident without being suppressed by residual cooldown windows.
+    * Computes replay window with safety buffer: `fromTime = inc.startedAt().minusMinutes(replayMarginMinutes)` (default: 5 minutes, configurable via `ulpf.table-failure.replay-margin-minutes`). The first failing batch was received before the alert fired; because replay skips existing event IDs, this wider window is completely safe and guarantees zero boundary gaps.
+    * Safe execution: metadata lookup and alert dispatch in `markRecovered` are wrapped in `try/catch` and logged at `WARN`.
 * **Public Methods**:
   * `notifyTableMissing(String sourceId, String tableName, int eventCount)`
   * `notifyInsertFailure(String sourceId, String tableName, int eventCount, String errorMessage)`
@@ -393,8 +402,12 @@ The system is implemented as specialized components working in tandem:
 * **Package**: `com.ulpf.dataplane.service`
 * **Responsibilities**:
   * Detecting live log schema drift, total drift (100% unmapped keys), and high drift ratio (>30%).
-  * **30-Minute Sliding Cooldown Window** (`ulpf.schema-drift.cooldown-ms`, default: 1,800,000 ms, updated from 1 hour).
+  * **30-Minute Sliding Cooldown Window** (`ulpf.schema-drift.cooldown-ms`, default: 1,800,000 ms).
   * Keyed per source: `sourceId:SCHEMA_DRIFT` (and `sourceId:TOTAL_DRIFT` for immediate critical escalation).
+  * **Off-the-Hot-Path Vendor Lookups**:
+    * Suppressed drift events execute **zero database queries**.
+    * `DriftState` stores vendor details in `AtomicReference<VendorInfo>` initialized to `null`.
+    * Database lookups (`sourceRepository.findById`, `vendorRepository.findById`) only execute when an alert or summary digest actually needs to be dispatched.
   * `DriftState` tracking `firstSeen`, `lastSeen`, `eventCount`, and a set of accumulated unmapped keys (capped at 50).
   * Scheduled minute-interval digest flush (`flushExpiredDigests()`) summarizing drift counts and new keys over the 30-minute window.
 * **Public Methods**:
@@ -406,11 +419,22 @@ The system is implemented as specialized components working in tandem:
 * **Package**: `com.ulpf.dataplane.service`
 * **Responsibilities**:
   * Shared alert delivery hub used by both `TableIngestionFailureNotificationService` and `SchemaDriftNotificationService`.
-  * Resolves administrative users (`UserRepository`) and source vendor owners (`VendorRepository`).
-  * Dual-delivery routing: internal in-app notifications (`NotificationService` / `OnboardingRepository`) and external HTTP webhooks.
-  * **Jackson JSON Serialization**: Uses Jackson `ObjectMapper` for well-formed JSON payloads with quotes, special characters, and newlines properly escaped.
-  * **HMAC-SHA256 Webhook Signatures**: Computes HMAC-SHA256 signature using `ulpf.alert.webhook-secret` (`ULPF_ALERT_WEBHOOK_SECRET`) and transmits it in the `X-ULPF-Signature` header.
-  * Non-blocking, resilient HTTP client with 3-second timeout and 1 automatic retry.
+  * **Admin Deduplication**: In the non-`vendorFirst` branch, skips admin users whose ID matches `vendorOwnerUserId` so vendor owners who are also admins receive exactly 1 notification.
+  * **Dedicated Webhook Executor**:
+    * Uses a dedicated `ThreadPoolExecutor(2, 2, 0, SECONDS, new ArrayBlockingQueue<>(100), daemonThreadFactory, new ThreadPoolExecutor.DiscardPolicy())` with `@PreDestroy` shutdown.
+    * Webhook tasks are dispatched asynchronously via `CompletableFuture.runAsync(task, webhookExecutor)`.
+    * During alert storms or destination outage, excess webhooks are safely dropped instead of causing thread pool exhaustion or memory leaks.
+  * **Webhook URL Validation & Safe Host Logging**:
+    * Validates webhook URL at startup (`@PostConstruct`) and configuration (`setWebhookUrl`).
+    * Rejects malformed URLs or non-`http`/`https` schemes with a single `WARN` log and disables the webhook.
+    * Logs host only (`URI.create(webhookUrl).getHost()`) in all warning/failure messages, never exposing full URLs, paths, or query parameters.
+  * **HMAC-SHA256 Webhook Signatures with Timestamp**:
+    * Computes UNIX epoch timestamp: `ts = Instant.now().getEpochSecond()`.
+    * Signs `ts + "." + body` with HMAC-SHA256 using `ulpf.alert.webhook-secret`.
+    * Transmits two headers:
+      - `X-ULPF-Timestamp: <ts>`
+      - `X-ULPF-Signature: sha256=<hex>`
+    * Receivers reject timestamps older than 5 minutes for replay attack prevention.
 
 #### 4. `IngestionIncidentRepository` & Persistent Incident Tracking
 * **Package**: `com.ulpf.common.db`
@@ -439,23 +463,37 @@ The system is implemented as specialized components working in tandem:
 
 | Target File | Change Description |
 | :--- | :--- |
-| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Cache Fix**: `getColumnsForTable()` does not cache empty column lists, preventing permanent stale cache when tables are provisioned.<br>2. **Fallback**: When `rec.targetTable()` is null, if mapping exists, checks candidate table `constructTableName()` before alerting.<br>3. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, `notifyInsertFailure`, and `notifyMissingColumns`.<br>4. **Dynamic Column Validation & Cache**: Validates dynamic column names against `^[a-z_][a-z0-9_]*$` before ALTER, and caches failed ALTERs for 10 minutes to prevent repetitive failed ALTER attempts.<br>5. **Recovery Hook**: On successful batch insert, invokes `tableFailureNotificationService.markRecovered(sourceId, tableName)`. |
+| **`ClickHouseIngestionRepository.java`** | In `flushCanonical()`: <br>1. **Cache Fix**: `getColumnsForTable()` does not cache empty column lists, preventing permanent stale cache when tables are provisioned.<br>2. **Fallback**: When `rec.targetTable()` is null, if mapping exists, checks candidate table `constructTableName()` before alerting.<br>3. **Alerts**: Dispatches `notifyNoTargetTable`, `notifyMissingMapping`, `notifyTableMissing`, `notifyInsertFailure`, and `notifyMissingColumns`.<br>4. **Dynamic Column Validation & Cache**: Validates dynamic column names against `^[a-z_][a-z0-9_]*$` before ALTER, and caches failed ALTERs for 10 minutes to prevent repetitive failed ALTER attempts.<br>5. **Protected Recovery Hook**: `markRecovered` is moved outside the insert `try/catch` block, guarded by `if (inserted && tableFailureNotificationService != null)`. A failure in alert code can never cause a false `INSERT_FAILURE` alert. |
 | **`EventIngestionService.java`** | In `extractUnmappedFields()`: Computes total payload keys and evaluates `isTotalDrift` and drift percentage, passing them to `schemaDriftNotificationService.checkAndNotifyDrift()`. **Skips drift alerting when source has no active mapping** (`mappingOpt.isEmpty()`) to prevent redundant alerts alongside `notifyMissingMapping`. |
 | **`DynamicSchemaProvisioningService.java`** | Exposes `addColumnIfNotExists(tableName, columnName, columnType)` and invalidates ClickHouse column cache upon table creation or alteration. |
 
 #### 6. Automatic Remediation & Replay Workflow
 When an incident recovers:
-1. **Exact Timestamp Window**: The recovery notification provides the true start time of the incident (`started_at`) and resolution time (`resolved_at`) formatted in server `LocalDateTime`.
+1. **Safety Replay Margin Window**: The recovery notification provides `fromTime = started_at - margin` (default: 5 minutes) and resolution time (`resolved_at`) formatted in server `LocalDateTime`.
 2. **Ready-to-Execute Replay Command**:
    - The notification provides an actionable replay call:
      ```http
      POST /v1/admin/sources/{sourceId}/replay
      {
-       "fromTime": "2026-10-21T10:15:30.123",
+       "fromTime": "2026-10-21T10:10:30.123",
        "toTime": "2026-10-21T10:45:00.456"
      }
      ```
 3. **Execution**: The `ReplayBackfillService` streams the gap events from `ulpf_raw.raw_events`, applies the updated mapping, and populates the dynamic table without data loss.
+
+#### 7. Configuration Reference
+
+```yaml
+ulpf:
+  table-failure:
+    cooldown-ms: ${ULPF_TABLE_FAILURE_COOLDOWN_MS:1800000}          # 30-minute cooldown per source:failureType
+    replay-margin-minutes: ${ULPF_TABLE_FAILURE_REPLAY_MARGIN_MIN:5} # 5-minute replay buffer before incident started_at
+  schema-drift:
+    cooldown-ms: ${ULPF_SCHEMA_DRIFT_COOLDOWN_MS:1800000}          # 30-minute cooldown for drift alerts
+  alert:
+    webhook-url: ${ULPF_ALERT_WEBHOOK_URL:}                        # Optional outbound alert webhook (Slack, Teams, etc.)
+    webhook-secret: ${ULPF_ALERT_WEBHOOK_SECRET:}                  # Optional HMAC-SHA256 signing secret
+```
 
 ---
 
