@@ -34,6 +34,7 @@ public class ClickHouseIngestionRepository {
     private final JdbcTemplate clickhouseJdbcTemplate;
     private com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService;
     private com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService;
+    private com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
     private final Queue<RawEventRecord> bufferQueue = new ConcurrentLinkedQueue<>();
     private final Queue<CanonicalEventRecord> canonicalQueue = new ConcurrentLinkedQueue<>();
     
@@ -57,6 +58,11 @@ public class ClickHouseIngestionRepository {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTableFailureNotificationService(com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService) {
         this.tableFailureNotificationService = tableFailureNotificationService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDynamicSchemaProvisioningService(@org.springframework.context.annotation.Lazy com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+        this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
     }
 
     public record RawEventRecord(
@@ -128,18 +134,25 @@ public class ClickHouseIngestionRepository {
         if (tableName == null || tableName.isBlank() || clickhouseJdbcTemplate == null) {
             return java.util.Collections.emptyList();
         }
-        return tableColumnsCache.computeIfAbsent(tableName, tbl -> {
-            try {
-                return clickhouseJdbcTemplate.query(
-                        "SELECT name FROM system.columns WHERE database = 'ulpf_events' AND table = ? ORDER BY position ASC",
-                        (rs, rowNum) -> rs.getString("name"),
-                        tbl
-                );
-            } catch (Exception e) {
-                log.warn("Could not query columns for table ulpf_events.{}: {}", tbl, e.getMessage());
-                return java.util.Collections.emptyList();
+        List<String> cached = tableColumnsCache.get(tableName);
+        if (cached != null && !cached.isEmpty()) {
+            return cached;
+        }
+        try {
+            List<String> cols = clickhouseJdbcTemplate.query(
+                    "SELECT name FROM system.columns WHERE database = 'ulpf_events' AND table = ? ORDER BY position ASC",
+                    (rs, rowNum) -> rs.getString("name"),
+                    tableName
+            );
+            if (cols != null && !cols.isEmpty()) {
+                tableColumnsCache.put(tableName, cols);
+                return cols;
             }
-        });
+            return java.util.Collections.emptyList();
+        } catch (Exception e) {
+            log.warn("Could not query columns for table ulpf_events.{}: {}", tableName, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
     }
 
     /**
@@ -281,22 +294,43 @@ public class ClickHouseIngestionRepository {
 
         // Group batch by dynamic targetTable
         java.util.Map<String, List<CanonicalEventRecord>> byTable = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> missingMappingCounts = new java.util.HashMap<>();
         java.util.Map<String, Integer> missingTargetTableCounts = new java.util.HashMap<>();
 
         for (CanonicalEventRecord rec : batch) {
-            if (rec.targetTable() != null && !rec.targetTable().isBlank()) {
-                byTable.computeIfAbsent(rec.targetTable(), k -> new ArrayList<>()).add(rec);
-            } else {
+            String targetTable = rec.targetTable();
+            if (targetTable == null || targetTable.isBlank()) {
                 if (rec.sourceId() != null) {
-                    missingTargetTableCounts.merge(rec.sourceId(), 1, Integer::sum);
+                    if (rec.mappingVersion() != null) {
+                        missingTargetTableCounts.merge(rec.sourceId(), 1, Integer::sum);
+                        String candidateTable = dynamicSchemaProvisioningService != null
+                                ? dynamicSchemaProvisioningService.constructTableName(rec.sourceId())
+                                : "events_" + rec.sourceId().replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+                        if (!getColumnsForTable(candidateTable).isEmpty()) {
+                            targetTable = candidateTable;
+                        }
+                    } else {
+                        missingMappingCounts.merge(rec.sourceId(), 1, Integer::sum);
+                    }
                 }
+            }
+
+            if (targetTable != null && !targetTable.isBlank()) {
+                byTable.computeIfAbsent(targetTable, k -> new ArrayList<>()).add(rec);
+            } else {
                 log.debug("Skipping dynamic table insert for event {} (no targetTable defined)", rec.eventId());
             }
         }
 
-        if (tableFailureNotificationService != null && !missingTargetTableCounts.isEmpty()) {
-            missingTargetTableCounts.forEach((sourceId, count) ->
-                    tableFailureNotificationService.notifyNoTargetTable(sourceId, count));
+        if (tableFailureNotificationService != null) {
+            if (!missingMappingCounts.isEmpty()) {
+                missingMappingCounts.forEach((sourceId, count) ->
+                        tableFailureNotificationService.notifyMissingMapping(sourceId, count));
+            }
+            if (!missingTargetTableCounts.isEmpty()) {
+                missingTargetTableCounts.forEach((sourceId, count) ->
+                        tableFailureNotificationService.notifyNoTargetTable(sourceId, count));
+            }
         }
 
         for (java.util.Map.Entry<String, List<CanonicalEventRecord>> entry : byTable.entrySet()) {
@@ -324,14 +358,50 @@ public class ClickHouseIngestionRepository {
                     continue;
                 }
 
-                String colsSql = String.join(", ", cols);
-                String placeholders = String.join(", ", java.util.Collections.nCopies(cols.size(), "?"));
+                // Dynamic Column Reconciliation: Check if mapped fields in tableBatch are missing from ClickHouse table
+                Set<String> lowerCols = new HashSet<>();
+                for (String c : cols) {
+                    lowerCols.add(c.toLowerCase());
+                }
+                Set<String> missingCols = new HashSet<>();
+                for (CanonicalEventRecord r : tableBatch) {
+                    if (r.mappedFields() != null) {
+                        for (String f : r.mappedFields().keySet()) {
+                            if (f != null && !lowerCols.contains(f.toLowerCase())) {
+                                missingCols.add(f.toLowerCase());
+                            }
+                        }
+                    }
+                }
+
+                if (!missingCols.isEmpty()) {
+                    if (dynamicSchemaProvisioningService != null) {
+                        for (String missingCol : missingCols) {
+                            dynamicSchemaProvisioningService.addColumnIfNotExists(tableName, missingCol, "Nullable(String)");
+                        }
+                        invalidateColumnsCache(tableName);
+                        cols = getColumnsForTable(tableName);
+                    } else if (tableFailureNotificationService != null) {
+                        java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
+                        for (CanonicalEventRecord r : tableBatch) {
+                            if (r.sourceId() != null) {
+                                countsBySource.merge(r.sourceId(), 1, Integer::sum);
+                            }
+                        }
+                        countsBySource.forEach((sourceId, count) ->
+                                tableFailureNotificationService.notifyMissingColumns(sourceId, tableName, missingCols, count));
+                    }
+                }
+
+                final List<String> insertCols = cols;
+                String colsSql = String.join(", ", insertCols);
+                String placeholders = String.join(", ", java.util.Collections.nCopies(insertCols.size(), "?"));
                 String sql = "INSERT INTO ulpf_events." + tableName + " (" + colsSql + ") VALUES (" + placeholders + ")";
 
                 clickhouseJdbcTemplate.batchUpdate(sql, tableBatch, tableBatch.size(), (ps, record) -> {
-                    for (int i = 0; i < cols.size(); i++) {
+                    for (int i = 0; i < insertCols.size(); i++) {
                         int paramIndex = i + 1;
-                        String col = cols.get(i).toLowerCase();
+                        String col = insertCols.get(i).toLowerCase();
                         switch (col) {
                             case "event_id" -> ps.setString(paramIndex, record.eventId());
                             case "lineage_id" -> ps.setString(paramIndex, record.lineageId());

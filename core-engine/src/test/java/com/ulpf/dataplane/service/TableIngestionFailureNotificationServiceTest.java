@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -214,4 +215,80 @@ class TableIngestionFailureNotificationServiceTest {
         // Total notifications: 1 initial + 1 digest + 1 new window initial = 3
         verify(onboardingRepository, times(3)).saveNotification(anyString(), anyString(), anyString());
     }
+
+    @Test
+    void testNotifyMissingMapping_DispatchesExpectedAlerts() {
+        String sourceId = "src_unmapped_stream";
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        service.notifyMissingMapping(sourceId, 50);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(onboardingRepository, times(1)).saveNotification(eq("admin_1"), titleCaptor.capture(), msgCaptor.capture());
+
+        assertTrue(titleCaptor.getValue().contains("[ONBOARDING REQUIRED]"));
+        assertTrue(msgCaptor.getValue().contains("no approved schema mapping"));
+        assertTrue(msgCaptor.getValue().contains("POST /v1/admin/sources/src_unmapped_stream/replay"));
+    }
+
+    @Test
+    void testNotifyMissingColumns_DispatchesExpectedAlerts() {
+        String sourceId = "src_col_mismatch";
+        String tableName = "events_col_mismatch";
+        Set<String> missingCols = Set.of("client_ip", "geo_city");
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        service.notifyMissingColumns(sourceId, tableName, missingCols, 75);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(onboardingRepository, times(1)).saveNotification(eq("admin_1"), titleCaptor.capture(), msgCaptor.capture());
+
+        assertTrue(titleCaptor.getValue().contains("[SCHEMA MISMATCH]"));
+        assertTrue(msgCaptor.getValue().contains("client_ip"));
+        assertTrue(msgCaptor.getValue().contains("geo_city"));
+        assertTrue(msgCaptor.getValue().contains("75"));
+    }
+
+    @Test
+    void testScheduledDigestDispatchesForExpiredWindowWithoutNewEvents() {
+        service.setCooldownMs(50L); // 50ms cooldown for fast test
+        String sourceId = "src_quiet_recovery";
+        String tableName = "events_quiet_recovery";
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.empty());
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(List.of(
+                new User("admin_1", "admin", "Admin", "hash", Role.ADMIN, LocalDateTime.now())
+        ));
+
+        // Initial alert
+        service.notifyTableMissing(sourceId, tableName, 10);
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        // Suppressed event
+        service.notifyTableMissing(sourceId, tableName, 40);
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        // Wait for cooldown to expire without any subsequent events arriving
+        try {
+            Thread.sleep(70);
+        } catch (InterruptedException ignored) {}
+
+        // Scheduled worker runs
+        service.flushExpiredDigests();
+
+        // Digest MUST be sent for the 40 suppressed events!
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+    }
 }
+

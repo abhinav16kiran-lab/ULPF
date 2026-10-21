@@ -227,5 +227,48 @@ class ClickHouseIngestionRepositoryTest {
         );
         Mockito.verifyNoInteractions(failureNotificationService);
     }
+
+    @Test
+    void testFlushCanonical_MissingMapping_TriggersNotifyMissingMapping() {
+        // Event has mappingVersion = null and targetTable = null (Scenario 5)
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        null, "evt-5", "lin-5", "ven-5", "src-no-mapping", null,
+                        LocalDateTime.now(), 5.0, "{}", "{}", java.util.Collections.emptyMap()
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        verify(failureNotificationService).notifyMissingMapping("src-no-mapping", 1);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void testFlushCanonical_MissingColumns_ReconcilesViaDynamicSchemaProvisioningService() {
+        com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaService =
+                Mockito.mock(com.ulpf.mapping.service.DynamicSchemaProvisioningService.class);
+        ingestionRepository.setDynamicSchemaProvisioningService(dynamicSchemaService);
+
+        // ClickHouse table currently only has event_id and timestamp
+        Mockito.when(clickhouseJdbcTemplate.query(
+                Mockito.contains("system.columns"),
+                Mockito.any(org.springframework.jdbc.core.RowMapper.class),
+                Mockito.eq("events_evolution_tbl")
+        )).thenReturn(List.of("event_id", "timestamp"), List.of("event_id", "timestamp", "client_ip"));
+
+        ClickHouseIngestionRepository.CanonicalEventRecord record =
+                new ClickHouseIngestionRepository.CanonicalEventRecord(
+                        "events_evolution_tbl", "evt-6", "lin-6", "ven-6", "src-evolution", 1,
+                        LocalDateTime.now(), 6.0, "{}", "{}", java.util.Map.of("client_ip", "192.168.1.1")
+                );
+
+        ingestionRepository.enqueueCanonical(record);
+        ingestionRepository.flushCanonical();
+
+        // Verify dynamic column addition was triggered for client_ip!
+        verify(dynamicSchemaService).addColumnIfNotExists("events_evolution_tbl", "client_ip", "Nullable(String)");
+    }
 }
+
 

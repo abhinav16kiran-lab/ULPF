@@ -52,6 +52,19 @@ public class SchemaDriftNotificationService {
         this.userRepository = userRepository;
     }
 
+    private com.ulpf.controlplane.service.NotificationService notificationService;
+
+    @org.springframework.beans.factory.annotation.Value("${ulpf.alert.webhook-url:}")
+    private String webhookUrl;
+
+    public void setNotificationService(com.ulpf.controlplane.service.NotificationService notificationService) {
+        this.notificationService = notificationService;
+    }
+
+    public void setWebhookUrl(String webhookUrl) {
+        this.webhookUrl = webhookUrl;
+    }
+
     public void setCooldownMs(long cooldownMs) {
         this.cooldownMs = cooldownMs;
     }
@@ -83,13 +96,17 @@ public class SchemaDriftNotificationService {
         String cacheKey = sourceId + ":" + (isTotalDrift ? "TOTAL_DRIFT:" : "") + String.join(",", sortedKeys);
         long now = System.currentTimeMillis();
 
-        Long lastNotified = lastNotifiedCache.get(cacheKey);
-        if (lastNotified != null && (now - lastNotified) < cooldownMs) {
+        Long computed = lastNotifiedCache.compute(cacheKey, (k, prev) -> {
+            if (prev != null && (now - prev) < cooldownMs) {
+                return prev;
+            }
+            return now;
+        });
+
+        if (computed != now) {
             log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
             return;
         }
-
-        lastNotifiedCache.put(cacheKey, now);
 
         String vendorName = "Vendor";
         String vendorOwnerUserId = null;
@@ -108,6 +125,7 @@ public class SchemaDriftNotificationService {
         }
 
         int driftPercent = totalKeys > 0 ? (int) Math.round(((double) sortedKeys.size() / totalKeys) * 100) : 0;
+        java.time.Instant driftInstant = java.time.Instant.now();
 
         String vendorTitle;
         String vendorMessage;
@@ -117,44 +135,44 @@ public class SchemaDriftNotificationService {
         if (isTotalDrift) {
             vendorTitle = "[CRITICAL] Total Schema Drift: " + sourceId;
             vendorMessage = String.format(
-                    "All payload fields %s for source %s failed to match your approved schema mapping. " +
+                    "All payload fields %s for source %s failed to match your approved schema mapping (detected at: %s). " +
                             "All analytical table columns are currently NULL. Logs are safely preserved in raw_unmapped JSON. " +
                             "Please contact your ULPF administrator or update your mapping schema. " +
                             "Once updated, administrators can trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
-                    sortedKeys, sourceId, sourceId);
+                    sortedKeys, sourceId, driftInstant, sourceId);
 
             adminTitle = "[CRITICAL ACTION REQUIRED] Total Schema Drift: " + sourceId;
             adminMessage = String.format(
-                    "100%% of payload fields %s for source %s (Vendor: %s) failed to match the approved schema mapping! " +
+                    "100%% of payload fields %s for source %s (Vendor: %s) failed to match the approved schema mapping (detected at: %s)! " +
                             "All analytical table columns are currently NULL. Logs are preserved in raw_unmapped JSON. " +
                             "Action: Update the mapping schema at /admin and trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
-                    sortedKeys, sourceId, vendorName, sourceId);
-        } else if (driftPercent >= 30) {
+                    sortedKeys, sourceId, vendorName, driftInstant, sourceId);
+        } else if (driftPercent > 30 || (totalKeys > 0 && ((double) sortedKeys.size() / totalKeys) > 0.30)) {
             vendorTitle = String.format("Schema Drift Alert (%d%%): %s", driftPercent, sourceId);
             vendorMessage = String.format(
-                    "%d%% of vendor payload fields %s in source %s were unmapped. " +
+                    "%d%% of vendor payload fields %s in source %s were unmapped (detected at: %s). " +
                             "The fields are safely preserved in raw_unmapped JSON storage without data loss. " +
                             "If you wish to promote these fields to canonical columns, please contact your ULPF Administrator.",
-                    driftPercent, sortedKeys, sourceId);
+                    driftPercent, sortedKeys, sourceId, driftInstant);
 
             adminTitle = String.format("[ADMIN ACTION REQUIRED] High Schema Drift (%d%%): %s", driftPercent, sourceId);
             adminMessage = String.format(
-                    "Source %s (Vendor: %s) exceeded the schema drift threshold with %d%% of fields unmapped (%s). " +
+                    "Source %s (Vendor: %s) exceeded the schema drift threshold with %d%% of fields unmapped (%s, detected at: %s). " +
                             "Fields are preserved in raw_unmapped JSON. Inspect candidate mappings at /admin, and trigger Replay via POST /v1/admin/sources/%s/replay to backfill once promoted.",
-                    sourceId, vendorName, driftPercent, sortedKeys, sourceId);
+                    sourceId, vendorName, driftPercent, sortedKeys, driftInstant, sourceId);
         } else {
             vendorTitle = "Schema Drift Alert: " + sourceId;
             vendorMessage = String.format(
-                    "New unmapped vendor payload fields %s were detected in your live log stream for source %s. " +
+                    "New unmapped vendor payload fields %s were detected in your live log stream for source %s (detected at: %s). " +
                             "The fields are safely preserved in raw_unmapped JSON storage without data loss. " +
                             "If you wish to promote these fields to canonical columns, please contact your ULPF Administrator.",
-                    sortedKeys, sourceId);
+                    sortedKeys, sourceId, driftInstant);
 
             adminTitle = "[ADMIN ACTION REQUIRED] Schema Drift: " + sourceId;
             adminMessage = String.format(
-                    "Source %s (Vendor: %s) sent new unmapped fields %s in live ingestion. " +
+                    "Source %s (Vendor: %s) sent new unmapped fields %s in live ingestion (detected at: %s). " +
                             "Fields are preserved in raw_unmapped JSON. Open the Admin Control Panel (/admin) to inspect candidate mappings and promote fields.",
-                    sourceId, vendorName, sortedKeys);
+                    sourceId, vendorName, sortedKeys, driftInstant);
         }
 
         // 1. Dispatch to Vendor Owner (if found)
@@ -169,6 +187,8 @@ public class SchemaDriftNotificationService {
                 saveNotificationSafely(adminId, adminTitle, adminMessage);
             }
         }
+
+        sendWebhookAlertSafely(adminTitle, adminMessage, sourceId, isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT");
     }
 
     public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {
@@ -285,10 +305,39 @@ public class SchemaDriftNotificationService {
 
     private void saveNotificationSafely(String userId, String title, String message) {
         try {
-            onboardingRepository.saveNotification(userId, title, message);
+            if (notificationService != null) {
+                notificationService.createNotification(userId, title, message);
+            } else if (onboardingRepository != null) {
+                onboardingRepository.saveNotification(userId, title, message);
+            }
             log.info("Dispatched Schema Drift Notification to user {}: {}", userId, title);
         } catch (Exception e) {
             log.warn("Failed to persist notification for user {}: {}", userId, e.getMessage());
+        }
+    }
+
+    private void sendWebhookAlertSafely(String title, String message, String sourceId, String alertType) {
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            return;
+        }
+        try {
+            log.info("Dispatching webhook drift alert to [{}]: type={}, sourceId={}, title={}", webhookUrl, alertType, sourceId, title);
+            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
+            String payload = String.format("{\"alertType\":\"%s\",\"sourceId\":\"%s\",\"title\":\"%s\",\"timestamp\":\"%s\"}",
+                    alertType, sourceId, title.replace("\"", "\\\""), java.time.Instant.now().toString());
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(webhookUrl))
+                    .header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(payload))
+                    .timeout(java.time.Duration.ofSeconds(3))
+                    .build();
+            client.sendAsync(request, java.net.http.HttpResponse.BodyHandlers.discarding())
+                    .exceptionally(ex -> {
+                        log.debug("Webhook drift alert delivery failed to {}: {}", webhookUrl, ex.getMessage());
+                        return null;
+                    });
+        } catch (Exception e) {
+            log.debug("Could not dispatch webhook drift alert: {}", e.getMessage());
         }
     }
 

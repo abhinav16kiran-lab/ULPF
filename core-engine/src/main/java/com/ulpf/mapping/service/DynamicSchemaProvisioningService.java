@@ -25,10 +25,16 @@ public class DynamicSchemaProvisioningService {
 
     private final JdbcTemplate clickhouseJdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private com.ulpf.common.db.ClickHouseIngestionRepository clickhouseIngestionRepository;
 
     public DynamicSchemaProvisioningService(
             @Autowired(required = false) @Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+    }
+
+    @Autowired(required = false)
+    public void setClickhouseIngestionRepository(@org.springframework.context.annotation.Lazy com.ulpf.common.db.ClickHouseIngestionRepository clickhouseIngestionRepository) {
+        this.clickhouseIngestionRepository = clickhouseIngestionRepository;
     }
 
     /**
@@ -111,6 +117,9 @@ public class DynamicSchemaProvisioningService {
                         }
                     }
                 }
+                if (clickhouseIngestionRepository != null) {
+                    clickhouseIngestionRepository.invalidateColumnsCache(bestMatchingTable);
+                }
                 return bestMatchingTable;
             }
 
@@ -141,6 +150,10 @@ public class DynamicSchemaProvisioningService {
             log.info("Creating new dynamic ClickHouse table 'ulpf_events.{}' for source '{}'...", newTableName, sourceName);
             clickhouseJdbcTemplate.execute(ddl.toString());
             log.info("Successfully created dynamic ClickHouse table 'ulpf_events.{}'", newTableName);
+
+            if (clickhouseIngestionRepository != null) {
+                clickhouseIngestionRepository.invalidateColumnsCache(newTableName);
+            }
 
             return newTableName;
 
@@ -283,12 +296,12 @@ public class DynamicSchemaProvisioningService {
         return result;
     }
 
-    private String normalizeColumnName(String canonicalField) {
+    public String normalizeColumnName(String canonicalField) {
         if (canonicalField == null) return "";
         return canonicalField.replace('.', '_').replace('-', '_').trim().toLowerCase();
     }
 
-    private String sanitizeTableName(String sourceName) {
+    public String sanitizeTableName(String sourceName) {
         if (sourceName == null) return "";
         String clean = sourceName.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
         clean = clean.replaceAll("_+", "_").replaceAll("^_+|_+$", "");
@@ -361,6 +374,9 @@ public class DynamicSchemaProvisioningService {
             String sql = "ALTER TABLE ulpf_events." + tableName + " ADD COLUMN IF NOT EXISTS " + cleanCol + " " + type;
             log.info("Executing dynamic column addition: {}", sql);
             clickhouseJdbcTemplate.execute(sql);
+            if (clickhouseIngestionRepository != null) {
+                clickhouseIngestionRepository.invalidateColumnsCache(tableName);
+            }
             return true;
         } catch (Exception e) {
             log.warn("Failed to add column {} to ulpf_events.{}: {}", cleanCol, tableName, e.getMessage());
