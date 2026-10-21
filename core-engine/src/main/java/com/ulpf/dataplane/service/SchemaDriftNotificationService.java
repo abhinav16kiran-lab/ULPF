@@ -4,61 +4,76 @@ import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.SourceRepository;
 import com.ulpf.common.db.SourceRepository.SourceRecord;
 import com.ulpf.common.db.UserRepository;
-import com.ulpf.common.db.VendorRepository;
-import com.ulpf.common.db.VendorRepository.VendorRecord;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
+import com.ulpf.common.db.VendorRepository;
+import com.ulpf.common.db.VendorRepository.VendorRecord;
+import com.ulpf.controlplane.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.time.Instant;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Service for detecting live log schema drift and notifying vendors and admins
- * with role-tailored messages.
- * Features in-memory deduplication caching with a 15-minute TTL per source and
- * key set.
+ * Service responsible for detecting and dispatching schema drift notifications
+ * when live payload fields deviate from active schema mappings.
+ *
+ * Implements 30-minute window throttling per source with digest summaries for suppressed events.
  */
 @Service
 public class SchemaDriftNotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaDriftNotificationService.class);
-    @org.springframework.beans.factory.annotation.Value("${ulpf.schema-drift.cooldown-ms:3600000}")
-    private long cooldownMs = 3600000L; // Default 1 Hour (configurable via ulpf.schema-drift.cooldown-ms)
+
+    @Value("${ulpf.schema-drift.cooldown-ms:1800000}")
+    private long cooldownMs = 1800000L; // Default: 30 minutes
 
     private final SourceRepository sourceRepository;
     private final VendorRepository vendorRepository;
     private final OnboardingRepository onboardingRepository;
     private final UserRepository userRepository;
 
-    private final Map<String, Long> lastNotifiedCache = new ConcurrentHashMap<>();
+    private NotificationService notificationService;
+
+    @Value("${ulpf.alert.webhook-url:}")
+    private String webhookUrl;
+
+    @Autowired(required = false)
+    private AlertDispatcher alertDispatcher;
+
+    public record DriftState(
+            long firstSeen,
+            AtomicLong lastSeen,
+            int initialEventCount,
+            AtomicLong eventCount,
+            Set<String> accumulatedKeys,
+            String vendorName,
+            String vendorOwnerUserId
+    ) {}
+
+    // Throttle state per sourceId:SCHEMA_DRIFT or sourceId:TOTAL_DRIFT
+    private final Map<String, DriftState> driftStateCache = new ConcurrentHashMap<>();
     private final Set<String> notifiedHistoricalFallbacks = ConcurrentHashMap.newKeySet();
 
     public SchemaDriftNotificationService(
             SourceRepository sourceRepository,
             VendorRepository vendorRepository,
             OnboardingRepository onboardingRepository,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) UserRepository userRepository) {
+            @Autowired(required = false) UserRepository userRepository) {
         this.sourceRepository = sourceRepository;
         this.vendorRepository = vendorRepository;
         this.onboardingRepository = onboardingRepository;
         this.userRepository = userRepository;
     }
-
-    private com.ulpf.controlplane.service.NotificationService notificationService;
-
-    @org.springframework.beans.factory.annotation.Value("${ulpf.alert.webhook-url:}")
-    private String webhookUrl;
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private AlertDispatcher alertDispatcher;
 
     public void setAlertDispatcher(AlertDispatcher alertDispatcher) {
         this.alertDispatcher = alertDispatcher;
@@ -74,8 +89,8 @@ public class SchemaDriftNotificationService {
         return this.alertDispatcher;
     }
 
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    public void setNotificationService(com.ulpf.controlplane.service.NotificationService notificationService) {
+    @Autowired(required = false)
+    public void setNotificationService(NotificationService notificationService) {
         this.notificationService = notificationService;
         if (this.alertDispatcher != null) {
             this.alertDispatcher.setNotificationService(notificationService);
@@ -84,6 +99,9 @@ public class SchemaDriftNotificationService {
 
     public void setWebhookUrl(String webhookUrl) {
         this.webhookUrl = webhookUrl;
+        if (this.alertDispatcher != null) {
+            this.alertDispatcher.setWebhookUrl(webhookUrl);
+        }
     }
 
     public void setCooldownMs(long cooldownMs) {
@@ -97,7 +115,6 @@ public class SchemaDriftNotificationService {
     /**
      * Inspects unmapped keys from a live log event and dispatches role-tailored
      * notifications to vendor and admin.
-     * Deduplicates alerts per sourceId and key set within a cooldown window.
      */
     public void checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys) {
         checkAndNotifyDrift(sourceId, unmappedKeys, unmappedKeys != null ? unmappedKeys.size() : 0, false);
@@ -105,6 +122,7 @@ public class SchemaDriftNotificationService {
 
     /**
      * Overloaded method with total drift detection and unmapped ratio threshold support.
+     * Uses 30-minute window per sourceId with atomic compute and digest support.
      */
     public void checkAndNotifyDrift(String sourceId, Set<String> unmappedKeys, int totalKeys, boolean isTotalDrift) {
         if (sourceId == null || unmappedKeys == null || unmappedKeys.isEmpty()) {
@@ -114,22 +132,9 @@ public class SchemaDriftNotificationService {
         List<String> sortedKeys = new ArrayList<>(unmappedKeys);
         Collections.sort(sortedKeys);
 
-        String cacheKey = sourceId + ":" + (isTotalDrift ? "TOTAL_DRIFT:" : "") + String.join(",", sortedKeys);
+        String cacheKey = sourceId + ":" + (isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT");
         long now = System.currentTimeMillis();
-        java.util.concurrent.atomic.AtomicBoolean shouldNotify = new java.util.concurrent.atomic.AtomicBoolean(false);
-
-        lastNotifiedCache.compute(cacheKey, (k, prev) -> {
-            if (prev != null && (now - prev) < cooldownMs) {
-                return prev;
-            }
-            shouldNotify.set(true);
-            return now;
-        });
-
-        if (!shouldNotify.get()) {
-            log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
-            return;
-        }
+        Instant driftInstant = Instant.now();
 
         String vendorName = "Vendor";
         String vendorOwnerUserId = null;
@@ -147,8 +152,52 @@ public class SchemaDriftNotificationService {
             log.warn("Could not resolve vendor info for source {}: {}", sourceId, e.getMessage());
         }
 
-        int driftPercent = totalKeys > 0 ? (int) Math.round(((double) sortedKeys.size() / totalKeys) * 100) : 0;
-        java.time.Instant driftInstant = java.time.Instant.now();
+        final String finalVendorName = vendorName;
+        final String finalVendorOwnerUserId = vendorOwnerUserId;
+
+        AtomicBoolean shouldNotify = new AtomicBoolean(false);
+        AtomicReference<DriftState> expiredRef = new AtomicReference<>();
+
+        driftStateCache.compute(cacheKey, (k, state) -> {
+            if (state != null && (now - state.firstSeen()) < cooldownMs) {
+                // Inside window: accumulate counts and unmapped keys (cap at 50)
+                state.eventCount().incrementAndGet();
+                state.lastSeen().set(now);
+                for (String key : sortedKeys) {
+                    if (state.accumulatedKeys().size() < 50) {
+                        state.accumulatedKeys().add(key);
+                    }
+                }
+                return state;
+            }
+
+            // Window expired or new entry: start new window
+            shouldNotify.set(true);
+            if (state != null) {
+                expiredRef.set(state);
+            }
+            Set<String> initialKeys = ConcurrentHashMap.newKeySet();
+            for (String key : sortedKeys) {
+                if (initialKeys.size() < 50) {
+                    initialKeys.add(key);
+                }
+            }
+            return new DriftState(now, new AtomicLong(now), 1, new AtomicLong(1), initialKeys, finalVendorName, finalVendorOwnerUserId);
+        });
+
+        // If an expired window was closed, send its summary digest
+        DriftState expired = expiredRef.get();
+        if (expired != null && expired.eventCount().get() > expired.initialEventCount()) {
+            sendDriftDigest(sourceId, cacheKey.endsWith("TOTAL_DRIFT"), expired);
+        }
+
+        if (!shouldNotify.get()) {
+            log.debug("Schema drift notification suppressed (cooldown active) for key: {}", cacheKey);
+            return;
+        }
+
+        double driftRatio = totalKeys > 0 ? ((double) sortedKeys.size() / totalKeys) : 0.0;
+        int driftPercent = totalKeys > 0 ? (int) Math.round(driftRatio * 100) : 0;
 
         String vendorTitle;
         String vendorMessage;
@@ -170,7 +219,7 @@ public class SchemaDriftNotificationService {
                             "All analytical table columns are currently NULL. Logs are preserved in raw_unmapped JSON. " +
                             "Action: Update the mapping schema at /admin and trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
                     sortedKeys, sourceId, vendorName, driftInstant, sourceId);
-        } else if (driftPercent > 30 || (totalKeys > 0 && ((double) sortedKeys.size() / totalKeys) > 0.30)) {
+        } else if (driftRatio > 0.30) {
             vendorTitle = String.format("Schema Drift Alert (%d%%): %s", driftPercent, sourceId);
             vendorMessage = String.format(
                     "%d%% of vendor payload fields %s in source %s were unmapped (detected at: %s). " +
@@ -200,7 +249,7 @@ public class SchemaDriftNotificationService {
 
         AlertPayload payload = new AlertPayload(
                 isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT",
-                isTotalDrift ? "CRITICAL" : (driftPercent > 30 ? "WARN" : "INFO"),
+                isTotalDrift ? "CRITICAL" : (driftRatio > 0.30 ? "WARN" : "INFO"),
                 sourceId,
                 sourceId,
                 null,
@@ -217,13 +266,81 @@ public class SchemaDriftNotificationService {
         getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, vendorOwnerUserId, vendorTitle, vendorMessage, true);
     }
 
-    public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {
-        if (sourceId == null || unmappedKeys == null || unmappedKeys.isEmpty()) return false;
-        List<String> sortedKeys = new ArrayList<>(unmappedKeys);
+    /**
+     * Periodic scheduled check running every 60 seconds to dispatch pending drift digests
+     * when the throttling window expires.
+     */
+    @Scheduled(fixedRate = 60000)
+    public void flushExpiredDigests() {
+        long now = System.currentTimeMillis();
+        for (String key : driftStateCache.keySet()) {
+            AtomicReference<DriftState> removedRef = new AtomicReference<>();
+            driftStateCache.computeIfPresent(key, (k, state) -> {
+                if ((now - state.firstSeen()) >= cooldownMs) {
+                    removedRef.set(state);
+                    return null;
+                }
+                return state;
+            });
+
+            DriftState removed = removedRef.get();
+            if (removed != null && removed.eventCount().get() > removed.initialEventCount()) {
+                String[] parts = key.split(":", 2);
+                String sourceId = parts[0];
+                boolean isTotal = parts.length > 1 && parts[1].equals("TOTAL_DRIFT");
+                sendDriftDigest(sourceId, isTotal, removed);
+            }
+        }
+    }
+
+    private void sendDriftDigest(String sourceId, boolean isTotalDrift, DriftState state) {
+        long totalCount = state.eventCount().get();
+        long suppressedCount = totalCount - state.initialEventCount();
+        if (suppressedCount <= 0) return;
+
+        List<String> sortedKeys = new ArrayList<>(state.accumulatedKeys());
         Collections.sort(sortedKeys);
-        String cacheKey = sourceId + ":" + String.join(",", sortedKeys);
-        Long lastNotified = lastNotifiedCache.get(cacheKey);
-        return lastNotified != null && (System.currentTimeMillis() - lastNotified) < cooldownMs;
+
+        String adminTitle = String.format("[DIGEST] Schema Drift Summary for %s (%s)", sourceId, isTotalDrift ? "TOTAL_DRIFT" : "SCHEMA_DRIFT");
+        String adminMessage = String.format(
+                "During the last 30-minute window, source '%s' (Vendor: %s) had %d drifted events (%d suppressed during window). Accumulated unmapped keys (%d): %s. " +
+                        "Logs are preserved in raw_unmapped JSON. Review candidate mappings at /admin, and trigger Replay via POST /v1/admin/sources/%s/replay to backfill.",
+                sourceId, state.vendorName(), totalCount, suppressedCount, sortedKeys.size(), sortedKeys, sourceId);
+
+        String vendorTitle = String.format("Summary Digest: Schema Drift for %s", sourceId);
+        String vendorMessage = String.format(
+                "During the last 30-minute window, your stream for source %s had %d drifted events with unmapped fields %s. " +
+                        "All fields are safely preserved in raw storage.",
+                sourceId, totalCount, sortedKeys);
+
+        AlertPayload payload = new AlertPayload(
+                isTotalDrift ? "DIGEST_TOTAL_DRIFT" : "DIGEST_SCHEMA_DRIFT",
+                "INFO",
+                sourceId,
+                sourceId,
+                null,
+                state.vendorName(),
+                null,
+                "Drift digest summary",
+                totalCount,
+                state.accumulatedKeys(),
+                Instant.ofEpochMilli(state.firstSeen()),
+                adminMessage,
+                "POST /v1/admin/sources/" + sourceId + "/replay"
+        );
+
+        getAlertDispatcher().dispatchAlert(payload, adminTitle, adminMessage, state.vendorOwnerUserId(), vendorTitle, vendorMessage, true);
+    }
+
+    public boolean isDriftAlertThrottled(String sourceId, Set<String> unmappedKeys) {
+        if (sourceId == null) return false;
+        String cacheKey = sourceId + ":SCHEMA_DRIFT";
+        DriftState state = driftStateCache.get(cacheKey);
+        return state != null && (System.currentTimeMillis() - state.firstSeen()) < cooldownMs;
+    }
+
+    public Map<String, DriftState> getDriftStateCache() {
+        return driftStateCache;
     }
 
     /**
@@ -241,7 +358,6 @@ public class SchemaDriftNotificationService {
 
         String cacheKey = sourceId + ":v" + historicalVersion + ":" + String.join(",", sortedKeys);
 
-        // Permanently check & register notification state to ensure it is sent ONLY ONCE
         if (!notifiedHistoricalFallbacks.add(cacheKey)) {
             log.debug("Historical version fallback notification suppressed (already notified once) for key: {}", cacheKey);
             return;
@@ -258,14 +374,14 @@ public class SchemaDriftNotificationService {
                 }
             }
         } catch (Exception e) {
-            log.warn("Could not resolve vendor owner for historical version fallback alert (source {}): {}", sourceId, e.getMessage());
+            log.warn("Could not resolve vendor owner for historical fallback alert (source {}): {}", sourceId, e.getMessage());
         }
 
         if (vendorOwnerUserId != null) {
             String title = "Schema Version Fallback Alert: " + sourceId;
             String message = String.format(
                     "Log payload fields %s for source %s fell back to historical mapping version v%d during live ingestion. " +
-                    "To prevent schema version mismatch, please update your log stream format to match the active mapping version.",
+                            "To prevent schema version mismatch, please update your log stream format to match the active mapping version.",
                     sortedKeys, sourceId, historicalVersion
             );
             saveNotificationSafely(vendorOwnerUserId, title, message);
@@ -307,7 +423,7 @@ public class SchemaDriftNotificationService {
                 String title = "Schema Version Resumed: " + sourceId;
                 String message = String.format(
                         "Live log stream for source %s has successfully resumed using active mapping version v%d. " +
-                        "Historical version fallback alerts have been reset.",
+                                "Historical version fallback alerts have been reset.",
                         sourceId, activeVersion
                 );
                 saveNotificationSafely(vendorOwnerUserId, title, message);
@@ -315,51 +431,12 @@ public class SchemaDriftNotificationService {
         }
     }
 
-    private List<String> resolveAdminUserIds() {
-        if (userRepository != null) {
-            try {
-                List<User> admins = userRepository.findUsersByRole(Role.ADMIN);
-                if (!admins.isEmpty()) {
-                    return admins.stream().map(User::userId).toList();
-                }
-            } catch (Exception e) {
-                log.warn("Failed to lookup admin users: {}", e.getMessage());
-            }
-        }
-        return List.of("admin"); // Default fallback admin user ID
-    }
-
     private void saveNotificationSafely(String userId, String title, String message) {
         getAlertDispatcher().saveNotificationSafely(userId, title, message);
     }
 
-    private void sendWebhookAlertSafely(String title, String message, String sourceId, String alertType) {
-        if (webhookUrl == null || webhookUrl.isBlank()) {
-            return;
-        }
-        try {
-            log.info("Dispatching webhook drift alert to [{}]: type={}, sourceId={}, title={}", webhookUrl, alertType, sourceId, title);
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            String payload = String.format("{\"alertType\":\"%s\",\"sourceId\":\"%s\",\"title\":\"%s\",\"timestamp\":\"%s\"}",
-                    alertType, sourceId, title.replace("\"", "\\\""), java.time.Instant.now().toString());
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(webhookUrl))
-                    .header("Content-Type", "application/json")
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(payload))
-                    .timeout(java.time.Duration.ofSeconds(3))
-                    .build();
-            client.sendAsync(request, java.net.http.HttpResponse.BodyHandlers.discarding())
-                    .exceptionally(ex -> {
-                        log.debug("Webhook drift alert delivery failed to {}: {}", webhookUrl, ex.getMessage());
-                        return null;
-                    });
-        } catch (Exception e) {
-            log.debug("Could not dispatch webhook drift alert: {}", e.getMessage());
-        }
-    }
-
     public void clearCache() {
-        lastNotifiedCache.clear();
+        driftStateCache.clear();
         notifiedHistoricalFallbacks.clear();
     }
 }

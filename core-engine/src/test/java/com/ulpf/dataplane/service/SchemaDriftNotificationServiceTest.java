@@ -103,10 +103,16 @@ class SchemaDriftNotificationServiceTest {
         // 1st key set -> Notification 1 sent
         driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("key_alpha"));
 
-        // 2nd distinct key set -> Notification 2 sent!
+        // 2nd distinct key set -> Suppressed within 30-min window, accumulated for digest
         driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("key_beta"));
 
-        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        SchemaDriftNotificationService.DriftState state = driftNotificationService.getDriftStateCache().get(sourceId + ":SCHEMA_DRIFT");
+        assertNotNull(state);
+        assertTrue(state.accumulatedKeys().contains("key_alpha"));
+        assertTrue(state.accumulatedKeys().contains("key_beta"));
+        assertEquals(2, state.eventCount().get());
     }
 
     @Test
@@ -256,6 +262,94 @@ class SchemaDriftNotificationServiceTest {
 
         // Verify fallback onboardingRepository.saveNotification was NOT called
         verify(onboardingRepository, never()).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void test10000CallsRapidlyTriggerExactlyOneAlert() {
+        String sourceId = "src_high_volume";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        for (int i = 0; i < 10000; i++) {
+            driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("unmapped_field_" + (i % 20)));
+        }
+
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+        SchemaDriftNotificationService.DriftState state = driftNotificationService.getDriftStateCache().get(sourceId + ":SCHEMA_DRIFT");
+        assertNotNull(state);
+        assertEquals(10000, state.eventCount().get());
+        assertTrue(state.accumulatedKeys().size() <= 50);
+    }
+
+    @Test
+    void testDifferentSourcesHaveIndependentAlerts() {
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        driftNotificationService.checkAndNotifyDrift("source_A", Set.of("k1"));
+        driftNotificationService.checkAndNotifyDrift("source_B", Set.of("k2"));
+
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testDriftThenTotalDriftTriggersEscalationAlert() {
+        String sourceId = "src_escalation";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // Normal drift
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("extra_field"), 10, false);
+        // Total drift on same source -> Escalates immediately!
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("field1", "field2"), 2, true);
+
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testWindowExpiryWithNoNewEventsScheduledFlushSendsDigest() throws InterruptedException {
+        driftNotificationService.setCooldownMs(50L); // 50ms for test
+        String sourceId = "src_quiet_drift";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // First event
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k_alpha"));
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        // Second event (suppressed)
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k_beta"));
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        Thread.sleep(70);
+
+        // Scheduled flush runs
+        driftNotificationService.flushExpiredDigests();
+
+        // 1 initial alert + 1 digest = 2 notifications total
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), titleCaptor.capture(), msgCaptor.capture());
+
+        assertTrue(titleCaptor.getAllValues().get(1).contains("[DIGEST] Schema Drift Summary"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("k_alpha"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("k_beta"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("2 drifted events"));
+    }
+
+    @Test
+    void testBoundaryDriftThreshold3Of10NormalVersus4Of10HighDrift() {
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // 3 of 10 = 30% ratio -> strictly <= 30%, normal drift alert
+        driftNotificationService.checkAndNotifyDrift("src_normal_drift", Set.of("a", "b", "c"), 10, false);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), titleCaptor.capture(), anyString());
+        assertEquals("[ADMIN ACTION REQUIRED] Schema Drift: src_normal_drift", titleCaptor.getValue());
+
+        // 4 of 10 = 40% ratio -> > 30%, HIGH drift alert
+        driftNotificationService.checkAndNotifyDrift("src_high_drift", Set.of("a", "b", "c", "d"), 10, false);
+
+        ArgumentCaptor<String> highTitleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), highTitleCaptor.capture(), anyString());
+        assertTrue(highTitleCaptor.getValue().contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
     }
 }
 
