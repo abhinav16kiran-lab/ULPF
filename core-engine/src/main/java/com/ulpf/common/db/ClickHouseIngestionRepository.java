@@ -12,9 +12,12 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
 
@@ -108,6 +111,12 @@ public class ClickHouseIngestionRepository {
     }
 
     private final java.util.Map<String, List<String>> tableColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public void invalidateColumnsCache(String tableName) {
+        if (tableName != null) {
+            tableColumnsCache.remove(tableName);
+        }
+    }
 
     private List<String> getColumnsForTable(String tableName) {
         if (tableName == null || tableName.isBlank() || clickhouseJdbcTemplate == null) {
@@ -393,5 +402,193 @@ public class ClickHouseIngestionRepository {
 
     public int getCanonicalQueueSize() {
         return canonicalQueue.size();
+    }
+
+    /**
+     * Read raw events for a source with cursor pagination (received_at, event_id).
+     */
+    public List<RawEventRecord> readRawEventsChunk(
+            String sourceId,
+            LocalDateTime fromTime,
+            LocalDateTime toTime,
+            LocalDateTime cursorTime,
+            String cursorEventId,
+            int limit) {
+        if (clickhouseJdbcTemplate == null || sourceId == null) {
+            return Collections.emptyList();
+        }
+
+        StringBuilder sql = new StringBuilder();
+        List<Object> params = new ArrayList<>();
+
+        sql.append("SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload ");
+        sql.append("FROM ulpf_raw.raw_events WHERE source_id = ? ");
+        params.add(sourceId);
+
+        if (fromTime != null) {
+            sql.append("AND received_at >= ? ");
+            params.add(Timestamp.valueOf(fromTime));
+        }
+        if (toTime != null) {
+            sql.append("AND received_at <= ? ");
+            params.add(Timestamp.valueOf(toTime));
+        }
+
+        // Cursor pagination (received_at, event_id)
+        if (cursorTime != null && cursorEventId != null) {
+            sql.append("AND (received_at > ? OR (received_at = ? AND event_id > ?)) ");
+            params.add(Timestamp.valueOf(cursorTime));
+            params.add(Timestamp.valueOf(cursorTime));
+            params.add(cursorEventId);
+        }
+
+        sql.append("ORDER BY received_at ASC, event_id ASC LIMIT ?");
+        params.add(limit);
+
+        try {
+            return clickhouseJdbcTemplate.query(sql.toString(), (rs, rowNum) -> new RawEventRecord(
+                    rs.getString("event_id"),
+                    rs.getString("lineage_id"),
+                    rs.getString("vendor_id"),
+                    rs.getString("source_id"),
+                    rs.getObject("mapping_version") != null ? rs.getInt("mapping_version") : null,
+                    rs.getTimestamp("received_at") != null ? rs.getTimestamp("received_at").toLocalDateTime() : null,
+                    rs.getString("raw_payload")
+            ), params.toArray());
+        } catch (Exception e) {
+            log.error("Failed to read raw events chunk for source {}: {}", sourceId, e.getMessage());
+            throw new RuntimeException("Failed to read raw events from ClickHouse for source " + sourceId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Total event count estimate for progress tracking.
+     */
+    public long countRawEventsForSource(String sourceId, LocalDateTime fromTime, LocalDateTime toTime) {
+        if (clickhouseJdbcTemplate == null || sourceId == null) {
+            return 0L;
+        }
+        StringBuilder sql = new StringBuilder("SELECT count() FROM ulpf_raw.raw_events WHERE source_id = ? ");
+        List<Object> params = new ArrayList<>();
+        params.add(sourceId);
+
+        if (fromTime != null) {
+            sql.append("AND received_at >= ? ");
+            params.add(Timestamp.valueOf(fromTime));
+        }
+        if (toTime != null) {
+            sql.append("AND received_at <= ? ");
+            params.add(Timestamp.valueOf(toTime));
+        }
+
+        try {
+            Long count = clickhouseJdbcTemplate.queryForObject(sql.toString(), Long.class, params.toArray());
+            return count != null ? count : 0L;
+        } catch (Exception e) {
+            log.warn("Failed to count raw events for source {}: {}", sourceId, e.getMessage());
+            throw new RuntimeException("Failed to count raw events from ClickHouse for source " + sourceId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Find event_ids that already exist in the target dynamic table (for deduplication).
+     */
+    public Set<String> findExistingEventIds(String tableName, Collection<String> eventIds) {
+        if (clickhouseJdbcTemplate == null || tableName == null || eventIds == null || eventIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        try {
+            String inClause = eventIds.stream()
+                    .map(id -> "'" + id.replace("'", "''") + "'")
+                    .collect(Collectors.joining(","));
+            String sql = "SELECT event_id FROM ulpf_events." + tableName + " WHERE event_id IN (" + inClause + ")";
+            List<String> found = clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("event_id"));
+            return new HashSet<>(found);
+        } catch (Exception e) {
+            log.warn("Failed to check existing event_ids in ulpf_events.{}: {}", tableName, e.getMessage());
+            throw new RuntimeException("Failed to check existing event_ids in ulpf_events." + tableName + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Checks if ClickHouse memory usage exceeds 80% threshold for adaptive throttling.
+     */
+    public boolean isMemoryPressureHigh() {
+        if (clickhouseJdbcTemplate == null) return false;
+        try {
+            Long memoryUsage = clickhouseJdbcTemplate.queryForObject(
+                "SELECT value FROM system.metrics WHERE metric = 'MemoryTracking'", Long.class);
+            Long maxMemory = clickhouseJdbcTemplate.queryForObject(
+                "SELECT value FROM system.settings WHERE name = 'max_memory_usage'", Long.class);
+            if (memoryUsage != null && maxMemory != null && maxMemory > 0) {
+                return (double) memoryUsage / maxMemory > 0.80;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /**
+     * Synchronous batch insert into dynamic table during replay.
+     */
+    public int batchInsertDynamicRecords(String tableName, List<CanonicalEventRecord> records) {
+        if (clickhouseJdbcTemplate == null || tableName == null || records == null || records.isEmpty()) {
+            return 0;
+        }
+
+        List<String> cols = getColumnsForTable(tableName);
+        if (cols.isEmpty()) {
+            invalidateColumnsCache(tableName);
+            cols = getColumnsForTable(tableName);
+        }
+        if (cols.isEmpty()) {
+            throw new IllegalStateException("Dynamic table ulpf_events." + tableName + " has no columns or does not exist");
+        }
+
+        String colNames = String.join(", ", cols);
+        String placeholders = String.join(", ", Collections.nCopies(cols.size(), "?"));
+        String insertSql = "INSERT INTO ulpf_events." + tableName + " (" + colNames + ") VALUES (" + placeholders + ")";
+
+        final List<String> finalCols = cols;
+        clickhouseJdbcTemplate.batchUpdate(insertSql, records, records.size(), (ps, record) -> {
+            for (int i = 0; i < finalCols.size(); i++) {
+                int paramIndex = i + 1;
+                String col = finalCols.get(i).toLowerCase();
+                switch (col) {
+                    case "event_id" -> ps.setString(paramIndex, record.eventId());
+                    case "lineage_id" -> ps.setString(paramIndex, record.lineageId());
+                    case "vendor_id" -> ps.setString(paramIndex, record.vendorId());
+                    case "source_id" -> ps.setString(paramIndex, record.sourceId());
+                    case "mapping_version" -> {
+                        if (record.mappingVersion() != null) {
+                            ps.setInt(paramIndex, record.mappingVersion());
+                        } else {
+                            ps.setNull(paramIndex, java.sql.Types.INTEGER);
+                        }
+                    }
+                    case "timestamp" -> ps.setTimestamp(paramIndex, record.timestamp() != null
+                            ? Timestamp.valueOf(record.timestamp())
+                            : Timestamp.valueOf(LocalDateTime.now()));
+                    case "numeric_value" -> {
+                        if (record.numericValue() != null) {
+                            ps.setDouble(paramIndex, record.numericValue());
+                        } else {
+                            ps.setNull(paramIndex, java.sql.Types.DOUBLE);
+                        }
+                    }
+                    case "raw_unmapped" -> ps.setString(paramIndex, record.rawUnmapped() != null ? record.rawUnmapped() : "{}");
+                    case "canonical_payload" -> ps.setString(paramIndex, record.canonicalPayload() != null ? record.canonicalPayload() : "{}");
+                    default -> {
+                        Object val = record.mappedFields() != null ? record.mappedFields().get(col) : null;
+                        if (val != null) {
+                            ps.setString(paramIndex, String.valueOf(val));
+                        } else {
+                            ps.setNull(paramIndex, java.sql.Types.VARCHAR);
+                        }
+                    }
+                }
+            }
+        });
+
+        return records.size();
     }
 }

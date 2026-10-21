@@ -24,6 +24,7 @@ import java.util.UUID;
  */
 import com.ulpf.dataplane.format.FormatDetectionResult;
 import com.ulpf.dataplane.format.LogFormatDetector;
+import com.ulpf.mapping.service.MappingTransformer;
 
 @Service
 public class EventIngestionService {
@@ -36,6 +37,7 @@ public class EventIngestionService {
     private final SensorTelemetryEvaluator sensorTelemetryEvaluator;
     private final SchemaDriftNotificationService schemaDriftNotificationService;
     private final LogFormatDetector logFormatDetector;
+    private final MappingTransformer mappingTransformer;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EventIngestionService(
@@ -44,7 +46,7 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator
     ) {
-        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null, new LogFormatDetector());
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null, new LogFormatDetector(), new MappingTransformer());
     }
 
     public EventIngestionService(
@@ -54,7 +56,18 @@ public class EventIngestionService {
             SensorTelemetryEvaluator sensorTelemetryEvaluator,
             SchemaDriftNotificationService schemaDriftNotificationService
     ) {
-        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, new LogFormatDetector());
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, new LogFormatDetector(), new MappingTransformer());
+    }
+
+    public EventIngestionService(
+            CredentialRepository credentialRepository,
+            MappingRepository mappingRepository,
+            ClickHouseIngestionRepository clickHouseIngestionRepository,
+            SensorTelemetryEvaluator sensorTelemetryEvaluator,
+            SchemaDriftNotificationService schemaDriftNotificationService,
+            LogFormatDetector logFormatDetector
+    ) {
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, logFormatDetector, new MappingTransformer());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -64,7 +77,8 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator,
             @org.springframework.beans.factory.annotation.Autowired(required = false) SchemaDriftNotificationService schemaDriftNotificationService,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) LogFormatDetector logFormatDetector
+            @org.springframework.beans.factory.annotation.Autowired(required = false) LogFormatDetector logFormatDetector,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) MappingTransformer mappingTransformer
     ) {
         this.credentialRepository = credentialRepository;
         this.mappingRepository = mappingRepository;
@@ -72,6 +86,7 @@ public class EventIngestionService {
         this.sensorTelemetryEvaluator = sensorTelemetryEvaluator;
         this.schemaDriftNotificationService = schemaDriftNotificationService;
         this.logFormatDetector = logFormatDetector != null ? logFormatDetector : new LogFormatDetector();
+        this.mappingTransformer = mappingTransformer != null ? mappingTransformer : new MappingTransformer();
     }
 
     public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId, String detectedFormat) {
@@ -243,35 +258,7 @@ public class EventIngestionService {
     }
 
     private Double extractNumericValue(Object payload, String sensorField) {
-        if (payload == null) return null;
-        try {
-            JsonNode node = (payload instanceof JsonNode jn) ? jn : objectMapper.valueToTree(payload);
-            if (sensorField != null && !sensorField.isBlank() && node.has(sensorField)) {
-                JsonNode fieldNode = node.get(sensorField);
-                if (fieldNode.isNumber()) {
-                    return fieldNode.asDouble();
-                } else {
-                    try {
-                        return Double.parseDouble(fieldNode.asText());
-                    } catch (Exception ignored) {}
-                }
-            }
-            for (String candidate : List.of("value", "reading", "temp", "temperature", "val", "metric")) {
-                if (node.has(candidate) && node.get(candidate).isNumber()) {
-                    return node.get(candidate).asDouble();
-                }
-            }
-            if (node.isObject()) {
-                var fields = node.properties().iterator();
-                while (fields.hasNext()) {
-                    var entry = fields.next();
-                    if (entry.getValue().isNumber()) {
-                        return entry.getValue().asDouble();
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
+        return mappingTransformer.extractNumericValue(payload, sensorField);
     }
 
     private String extractUnmappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
@@ -372,33 +359,11 @@ public class EventIngestionService {
     private record HistoricalVersion(int version, JsonNode rootNode) {}
 
     private String resolveCanonicalField(String vendorKey, JsonNode mappingRoot) {
-        if (mappingRoot == null || !mappingRoot.has(vendorKey)) {
-            return null;
-        }
-        JsonNode fieldMapping = mappingRoot.get(vendorKey);
-        if (fieldMapping != null && fieldMapping.isObject()) {
-            if (fieldMapping.has("canonicalField")) {
-                String cf = fieldMapping.get("canonicalField").asText();
-                if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
-                    return cf;
-                }
-            } else if (fieldMapping.has("canonical_field")) {
-                String cf = fieldMapping.get("canonical_field").asText();
-                if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
-                    return cf;
-                }
-            }
-        } else if (fieldMapping != null && fieldMapping.isTextual()) {
-            String cf = fieldMapping.asText();
-            if (cf != null && !cf.isBlank() && !"unmapped".equalsIgnoreCase(cf)) {
-                return cf;
-            }
-        }
-        return null;
+        return mappingTransformer.resolveCanonicalField(vendorKey, mappingRoot);
     }
 
     private boolean isKeyMappedInJson(String vendorKey, JsonNode mappingRoot) {
-        return resolveCanonicalField(vendorKey, mappingRoot) != null;
+        return mappingTransformer.isKeyMappedInJson(vendorKey, mappingRoot);
     }
 
     private java.util.Map<String, Object> extractMappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
@@ -452,7 +417,7 @@ public class EventIngestionService {
                 }
 
                 if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
-                    String normCol = canonicalField.replace('.', '_').replace('-', '_').trim().toLowerCase();
+                    String normCol = mappingTransformer.normalizeColumnName(canonicalField);
                     if (value.isValueNode()) {
                         mappedFields.put(normCol, value.asText());
                     } else {

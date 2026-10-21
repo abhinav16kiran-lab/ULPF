@@ -74,6 +74,19 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 * **Dynamic Table Engine**: Automatically provisions isolated ClickHouse tables (`events_{vendor}_{source}`) upon onboarding approval.
 * **Lossless Schema Overflow**: Unmapped raw vendor payload fields route into a `raw_unmapped` column, eliminating runtime `ALTER TABLE` locks while guaranteeing 100% zero data loss.
 
+### 3.6 Asynchronous Historical Replay & Backfill Engine
+
+![Replay Backfill Pipeline Architecture](../../Architecture_Diagram/Replay%20Backfill%20Pipeline%20Architecture.png)
+
+* **Automated & On-Demand Execution**: Automatically triggers when an onboarding request is approved in `OnboardingService`, or runs on-demand via Admin REST API (`POST /v1/admin/sources/{sourceId}/replay`).
+* **Non-Blocking Background Worker**: Runs asynchronously via dedicated `CompletableFuture` thread pool with thread-safe cancellation tokens and in-memory job state tracking (`ReplayJobStatus`).
+* **Bounded Cursor Streaming ($O(1)$ Memory)**: Reads raw historical logs from `ulpf_raw.raw_events` using composite primary index cursor pagination `(received_at, event_id)` in configurable chunks (default: 1,000), preventing JVM heap exhaustion regardless of historical dataset size.
+* **Dynamic Schema Verification**: Automatically verifies the destination dynamic table exists prior to streaming, invoking `DynamicSchemaProvisioningService` to provision or migrate columns if needed.
+* **Shared Mapping Transformation**: Reuses `MappingTransformer` to translate raw payloads into canonical schemas, extract `raw_unmapped` overflow JSON, and compute sensor metrics without duplicating transformation logic.
+* **Adaptive ClickHouse Backpressure**: Proactively samples ClickHouse `MemoryTracking` metrics before streaming chunks; if memory utilization exceeds 80%, the worker throttles execution to protect database stability.
+* **Safe Idempotency & Deduplication**: Performs per-chunk primary key membership checks against the target table before batch insertion, ensuring safe resumes after interruptions without generating duplicate canonical records.
+* **Operational Notifications**: Dispatches role-tailored notifications to source owners and administrators upon job completion, cancellation, or failure.
+
 ---
 
 ## 4. Technology Stack & Packaging
