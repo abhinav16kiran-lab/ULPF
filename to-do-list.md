@@ -2,7 +2,7 @@
 
 ## High Priority: Data Plane & Replay Pipeline
 
-### 1. Raw-to-Dynamic Backfill / Replay Worker [COMPLETED in feature/replay-backfill]
+### 1. Raw-to-Dynamic Backfill / Replay Worker [COMPLETED]
 - **Problem**: When a new source is onboarded or its mapping is approved, historical events that were ingested prior to approval/provisioning reside only in `ulpf_raw.raw_events`.
 - **Requirement**: Build a batch backfill / replay service (or worker) that reads unmapped records from `ulpf_raw.raw_events` for a given `source_id` and time range, applies the active mapping schema, transforms them into canonical event structures, and inserts them into the target dynamic table `ulpf_events.events_{source}`.
 - **Design Considerations**:
