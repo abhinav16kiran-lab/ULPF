@@ -196,4 +196,37 @@ CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
 CREATE INDEX IF NOT EXISTS idx_incidents_source_status ON ingestion_alert_incidents(source_id, status);
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON ingestion_alert_incidents(status);
 
+-- 12. Vendor Webhook Configurations (1 active endpoint per vendor organization)
+CREATE TABLE IF NOT EXISTS vendor_webhooks (
+    webhook_id          TEXT PRIMARY KEY,
+    vendor_id           TEXT NOT NULL UNIQUE,
+    webhook_url         TEXT NOT NULL,
+    secret_key          TEXT,
+    is_active           BOOLEAN NOT NULL DEFAULT 1,
+    status              TEXT NOT NULL DEFAULT 'UNTESTED' CHECK (status IN ('UNTESTED', 'HEALTHY', 'FAILING')),
+    last_status_code    INTEGER,
+    last_attempt_at     TIMESTAMP,
+    consecutive_fails   INTEGER NOT NULL DEFAULT 0,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendor_webhooks_vendor ON vendor_webhooks(vendor_id);
+
+-- 13. Webhook Delivery Logs (Audit trail of recent deliveries & test pings)
+CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
+    delivery_id         TEXT PRIMARY KEY,
+    vendor_id           TEXT,               -- NULL for global admin .env webhook
+    target_url          TEXT NOT NULL,
+    alert_type          TEXT NOT NULL,
+    status_code         INTEGER,
+    success             BOOLEAN NOT NULL,
+    error_message       TEXT,
+    latency_ms          INTEGER,
+    attempted_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_logs_vendor_date ON webhook_delivery_logs(vendor_id, attempted_at);
+
 

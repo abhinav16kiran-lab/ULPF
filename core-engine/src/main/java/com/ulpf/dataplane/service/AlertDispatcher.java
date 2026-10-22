@@ -3,6 +3,10 @@ package com.ulpf.dataplane.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.UserRepository;
+import com.ulpf.common.db.VendorRepository;
+import com.ulpf.common.db.VendorWebhookRepository;
+import com.ulpf.common.db.VendorWebhookRepository.VendorWebhookRecord;
+import com.ulpf.common.db.VendorWebhookRepository.WebhookDeliveryLogRecord;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
 import com.ulpf.controlplane.service.NotificationService;
@@ -40,6 +44,12 @@ public class AlertDispatcher {
     private final UserRepository userRepository;
     private NotificationService notificationService;
     private final ObjectMapper objectMapper;
+
+    @Autowired(required = false)
+    private VendorWebhookRepository vendorWebhookRepository;
+
+    @Autowired(required = false)
+    private VendorRepository vendorRepository;
 
     @Value("${ulpf.alert.webhook-url:}")
     private String webhookUrl;
@@ -128,6 +138,162 @@ public class AlertDispatcher {
                 : "webhook-host";
     }
 
+    // ── Decoupled Delivery Result Record ─────────────────────────────
+
+    public record DeliveryResult(boolean success, int statusCode, String errorMessage, long latencyMs) {}
+
+    // ── Phase 2: Decoupled Webhook Sender ────────────────────────────
+
+    /**
+     * Pure decoupled method: sends an alert to ANY valid URL with ANY secret key,
+     * completely independent of .env.
+     */
+    public CompletableFuture<DeliveryResult> sendWebhook(
+            URI targetUri,
+            String secret,
+            AlertPayload payload,
+            String vendorId) {
+
+        if (targetUri == null || payload == null) {
+            return CompletableFuture.completedFuture(new DeliveryResult(false, 0, "Null URI or payload", 0));
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            long start = System.currentTimeMillis();
+            try {
+                String jsonBody = objectMapper.writeValueAsString(payload);
+                HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                        .uri(targetUri)
+                        .header("Content-Type", "application/json")
+                        .timeout(Duration.ofSeconds(3))
+                        .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8));
+
+                if (secret != null && !secret.isBlank()) {
+                    long ts = Instant.now().getEpochSecond();
+                    String signature = computeHmacSha256(ts + "." + jsonBody, secret);
+                    if (signature != null) {
+                        reqBuilder.header("X-ULPF-Timestamp", String.valueOf(ts));
+                        reqBuilder.header("X-ULPF-Signature", "sha256=" + signature);
+                    }
+                }
+
+                HttpRequest request = reqBuilder.build();
+                int statusCode = executeWithStatusCode(request);
+                long latency = System.currentTimeMillis() - start;
+                boolean success = (statusCode >= 200 && statusCode < 300);
+
+                // Record delivery log in SQLite
+                logDeliveryRecord(vendorId, targetUri.toString(), payload.alertType(), statusCode, success, null, (int) latency);
+
+                // Handle failure & notify vendor inbox if vendor webhook failed
+                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), success, statusCode);
+
+                log.info("[WEBHOOK] Dispatched {} to {} -> Status {} ({}ms)", payload.alertType(), targetUri.getHost(), statusCode, latency);
+                return new DeliveryResult(success, statusCode, null, latency);
+
+            } catch (Exception e) {
+                long latency = System.currentTimeMillis() - start;
+                logDeliveryRecord(vendorId, targetUri.toString(), payload.alertType(), 0, false, e.getMessage(), (int) latency);
+                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), false, 0);
+
+                log.warn("[WEBHOOK ERROR] Failed to deliver to {}: {}", targetUri.getHost(), e.getMessage());
+                return new DeliveryResult(false, 0, e.getMessage(), latency);
+            }
+        }, webhookExecutor);
+    }
+
+    /**
+     * Executes the HTTP request and returns the status code. Retries once on failure.
+     */
+    private int executeWithStatusCode(HttpRequest request) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+                return response.statusCode();
+            } catch (Exception e) {
+                if (attempt == 1) {
+                    throw new RuntimeException("HTTP request failed after 1 retry: " + e.getMessage(), e);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Logs a delivery attempt to the webhook_delivery_logs table.
+     */
+    private void logDeliveryRecord(String vendorId, String targetUrl, String alertType,
+                                   int statusCode, boolean success, String errorMessage, int latencyMs) {
+        try {
+            if (vendorWebhookRepository != null) {
+                vendorWebhookRepository.logDelivery(new WebhookDeliveryLogRecord(
+                    null, vendorId, targetUrl, alertType,
+                    statusCode > 0 ? statusCode : null,
+                    success, errorMessage,
+                    latencyMs, null
+                ));
+            }
+        } catch (Exception e) {
+            log.warn("[WEBHOOK] Failed to persist delivery log: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Handles vendor webhook delivery outcome: updates webhook health status,
+     * and sends in-app notifications when the webhook endpoint is broken.
+     */
+    private void handleVendorDeliveryOutcome(String vendorId, String url, boolean success, int statusCode) {
+        if (vendorId == null || vendorWebhookRepository == null) {
+            return; // Global admin webhook or no repository available
+        }
+
+        try {
+            var webhookOpt = vendorWebhookRepository.findByVendorId(vendorId);
+            if (webhookOpt.isEmpty()) return;
+
+            VendorWebhookRecord webhook = webhookOpt.get();
+
+            if (success) {
+                // Reset consecutive fails and mark HEALTHY
+                vendorWebhookRepository.updateDeliveryStatus(vendorId, true, statusCode, 0);
+            } else {
+                int newFails = webhook.consecutiveFails() + 1;
+                vendorWebhookRepository.updateDeliveryStatus(vendorId, false, statusCode, newFails);
+
+                // Send in-app notification on first failure or every 5th consecutive failure
+                if (newFails == 1 || newFails % 5 == 0) {
+                    String ownerUserId = resolveVendorOwnerUserId(vendorId);
+                    if (ownerUserId != null) {
+                        String title = "⚠️ Webhook Endpoint Failing";
+                        String message = "Your webhook to " + url + " returned HTTP " + statusCode
+                            + ". Please check your endpoint settings in Notifications > Webhook Integration.";
+                        saveNotificationSafely(ownerUserId, title, message);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[WEBHOOK] Failed to update vendor delivery outcome for {}: {}", vendorId, e.getMessage());
+        }
+    }
+
+    /**
+     * Resolves the owner user ID for a given vendor ID.
+     */
+    private String resolveVendorOwnerUserId(String vendorId) {
+        if (vendorRepository != null) {
+            try {
+                return vendorRepository.findById(vendorId)
+                    .map(VendorRepository.VendorRecord::ownerUserId)
+                    .orElse(null);
+            } catch (Exception e) {
+                log.warn("Failed to resolve vendor owner for {}: {}", vendorId, e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    // ── Multi-Tenant Alert Dispatch ──────────────────────────────────
+
     /**
      * Dispatches an alert to all administrators and optionally the vendor owner,
      * followed by asynchronous webhook transmission.
@@ -174,8 +340,27 @@ public class AlertDispatcher {
             }
         }
 
-        // Webhook Dispatch
-        sendWebhookAlertSafely(payload);
+        // 1. Dispatch Global Admin Webhook (from .env)
+        if (this.validatedWebhookUri == null && webhookUrl != null && !webhookUrl.isBlank()) {
+            validateAndSetWebhookUri(webhookUrl);
+        }
+        if (this.validatedWebhookUri != null) {
+            sendWebhook(this.validatedWebhookUri, this.webhookSecret, payload, null);
+        }
+
+        // 2. Dispatch Specific Vendor Webhook (from SQLite vendor_webhooks)
+        if (payload.vendorId() != null && vendorWebhookRepository != null) {
+            vendorWebhookRepository.findByVendorId(payload.vendorId())
+                .filter(VendorWebhookRecord::isActive)
+                .ifPresent(vw -> {
+                    try {
+                        URI uri = URI.create(vw.webhookUrl());
+                        sendWebhook(uri, vw.secretKey(), payload, vw.vendorId());
+                    } catch (Exception e) {
+                        log.warn("Invalid vendor webhook URI for vendor {}: {}", vw.vendorId(), e.getMessage());
+                    }
+                });
+        }
     }
 
     /**
@@ -211,6 +396,8 @@ public class AlertDispatcher {
         }
         return List.of("admin");
     }
+
+    // ── Legacy sendWebhookAlertSafely (preserved for backward compat) ──
 
     /**
      * Asynchronously and safely transmits the alert payload to the configured webhook endpoint.

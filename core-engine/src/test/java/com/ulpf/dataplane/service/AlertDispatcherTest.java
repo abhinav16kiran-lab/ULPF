@@ -5,6 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.UserRepository;
+import com.ulpf.common.db.VendorRepository;
+import com.ulpf.common.db.VendorRepository.VendorRecord;
+import com.ulpf.common.db.VendorWebhookRepository;
+import com.ulpf.common.db.VendorWebhookRepository.VendorWebhookRecord;
 import com.ulpf.controlplane.service.NotificationService;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
@@ -21,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -242,7 +247,7 @@ class AlertDispatcherTest {
                 }
             });
             long duration = System.currentTimeMillis() - start;
-            // 500 sends dispatched to bounded executor with DiscardPolicy must return almost instantly (< 2000ms)
+            // 500 sends dispatched to bounded executor with DiscardPolicy must return almost instantly (<2000ms)
             assertTrue(duration < 2000, "500 webhook dispatches took too long: " + duration + "ms");
         } catch (Exception e) {
             fail("Saturation test failed: " + e.getMessage());
@@ -301,4 +306,149 @@ class AlertDispatcherTest {
         verify(notificationService).createNotification(eq("admin"), eq("Admin Alert Title"), eq("Admin Alert Message"));
         verify(notificationService).createNotification(eq("vendor_user_1"), eq("Vendor Alert Title"), eq("Vendor Alert Message"));
     }
+
+    // ── New Integration Tests for Vendor Webhook Feature ─────────────
+
+    /**
+     * Confirms that an alert for Vendor A is dispatched to:
+     *  - Vendor A's webhook (from SQLite vendor_webhooks)
+     *  - The admin global .env webhook
+     *  - But NOT to Vendor B's webhook
+     */
+    @Test
+    void testDualDispatchToAdminAndVendor() throws Exception {
+        // Set up a second HTTP server to act as Vendor A's webhook
+        BlockingQueue<ReceivedRequest> vendorARequests = new LinkedBlockingQueue<>();
+        HttpServer vendorAServer = HttpServer.create(new InetSocketAddress(0), 0);
+        vendorAServer.createContext("/vendor-a-hook", exchange -> {
+            InputStream is = exchange.getRequestBody();
+            String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            String sig = exchange.getRequestHeaders().getFirst("X-ULPF-Signature");
+            String ts = exchange.getRequestHeaders().getFirst("X-ULPF-Timestamp");
+            vendorARequests.add(new ReceivedRequest(body, sig, ts));
+            exchange.sendResponseHeaders(200, 0);
+            exchange.close();
+        });
+        vendorAServer.start();
+        int vendorAPort = vendorAServer.getAddress().getPort();
+
+        try {
+            // Mock VendorWebhookRepository
+            VendorWebhookRepository vendorWebhookRepo = mock(VendorWebhookRepository.class);
+            ReflectionTestUtils.setField(alertDispatcher, "vendorWebhookRepository", vendorWebhookRepo);
+
+            // Configure Vendor A webhook
+            VendorWebhookRecord vendorAWebhook = new VendorWebhookRecord(
+                    "wh_a", "ven_a", "http://localhost:" + vendorAPort + "/vendor-a-hook",
+                    null, true, "UNTESTED", null, null, 0,
+                    LocalDateTime.now(), LocalDateTime.now()
+            );
+            when(vendorWebhookRepo.findByVendorId("ven_a")).thenReturn(Optional.of(vendorAWebhook));
+
+            // Vendor B should NOT be dispatched to
+            when(vendorWebhookRepo.findByVendorId("ven_b")).thenReturn(Optional.empty());
+
+            when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(Collections.emptyList());
+
+            // Dispatch alert for Vendor A
+            AlertPayload payload = new AlertPayload(
+                    "TABLE_MISSING", "CRITICAL", "src_a", "Source A",
+                    "ven_a", "Vendor A", "events_a", "Table missing",
+                    100L, Collections.emptySet(), Instant.now(),
+                    "Alert for Vendor A", "Replay events"
+            );
+
+            alertDispatcher.dispatchAlert(
+                    payload,
+                    "Admin Title", "Admin Message",
+                    "user_a", "Vendor Title", "Vendor Message"
+            );
+
+            // Wait for webhook deliveries
+            Thread.sleep(2000);
+
+            // Admin global webhook should have received the alert
+            ReceivedRequest adminReq = receivedRequests.poll(3, TimeUnit.SECONDS);
+            assertNotNull(adminReq, "Admin global webhook should have received the alert");
+
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode adminJson = mapper.readTree(adminReq.body());
+            assertEquals("ven_a", adminJson.get("vendorId").asText());
+
+            // Vendor A's dedicated webhook should have received the alert
+            ReceivedRequest vendorAReq = vendorARequests.poll(3, TimeUnit.SECONDS);
+            assertNotNull(vendorAReq, "Vendor A webhook should have received the alert");
+
+            JsonNode vendorAJson = mapper.readTree(vendorAReq.body());
+            assertEquals("ven_a", vendorAJson.get("vendorId").asText());
+
+            // Vendor B was never looked up (no webhook configured), so nothing was sent there
+            verify(vendorWebhookRepo, never()).findByVendorId("ven_b");
+
+        } finally {
+            vendorAServer.stop(0);
+        }
+    }
+
+    /**
+     * Confirms that when a vendor webhook fails, an in-app alert is generated
+     * in the notifications table for the vendor owner.
+     */
+    @Test
+    void testBrokenWebhookCreatesInAppAlert() throws Exception {
+        // Point vendor webhook to a dead port
+        int deadPort = 59998;
+
+        VendorWebhookRepository vendorWebhookRepo = mock(VendorWebhookRepository.class);
+        VendorRepository vendorRepo = mock(VendorRepository.class);
+        ReflectionTestUtils.setField(alertDispatcher, "vendorWebhookRepository", vendorWebhookRepo);
+        ReflectionTestUtils.setField(alertDispatcher, "vendorRepository", vendorRepo);
+
+        // Configure vendor webhook pointing to a dead endpoint
+        VendorWebhookRecord brokenWebhook = new VendorWebhookRecord(
+                "wh_broken", "ven_broken", "http://127.0.0.1:" + deadPort + "/dead-hook",
+                null, true, "UNTESTED", null, null, 0,
+                LocalDateTime.now(), LocalDateTime.now()
+        );
+        when(vendorWebhookRepo.findByVendorId("ven_broken")).thenReturn(Optional.of(brokenWebhook));
+
+        // Vendor owner resolution
+        VendorRecord vendorRecord = new VendorRecord(
+                "ven_broken", "owner_user_broken", "Broken Vendor", "ACTIVE", LocalDateTime.now()
+        );
+        when(vendorRepo.findById("ven_broken")).thenReturn(Optional.of(vendorRecord));
+
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(Collections.emptyList());
+
+        // Dispatch alert targeting the broken vendor
+        AlertPayload payload = new AlertPayload(
+                "TABLE_MISSING", "CRITICAL", "src_broken", "Source Broken",
+                "ven_broken", "Broken Vendor", "events_broken", "Table missing",
+                50L, Collections.emptySet(), Instant.now(),
+                "Alert for broken vendor", "Replay events"
+        );
+
+        alertDispatcher.dispatchAlert(
+                payload,
+                "Admin Title", "Admin Message",
+                "owner_user_broken", "Vendor Title", "Vendor Message"
+        );
+
+        // Wait for the async webhook attempt + failure handling
+        Thread.sleep(5000);
+
+        // Verify that the vendor webhook status was updated to FAILING
+        verify(vendorWebhookRepo, atLeastOnce()).updateDeliveryStatus(
+                eq("ven_broken"), eq(false), anyInt(), eq(1)
+        );
+
+        // Verify that an in-app notification was created for the vendor owner about the broken webhook
+        // The owner gets the regular "Vendor Title" notification AND a webhook-failure notification
+        verify(notificationService, atLeastOnce()).createNotification(
+                eq("owner_user_broken"),
+                argThat(title -> title.contains("Webhook") && title.contains("Failing")),
+                argThat(message -> message.contains("dead-hook") || message.contains("127.0.0.1"))
+        );
+    }
 }
+
