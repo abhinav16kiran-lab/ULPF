@@ -14,8 +14,10 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -33,6 +35,8 @@ public class ClickHouseIngestionRepository {
 
     private final JdbcTemplate clickhouseJdbcTemplate;
     private com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService;
+    private com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService;
+    private com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
     private final Queue<RawEventRecord> bufferQueue = new ConcurrentLinkedQueue<>();
     private final Queue<CanonicalEventRecord> canonicalQueue = new ConcurrentLinkedQueue<>();
     
@@ -51,6 +55,16 @@ public class ClickHouseIngestionRepository {
     @org.springframework.beans.factory.annotation.Autowired
     public void setBatchIntegrityService(com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService) {
         this.batchIntegrityService = batchIntegrityService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTableFailureNotificationService(com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService) {
+        this.tableFailureNotificationService = tableFailureNotificationService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDynamicSchemaProvisioningService(@org.springframework.context.annotation.Lazy com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+        this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
     }
 
     public record RawEventRecord(
@@ -111,6 +125,12 @@ public class ClickHouseIngestionRepository {
     }
 
     private final java.util.Map<String, List<String>> tableColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Long> failedAlterColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long FAILED_ALTER_COOLDOWN_MS = 10 * 60 * 1000L; // 10 minutes
+
+    public void clearFailedAlterCache() {
+        failedAlterColumnsCache.clear();
+    }
 
     public void invalidateColumnsCache(String tableName) {
         if (tableName != null) {
@@ -122,18 +142,25 @@ public class ClickHouseIngestionRepository {
         if (tableName == null || tableName.isBlank() || clickhouseJdbcTemplate == null) {
             return java.util.Collections.emptyList();
         }
-        return tableColumnsCache.computeIfAbsent(tableName, tbl -> {
-            try {
-                return clickhouseJdbcTemplate.query(
-                        "SELECT name FROM system.columns WHERE database = 'ulpf_events' AND table = ? ORDER BY position ASC",
-                        (rs, rowNum) -> rs.getString("name"),
-                        tbl
-                );
-            } catch (Exception e) {
-                log.warn("Could not query columns for table ulpf_events.{}: {}", tbl, e.getMessage());
-                return java.util.Collections.emptyList();
+        List<String> cached = tableColumnsCache.get(tableName);
+        if (cached != null && !cached.isEmpty()) {
+            return cached;
+        }
+        try {
+            List<String> cols = clickhouseJdbcTemplate.query(
+                    "SELECT name FROM system.columns WHERE database = 'ulpf_events' AND table = ? ORDER BY position ASC",
+                    (rs, rowNum) -> rs.getString("name"),
+                    tableName
+            );
+            if (cols != null && !cols.isEmpty()) {
+                tableColumnsCache.put(tableName, cols);
+                return cols;
             }
-        });
+            return java.util.Collections.emptyList();
+        } catch (Exception e) {
+            log.warn("Could not query columns for table ulpf_events.{}: {}", tableName, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
     }
 
     /**
@@ -275,13 +302,57 @@ public class ClickHouseIngestionRepository {
 
         // Group batch by dynamic targetTable
         java.util.Map<String, List<CanonicalEventRecord>> byTable = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> missingMappingCounts = new java.util.HashMap<>();
+        java.util.Map<String, Integer> missingTargetTableCounts = new java.util.HashMap<>();
+
+        java.util.Map<String, String> candidateBySource = new java.util.HashMap<>();
+        java.util.Map<String, Boolean> candidateExists = new java.util.HashMap<>();
+
         for (CanonicalEventRecord rec : batch) {
-            if (rec.targetTable() != null && !rec.targetTable().isBlank()) {
-                byTable.computeIfAbsent(rec.targetTable(), k -> new ArrayList<>()).add(rec);
+            String targetTable = rec.targetTable();
+            if (targetTable == null || targetTable.isBlank()) {
+                if (rec.sourceId() != null) {
+                    if (rec.mappingVersion() != null) {
+                        String candidate = candidateBySource.computeIfAbsent(rec.sourceId(), srcId -> {
+                            String sourceName = srcId;
+                            if (tableFailureNotificationService != null) {
+                                var meta = tableFailureNotificationService.resolveSourceMeta(srcId);
+                                if (meta != null && meta.sourceName() != null && !meta.sourceName().isBlank()) {
+                                    sourceName = meta.sourceName();
+                                }
+                            }
+                            return dynamicSchemaProvisioningService != null
+                                    ? dynamicSchemaProvisioningService.constructTableName(sourceName)
+                                    : "events_" + sourceName.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+                        });
+
+                        boolean exists = candidateExists.computeIfAbsent(candidate, c -> !getColumnsForTable(c).isEmpty());
+                        if (exists) {
+                            targetTable = candidate;
+                        } else {
+                            missingTargetTableCounts.merge(rec.sourceId(), 1, Integer::sum);
+                        }
+                    } else {
+                        missingMappingCounts.merge(rec.sourceId(), 1, Integer::sum);
+                    }
+                }
+            }
+
+            if (targetTable != null && !targetTable.isBlank()) {
+                byTable.computeIfAbsent(targetTable, k -> new ArrayList<>()).add(rec);
             } else {
-                // If targetTable is not defined (e.g. unmapped source or no table provisioned yet),
-                // it is already safely preserved in ulpf_raw.raw_events. No fallback table needed.
                 log.debug("Skipping dynamic table insert for event {} (no targetTable defined)", rec.eventId());
+            }
+        }
+
+        if (tableFailureNotificationService != null) {
+            if (!missingMappingCounts.isEmpty()) {
+                missingMappingCounts.forEach((sourceId, count) ->
+                        tableFailureNotificationService.notifyMissingMapping(sourceId, count));
+            }
+            if (!missingTargetTableCounts.isEmpty()) {
+                missingTargetTableCounts.forEach((sourceId, count) ->
+                        tableFailureNotificationService.notifyNoTargetTable(sourceId, count));
             }
         }
 
@@ -293,61 +364,107 @@ public class ClickHouseIngestionRepository {
                 continue;
             }
 
-            try {
-                List<String> cols = getColumnsForTable(tableName);
-                if (cols.isEmpty()) {
-                    log.debug("Table ulpf_events.{} has no known columns or does not exist yet. Skipping flush of {} events.", tableName, tableBatch.size());
-                    continue;
-                }
-
-                String colsSql = String.join(", ", cols);
-                String placeholders = String.join(", ", java.util.Collections.nCopies(cols.size(), "?"));
-                String sql = "INSERT INTO ulpf_events." + tableName + " (" + colsSql + ") VALUES (" + placeholders + ")";
-
-                clickhouseJdbcTemplate.batchUpdate(sql, tableBatch, tableBatch.size(), (ps, record) -> {
-                    for (int i = 0; i < cols.size(); i++) {
-                        int paramIndex = i + 1;
-                        String col = cols.get(i).toLowerCase();
-                        switch (col) {
-                            case "event_id" -> ps.setString(paramIndex, record.eventId());
-                            case "lineage_id" -> ps.setString(paramIndex, record.lineageId());
-                            case "vendor_id" -> ps.setString(paramIndex, record.vendorId());
-                            case "source_id" -> ps.setString(paramIndex, record.sourceId());
-                            case "mapping_version" -> {
-                                if (record.mappingVersion() != null) {
-                                    ps.setInt(paramIndex, record.mappingVersion());
-                                } else {
-                                    ps.setNull(paramIndex, java.sql.Types.INTEGER);
-                                }
-                            }
-                            case "timestamp" -> ps.setTimestamp(paramIndex, record.timestamp() != null ? Timestamp.valueOf(record.timestamp()) : Timestamp.valueOf(LocalDateTime.now()));
-                            case "numeric_value" -> {
-                                if (record.numericValue() != null) {
-                                    ps.setDouble(paramIndex, record.numericValue());
-                                } else {
-                                    ps.setNull(paramIndex, java.sql.Types.DOUBLE);
-                                }
-                            }
-                            case "raw_unmapped" -> ps.setString(paramIndex, record.rawUnmapped() != null ? record.rawUnmapped() : "{}");
-                            case "canonical_payload" -> ps.setString(paramIndex, record.canonicalPayload() != null ? record.canonicalPayload() : "{}");
-                            default -> {
-                                Object val = record.mappedFields() != null ? record.mappedFields().get(col) : null;
-                                if (val != null) {
-                                    ps.setString(paramIndex, String.valueOf(val));
-                                } else {
-                                    ps.setNull(paramIndex, java.sql.Types.VARCHAR);
-                                }
-                            }
+            List<String> cols = getColumnsForTable(tableName);
+            if (cols.isEmpty()) {
+                log.debug("Table ulpf_events.{} has no known columns or does not exist yet. Skipping flush of {} events.", tableName, tableBatch.size());
+                if (tableFailureNotificationService != null) {
+                    java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
+                    for (CanonicalEventRecord r : tableBatch) {
+                        if (r.sourceId() != null) {
+                            countsBySource.merge(r.sourceId(), 1, Integer::sum);
                         }
                     }
-                });
+                    countsBySource.forEach((sourceId, count) ->
+                            tableFailureNotificationService.notifyTableMissing(sourceId, tableName, count));
+                }
+                continue;
+            }
 
-                log.info("Successfully flushed {} dynamic events into ulpf_events.{}", tableBatch.size(), tableName);
-            } catch (Exception e) {
-                log.warn("Failed to flush dynamic events to ulpf_events.{}: {}", tableName, e.getMessage());
+            // Dynamic Column Reconciliation: Check if mapped fields in tableBatch are missing from ClickHouse table
+            Set<String> lowerCols = new HashSet<>();
+            for (String c : cols) {
+                lowerCols.add(c.toLowerCase());
+            }
+            Set<String> missingCols = new HashSet<>();
+            for (CanonicalEventRecord r : tableBatch) {
+                if (r.mappedFields() != null) {
+                    for (String f : r.mappedFields().keySet()) {
+                        if (f != null && !lowerCols.contains(f.toLowerCase())) {
+                            missingCols.add(f.toLowerCase());
+                        }
+                    }
+                }
+            }
+
+            if (!missingCols.isEmpty()) {
+                Set<String> failedCols = new HashSet<>();
+                if (dynamicSchemaProvisioningService != null) {
+                    long now = System.currentTimeMillis();
+                    if (failedAlterColumnsCache.size() > 1000) {
+                        failedAlterColumnsCache.clear();
+                    }
+                    for (String missingCol : missingCols) {
+                        String cacheKey = tableName + ":" + missingCol;
+                        Long lastFailed = failedAlterColumnsCache.get(cacheKey);
+                        if (lastFailed != null && (now - lastFailed) < FAILED_ALTER_COOLDOWN_MS) {
+                            failedCols.add(missingCol);
+                            continue;
+                        }
+
+                        if (!missingCol.matches("^[a-z_][a-z0-9_]*$")) {
+                            log.warn("Invalid dynamic column name '{}' for table ulpf_events.{}. Skipping ALTER TABLE.", missingCol, tableName);
+                            failedAlterColumnsCache.put(cacheKey, now);
+                            failedCols.add(missingCol);
+                            continue;
+                        }
+
+                        boolean added = dynamicSchemaProvisioningService.addColumnIfNotExists(tableName, missingCol, "Nullable(String)");
+                        if (added) {
+                            failedAlterColumnsCache.remove(cacheKey);
+                            log.info("Successfully added missing column '{}' to table ulpf_events.{}", missingCol, tableName);
+                        } else {
+                            failedAlterColumnsCache.put(cacheKey, now);
+                            failedCols.add(missingCol);
+                        }
+                    }
+                    invalidateColumnsCache(tableName);
+                    cols = getColumnsForTable(tableName);
+                } else {
+                    failedCols.addAll(missingCols);
+                }
+
+                if (!failedCols.isEmpty() && tableFailureNotificationService != null) {
+                    java.util.Map<String, Integer> countsBySource = new java.util.HashMap<>();
+                    for (CanonicalEventRecord r : tableBatch) {
+                        if (r.sourceId() != null) {
+                            countsBySource.merge(r.sourceId(), 1, Integer::sum);
+                        }
+                    }
+                    countsBySource.forEach((sourceId, count) ->
+                            tableFailureNotificationService.notifyMissingColumns(sourceId, tableName, failedCols, count));
+                }
+            }
+
+            int insertedCount = insertWithIsolation(tableName, cols, tableBatch);
+            if (insertedCount > 0) {
+                log.info("Successfully flushed {} dynamic events into ulpf_events.{}", insertedCount, tableName);
+                if (tableFailureNotificationService != null) {
+                    Set<String> distinctSources = new HashSet<>();
+                    for (CanonicalEventRecord r : tableBatch) {
+                        if (r.sourceId() != null) {
+                            distinctSources.add(r.sourceId());
+                        }
+                    }
+                    for (String src : distinctSources) {
+                        try {
+                            tableFailureNotificationService.markRecovered(src, tableName);
+                        } catch (Exception ex) {
+                            log.warn("Error marking source {} recovered: {}", src, ex.getMessage());
+                        }
+                    }
+                }
             }
         }
-
     }
 
     /**
@@ -544,15 +661,171 @@ public class ClickHouseIngestionRepository {
             throw new IllegalStateException("Dynamic table ulpf_events." + tableName + " has no columns or does not exist");
         }
 
-        String colNames = String.join(", ", cols);
-        String placeholders = String.join(", ", Collections.nCopies(cols.size(), "?"));
-        String insertSql = "INSERT INTO ulpf_events." + tableName + " (" + colNames + ") VALUES (" + placeholders + ")";
+        return insertWithIsolation(tableName, cols, records);
+    }
 
-        final List<String> finalCols = cols;
-        clickhouseJdbcTemplate.batchUpdate(insertSql, records, records.size(), (ps, record) -> {
-            for (int i = 0; i < finalCols.size(); i++) {
+    /**
+     * Inserts a batch into dynamic table ulpf_events.{tableName} with bad record isolation.
+     * Tries the whole batch. If it fails and batch size > 1, splits in half and tries each half.
+     * If both halves fail, halts further splitting, treats it as systemic failure, and notifies INSERT_FAILURE.
+     * If only one half fails, continues halving until single failing records are identified.
+     * Single failing records are retried once degraded (mapped fields NULL).
+     * If degraded succeeds, a DEGRADED_RECORDS alert is dispatched.
+     * If degraded fails, the record is dropped from analytics and an alert is dispatched.
+     */
+    private int insertWithIsolation(String tableName, List<String> cols, List<CanonicalEventRecord> batch) {
+        if (batch == null || batch.isEmpty() || cols == null || cols.isEmpty() || clickhouseJdbcTemplate == null) {
+            return 0;
+        }
+
+        try {
+            executeBatchInsert(tableName, cols, batch);
+            return batch.size();
+        } catch (Exception batchEx) {
+            log.warn("Batch insert of {} records into ulpf_events.{} failed: {}. Attempting isolation.",
+                    batch.size(), tableName, batchEx.getMessage());
+
+            if (batch.size() <= 1) {
+                return isolateAndDegradeSingleRecord(tableName, cols, batch.get(0), batchEx.getMessage());
+            }
+
+            int mid = batch.size() / 2;
+            List<CanonicalEventRecord> firstHalf = batch.subList(0, mid);
+            List<CanonicalEventRecord> secondHalf = batch.subList(mid, batch.size());
+
+            Exception firstEx = null;
+            try {
+                executeBatchInsert(tableName, cols, firstHalf);
+            } catch (Exception e1) {
+                firstEx = e1;
+            }
+
+            Exception secondEx = null;
+            try {
+                executeBatchInsert(tableName, cols, secondHalf);
+            } catch (Exception e2) {
+                secondEx = e2;
+            }
+
+            // If both halves fail, treat it as a systemic failure. Stop splitting and raise INSERT_FAILURE for the whole batch.
+            if (firstEx != null && secondEx != null) {
+                log.warn("Systemic failure inserting into ulpf_events.{}: both batch halves failed. Halting isolation.", tableName);
+                if (tableFailureNotificationService != null) {
+                    Map<String, Integer> countsBySource = new HashMap<>();
+                    for (CanonicalEventRecord r : batch) {
+                        if (r.sourceId() != null) {
+                            countsBySource.merge(r.sourceId(), 1, Integer::sum);
+                        }
+                    }
+                    countsBySource.forEach((srcId, count) ->
+                            tableFailureNotificationService.notifyInsertFailure(srcId, tableName, count, batchEx.getMessage()));
+                }
+                return 0;
+            }
+
+            int inserted = 0;
+            if (firstEx != null) {
+                inserted += isolateFailingBatch(tableName, cols, firstHalf, firstEx.getMessage());
+            } else {
+                inserted += firstHalf.size();
+            }
+
+            if (secondEx != null) {
+                inserted += isolateFailingBatch(tableName, cols, secondHalf, secondEx.getMessage());
+            } else {
+                inserted += secondHalf.size();
+            }
+
+            return inserted;
+        }
+    }
+
+    private int isolateFailingBatch(String tableName, List<String> cols, List<CanonicalEventRecord> subBatch, String originalError) {
+        if (subBatch.isEmpty()) {
+            return 0;
+        }
+        if (subBatch.size() == 1) {
+            return isolateAndDegradeSingleRecord(tableName, cols, subBatch.get(0), originalError);
+        }
+
+        int mid = subBatch.size() / 2;
+        List<CanonicalEventRecord> half1 = subBatch.subList(0, mid);
+        List<CanonicalEventRecord> half2 = subBatch.subList(mid, subBatch.size());
+
+        Exception h1Ex = null;
+        try {
+            executeBatchInsert(tableName, cols, half1);
+        } catch (Exception e) {
+            h1Ex = e;
+        }
+
+        if (h1Ex == null) {
+            // half1 succeeded, continue isolating in half2
+            int inserted2 = isolateFailingBatch(tableName, cols, half2, originalError);
+            return half1.size() + inserted2;
+        } else {
+            // half1 failed, test half2
+            try {
+                executeBatchInsert(tableName, cols, half2);
+                // half2 succeeded, continue isolating in half1
+                int inserted1 = isolateFailingBatch(tableName, cols, half1, h1Ex.getMessage());
+                return inserted1 + half2.size();
+            } catch (Exception h2Ex) {
+                // If both fail at sub-batch level, isolate both halves
+                int inserted1 = isolateFailingBatch(tableName, cols, half1, h1Ex.getMessage());
+                int inserted2 = isolateFailingBatch(tableName, cols, half2, h2Ex.getMessage());
+                return inserted1 + inserted2;
+            }
+        }
+    }
+
+    private int isolateAndDegradeSingleRecord(String tableName, List<String> cols, CanonicalEventRecord record, String originalError) {
+        CanonicalEventRecord degraded = new CanonicalEventRecord(
+                record.targetTable(),
+                record.eventId(),
+                record.lineageId(),
+                record.vendorId(),
+                record.sourceId(),
+                record.mappingVersion(),
+                record.timestamp(),
+                null,
+                record.canonicalPayload(),
+                record.rawUnmapped(),
+                Collections.emptyMap()
+        );
+
+        try {
+            executeBatchInsert(tableName, cols, List.of(degraded));
+            log.info("Successfully inserted degraded record {} into ulpf_events.{}", record.eventId(), tableName);
+            if (tableFailureNotificationService != null && record.sourceId() != null) {
+                tableFailureNotificationService.notifyDegradedRecords(
+                        record.sourceId(), tableName, 1, record.eventId(), originalError);
+            }
+            return 1;
+        } catch (Exception degradedEx) {
+            log.warn("Degraded insert failed for event {} into ulpf_events.{}: {}. Dropping from analytics.",
+                    record.eventId(), tableName, degradedEx.getMessage());
+            if (tableFailureNotificationService != null && record.sourceId() != null) {
+                tableFailureNotificationService.notifyInsertFailure(
+                        record.sourceId(), tableName, 1, "Degraded record insert failed: " + degradedEx.getMessage());
+            }
+            return 0;
+        }
+    }
+
+    private void executeBatchInsert(String tableName, List<String> cols, List<CanonicalEventRecord> records) {
+        if (clickhouseJdbcTemplate == null || records == null || records.isEmpty() || cols == null || cols.isEmpty()) {
+            return;
+        }
+
+        String colsSql = String.join(", ", cols);
+        String placeholders = String.join(", ", Collections.nCopies(cols.size(), "?"));
+        String sql = "INSERT INTO ulpf_events." + tableName + " (" + colsSql + ") VALUES (" + placeholders + ")";
+
+        clickhouseJdbcTemplate.batchUpdate(sql, records, records.size(), (ps, record) -> {
+            for (int i = 0; i < cols.size(); i++) {
                 int paramIndex = i + 1;
-                String col = finalCols.get(i).toLowerCase();
+                String col = cols.get(i).toLowerCase();
                 switch (col) {
                     case "event_id" -> ps.setString(paramIndex, record.eventId());
                     case "lineage_id" -> ps.setString(paramIndex, record.lineageId());
@@ -588,7 +861,5 @@ public class ClickHouseIngestionRepository {
                 }
             }
         });
-
-        return records.size();
     }
 }

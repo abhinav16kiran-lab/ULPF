@@ -293,6 +293,7 @@ public class EventIngestionService {
             }
 
             com.fasterxml.jackson.databind.node.ObjectNode unmappedNode = objectMapper.createObjectNode();
+            int totalPayloadKeys = payloadNode.size();
             var fields = payloadNode.properties().iterator();
 
             List<HistoricalVersion> historicalVersions = null;
@@ -338,13 +339,14 @@ public class EventIngestionService {
             }
 
             if (!unmappedNode.isEmpty()) {
-                if (schemaDriftNotificationService != null && sourceId != null) {
+                if (mappingOpt.isPresent() && schemaDriftNotificationService != null && sourceId != null) {
                     java.util.Set<String> unmappedKeys = new java.util.HashSet<>();
                     var fieldNames = unmappedNode.fieldNames();
                     while (fieldNames.hasNext()) {
                         unmappedKeys.add(fieldNames.next());
                     }
-                    schemaDriftNotificationService.checkAndNotifyDrift(sourceId, unmappedKeys);
+                    boolean isTotalDrift = totalPayloadKeys > 0 && unmappedKeys.size() == totalPayloadKeys;
+                    schemaDriftNotificationService.checkAndNotifyDrift(sourceId, unmappedKeys, totalPayloadKeys, isTotalDrift);
                 }
                 return objectMapper.writeValueAsString(unmappedNode);
             }
