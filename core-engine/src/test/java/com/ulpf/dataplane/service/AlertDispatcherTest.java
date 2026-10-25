@@ -404,10 +404,10 @@ class AlertDispatcherTest {
         ReflectionTestUtils.setField(alertDispatcher, "vendorWebhookRepository", vendorWebhookRepo);
         ReflectionTestUtils.setField(alertDispatcher, "vendorRepository", vendorRepo);
 
-        // Configure vendor webhook pointing to a dead endpoint
+        // Configure vendor webhook pointing to a dead endpoint with 2 previous failures
         VendorWebhookRecord brokenWebhook = new VendorWebhookRecord(
                 "wh_broken", "ven_broken", "http://127.0.0.1:" + deadPort + "/dead-hook",
-                null, true, "UNTESTED", null, null, 0,
+                null, true, "UNTESTED", null, null, 2,
                 LocalDateTime.now(), LocalDateTime.now()
         );
         when(vendorWebhookRepo.findByVendorId("ven_broken")).thenReturn(Optional.of(brokenWebhook));
@@ -437,17 +437,72 @@ class AlertDispatcherTest {
         // Wait for the async webhook attempt + failure handling
         Thread.sleep(5000);
 
-        // Verify that the vendor webhook status was updated to FAILING
+        // Verify that the vendor webhook status was updated with consecutiveFails = 3
         verify(vendorWebhookRepo, atLeastOnce()).updateDeliveryStatus(
-                eq("ven_broken"), eq(false), anyInt(), eq(1)
+                eq("ven_broken"), eq(false), anyInt(), eq(3)
         );
 
         // Verify that an in-app notification was created for the vendor owner about the broken webhook
-        // The owner gets the regular "Vendor Title" notification AND a webhook-failure notification
         verify(notificationService, atLeastOnce()).createNotification(
                 eq("owner_user_broken"),
                 argThat(title -> title.contains("Webhook") && title.contains("Failing")),
                 argThat(message -> message.contains("dead-hook") || message.contains("127.0.0.1"))
+        );
+    }
+
+    /**
+     * Confirms that a single transient webhook failure (consecutive_fails < 3)
+     * does NOT create an alert in the notifications table.
+     */
+    @Test
+    void testTransientWebhookFailure_DoesNotCreateInAppAlert() throws Exception {
+        int deadPort = 59997;
+
+        VendorWebhookRepository vendorWebhookRepo = mock(VendorWebhookRepository.class);
+        VendorRepository vendorRepo = mock(VendorRepository.class);
+        ReflectionTestUtils.setField(alertDispatcher, "vendorWebhookRepository", vendorWebhookRepo);
+        ReflectionTestUtils.setField(alertDispatcher, "vendorRepository", vendorRepo);
+
+        // Configure vendor webhook with 0 previous failures (1st failure)
+        VendorWebhookRecord transientWebhook = new VendorWebhookRecord(
+                "wh_transient", "ven_transient", "http://127.0.0.1:" + deadPort + "/transient-hook",
+                null, true, "HEALTHY", 200, null, 0,
+                LocalDateTime.now(), LocalDateTime.now()
+        );
+        when(vendorWebhookRepo.findByVendorId("ven_transient")).thenReturn(Optional.of(transientWebhook));
+
+        VendorRecord vendorRecord = new VendorRecord(
+                "ven_transient", "owner_user_transient", "Transient Vendor", "ACTIVE", LocalDateTime.now()
+        );
+        when(vendorRepo.findById("ven_transient")).thenReturn(Optional.of(vendorRecord));
+
+        when(userRepository.findUsersByRole(Role.ADMIN)).thenReturn(Collections.emptyList());
+
+        AlertPayload payload = new AlertPayload(
+                "TABLE_MISSING", "CRITICAL", "src_transient", "Source Transient",
+                "ven_transient", "Transient Vendor", "events_transient", "Table missing",
+                50L, Collections.emptySet(), Instant.now(),
+                "Alert for transient vendor", "Replay events"
+        );
+
+        alertDispatcher.dispatchAlert(
+                payload,
+                "Admin Title", "Admin Message",
+                "owner_user_transient", "Vendor Title", "Vendor Message"
+        );
+
+        Thread.sleep(5000);
+
+        // Delivery status updated to consecutive_fails = 1
+        verify(vendorWebhookRepo, atLeastOnce()).updateDeliveryStatus(
+                eq("ven_transient"), eq(false), anyInt(), eq(1)
+        );
+
+        // In-app webhook failure notification was NOT triggered
+        verify(notificationService, never()).createNotification(
+                eq("owner_user_transient"),
+                argThat(title -> title != null && title.contains("Webhook") && title.contains("Failing")),
+                anyString()
         );
     }
 }

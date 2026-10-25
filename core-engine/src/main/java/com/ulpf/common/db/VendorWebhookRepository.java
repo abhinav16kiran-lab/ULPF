@@ -113,7 +113,7 @@ public class VendorWebhookRepository {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
             ON CONFLICT(vendor_id) DO UPDATE SET
                 webhook_url = excluded.webhook_url,
-                secret_key = excluded.secret_key,
+                secret_key = COALESCE(excluded.secret_key, vendor_webhooks.secret_key),
                 is_active = excluded.is_active,
                 status = 'UNTESTED',
                 consecutive_fails = 0,
@@ -138,14 +138,20 @@ public class VendorWebhookRepository {
     }
 
     public void updateDeliveryStatus(String vendorId, boolean success, int statusCode, int consecutiveFails) {
-        String status = success ? "HEALTHY" : "FAILING";
         String sql = """
             UPDATE vendor_webhooks
-            SET status = ?, last_status_code = ?, last_attempt_at = CURRENT_TIMESTAMP,
-                consecutive_fails = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = CASE
+                    WHEN ? = 1 THEN 'HEALTHY'
+                    WHEN ? >= 3 THEN 'FAILING'
+                    ELSE status
+                END,
+                last_status_code = ?,
+                last_attempt_at = CURRENT_TIMESTAMP,
+                consecutive_fails = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE vendor_id = ?
             """;
-        jdbcTemplate.update(sql, status, statusCode, consecutiveFails, vendorId);
+        jdbcTemplate.update(sql, success ? 1 : 0, consecutiveFails, statusCode, consecutiveFails, vendorId);
     }
 
     public void deleteByVendorId(String vendorId) {

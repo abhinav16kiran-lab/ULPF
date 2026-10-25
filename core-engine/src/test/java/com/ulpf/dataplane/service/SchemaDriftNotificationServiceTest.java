@@ -79,6 +79,37 @@ class SchemaDriftNotificationServiceTest {
     }
 
     @Test
+    void testSchemaDriftPassesVendorIdToAlertDispatcher() {
+        String sourceId = "src_fw_101";
+        String vendorId = "ven_101";
+        String ownerUserId = "usr_vendor_01";
+
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Firewall Source", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Palo Alto", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        AlertDispatcher mockDispatcher = mock(AlertDispatcher.class);
+        driftNotificationService.setAlertDispatcher(mockDispatcher);
+
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("new_field_x"));
+
+        ArgumentCaptor<AlertPayload> payloadCaptor = ArgumentCaptor.forClass(AlertPayload.class);
+        verify(mockDispatcher).dispatchAlert(
+                payloadCaptor.capture(),
+                anyString(), anyString(),
+                eq(ownerUserId),
+                anyString(), anyString(),
+                eq(true)
+        );
+
+        AlertPayload payload = payloadCaptor.getValue();
+        assertEquals("SCHEMA_DRIFT", payload.alertType());
+        assertEquals(vendorId, payload.vendorId(), "payload.vendorId() must NOT be null; must match vendor ID for webhook delivery");
+    }
+
+    @Test
     void testDuplicateSchemaDriftSuppressedWithinCooldownWindow() {
         String sourceId = "src_fw_200";
 

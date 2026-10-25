@@ -69,6 +69,44 @@ class VendorWebhookServiceTest {
     }
 
     @Test
+    void testSaveOrUpdateWebhook_PreservesExistingSecret_WhenOmitted() {
+        when(vendorRepo.findByOwnerUserId("user_1"))
+                .thenReturn(Optional.of(new VendorRecord("ven_1", "user_1", "Vendor One", "ACTIVE", LocalDateTime.now())));
+
+        VendorWebhookRecord existing = new VendorWebhookRecord(
+                "wh_1", "ven_1", "https://old-hooks.slack.com/services/1",
+                "whsec_existing_secret_12345", true, "HEALTHY", 200, LocalDateTime.now(), 0,
+                LocalDateTime.now(), LocalDateTime.now()
+        );
+        VendorWebhookRecord updated = new VendorWebhookRecord(
+                "wh_1", "ven_1", "https://new-hooks.slack.com/services/2",
+                "whsec_existing_secret_12345", true, "UNTESTED", null, null, 0,
+                LocalDateTime.now(), LocalDateTime.now()
+        );
+        when(webhookRepo.findByVendorId("ven_1")).thenReturn(Optional.of(existing), Optional.of(updated));
+
+        // When saved, verify the repository was invoked with the existing secret preserved
+        when(webhookRepo.saveOrUpdate(argThat(rec ->
+                "whsec_existing_secret_12345".equals(rec.secretKey()) &&
+                "https://new-hooks.slack.com/services/2".equals(rec.webhookUrl())
+        ))).thenReturn(updated);
+
+        when(webhookRepo.findRecentLogsByVendorId("ven_1", 5)).thenReturn(List.of());
+
+        // Act: update URL with secretKey left null (leave blank to keep existing)
+        VendorWebhookResponse response = service.saveOrUpdateWebhook(
+                "user_1",
+                new WebhookConfigRequest("https://new-hooks.slack.com/services/2", null)
+        );
+
+        // Assert: existing secret is preserved in the response
+        assertTrue(response.configured());
+        assertEquals("https://new-hooks.slack.com/services/2", response.webhookUrl());
+        assertNotNull(response.maskedSecret());
+        assertTrue(response.maskedSecret().contains("••••"));
+    }
+
+    @Test
     void testMaskSecret_ShortSecret() {
         // Very short secrets should be fully masked
         String masked = VendorWebhookService.maskSecret("abc");
@@ -201,5 +239,29 @@ class VendorWebhookServiceTest {
         assertFalse(resp.configured());
         assertNull(resp.webhookUrl());
         assertEquals(0, resp.consecutiveFails());
+    }
+
+    @Test
+    void testSaveWebhookWithLoopbackAddressRejected() {
+        when(vendorRepo.findByOwnerUserId("user_1"))
+                .thenReturn(Optional.of(new VendorRecord("ven_1", "user_1", "Vendor One", "ACTIVE", LocalDateTime.now())));
+
+        IllegalArgumentException ex1 = assertThrows(IllegalArgumentException.class,
+                () -> service.saveOrUpdateWebhook("user_1", new WebhookConfigRequest("http://localhost:8080/internal", null)));
+        assertTrue(ex1.getMessage().contains("restricted internal or link-local address"));
+
+        IllegalArgumentException ex2 = assertThrows(IllegalArgumentException.class,
+                () -> service.saveOrUpdateWebhook("user_1", new WebhookConfigRequest("http://127.0.0.1:9090/admin", null)));
+        assertTrue(ex2.getMessage().contains("restricted internal or link-local address"));
+    }
+
+    @Test
+    void testSaveWebhookWithCloudMetadataRejected() {
+        when(vendorRepo.findByOwnerUserId("user_1"))
+                .thenReturn(Optional.of(new VendorRecord("ven_1", "user_1", "Vendor One", "ACTIVE", LocalDateTime.now())));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.saveOrUpdateWebhook("user_1", new WebhookConfigRequest("http://169.254.169.254/latest/meta-data", null)));
+        assertTrue(ex.getMessage().contains("restricted internal or link-local address"));
     }
 }
