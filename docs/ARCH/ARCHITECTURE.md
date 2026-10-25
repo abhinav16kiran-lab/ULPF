@@ -29,8 +29,9 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 │  │ CONTROL PLANE                │        │ DATA PLANE (Zero-Overhead Ingestion)    │  │
 │  │ • Onboarding Workflow        │        │ • Header-Based Protocol Autodetector    │  │
 │  │ • AI Mapping Engine          │        │ • In-Memory Lock-Free Queue Buffer      │  │
-│  │ • Schema Governance          │        │ • ClickHouse Async Micro-Batching       │  │
-│  │ • User Authentication & JWT  │        │ • Out-of-Band Merkle Tree Hashing       │  │
+│  │ • Replay & Backfill Worker   │        │ • ClickHouse Async Micro-Batching       │  │
+│  │ • Decoupled AlertDispatcher  │        │ • Out-of-Band Merkle Tree Hashing       │  │
+│  │ • Vendor Webhook Governance  │        │ • Schema Drift & Failure Governance     │  │
 │  └──────────────┬───────────────┘        └────────────────────┬────────────────────┘  │
 └─────────────────┼─────────────────────────────────────────────┼───────────────────────┘
                   │                                             │
@@ -40,7 +41,9 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 │ (data/control-plane.db)                │    │ (Port 8123 / 9000)                      │
 │ • users, vendors, sources, credentials │    │ • ulpf_raw.raw_events                   │
 │ • mapping_versions, onboarding_requests│    │ • ulpf_events.canonical_events          │
-│ • batch_integrity_blocks (Merkle Roots)│    │ • ulpf_events.events_{vendor}_{source}  │
+│ • vendor_webhooks & delivery_logs      │    │ • ulpf_events.events_{vendor}_{source}  │
+│ • ingestion_alert_incidents            │    │                                         │
+│ • batch_integrity_blocks (Merkle Roots)│    │                                         │
 └────────────────────────────────────────┘    └─────────────────────────────────────────┘
 ```
 
@@ -86,6 +89,25 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 * **Adaptive ClickHouse Backpressure**: Proactively samples ClickHouse `MemoryTracking` metrics before streaming chunks; if memory utilization exceeds 80%, the worker throttles execution to protect database stability.
 * **Safe Idempotency & Deduplication**: Performs per-chunk primary key membership checks against the target table before batch insertion, ensuring safe resumes after interruptions without generating duplicate canonical records.
 * **Operational Notifications**: Dispatches role-tailored notifications to source owners and administrators upon job completion, cancellation, or failure.
+
+### 3.7 Table Ingestion Failure & Schema Drift Governance
+* **Sliding-Window Throttling & Incident Management**: A dedicated `TableIngestionFailureNotificationService` throttles failure alerts with a configurable 30-minute quiet window per `(source_id, failure_type)`. Prevents inbox/webhook flooding while aggregating dropped event counts into persistent incidents (`ingestion_alert_incidents`).
+* **Ingestion-Path Drop Detection**: Monitored directly in `ClickHouseIngestionRepository.flushCanonical()`. Automatically detects unprovisioned target tables, missing schema definitions, and batch insert errors without dropping raw data from `ulpf_raw.raw_events`.
+* **Zero-Overhead Schema Drift Detection**: `SchemaDriftNotificationService` profiles active ingestion batches for schema drift:
+  - *High Drift Alert*: Triggered when $>30\%$ of extracted keys are diverted to `raw_unmapped`.
+  - *Complete Drift Alert*: Triggered when $100\%$ of keys fail mapping, generating actionable instructions to trigger historical backfills (`POST /v1/admin/sources/{sourceId}/replay`).
+* **Dynamic Column Reconciliation**: Invokes `DynamicSchemaProvisioningService.addColumnIfNotExists()` to add newly approved canonical fields to existing MergeTree tables on the fly without database recreation.
+
+### 3.8 Tenant-Scoped Vendor Webhooks & Multi-Channel Alerting Pipeline
+* **Asynchronous Multi-Channel Dispatcher**: `AlertDispatcher` routes operational alerts through two decoupled channels:
+  1. *Internal In-App Notifications*: Stored in SQLite `notifications` for UI inbox display.
+  2. *External Vendor Webhooks*: Dispatched over HTTP/HTTPS to tenant-registered webhook endpoints (`vendor_webhooks`).
+* **Cryptographic HMAC-SHA256 Signing**: Every outbound webhook delivery payload is cryptographically signed using the vendor's private secret key:
+  - `X-ULPF-Signature-256`: Hex-encoded HMAC-SHA256 signature of `${timestamp}.${rawJsonBody}`.
+  - `X-ULPF-Timestamp`: Unix epoch millisecond timestamp preventing replay attacks.
+  - `X-ULPF-Event`: Event category identifier (`SCHEMA_DRIFT`, `INGESTION_FAILURE`, `TEST_PING`).
+* **Circuit-Breaker & Flapping Mitigation**: Tracks consecutive delivery errors per endpoint. A single transient blip remains non-fatal; after 3 consecutive failures, the endpoint is transitioned to `FAILING` and an inbox notification is dispatched to notify the vendor of webhook delivery failure.
+* **SSRF Hardening**: Rejects webhook registration attempts targeting loopback addresses (`127.0.0.1`, `::1`, `localhost`), link-local/cloud metadata services (`169.254.169.254`), or malformed URI protocols.
 
 ---
 

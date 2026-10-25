@@ -41,6 +41,9 @@
 | `/v1/admin/sources/{sourceId}/replay` | `POST` | `ADMIN` | Trigger asynchronous historical replay & backfill from raw events |
 | `/v1/admin/sources/{sourceId}/replay/status` | `GET` | `ADMIN` | Check real-time progress and status of source replay job |
 | `/v1/admin/sources/{sourceId}/replay` | `DELETE` | `ADMIN` | Request cancellation of currently running replay job |
+| `/v1/vendor/webhook` | `GET` | `VENDOR` | Fetch tenant webhook configuration and delivery health status |
+| `/v1/vendor/webhook` | `POST` | `VENDOR` | Register or update tenant webhook URL and optional HMAC secret |
+| `/v1/vendor/webhook/test` | `POST` | `VENDOR` | Dispatch HMAC-signed test ping (`TEST_PING`) to configured webhook |
 
 ---
 
@@ -382,6 +385,90 @@ Requests immediate cancellation of a currently executing replay job.
   ```
 * **Error Responses**:
   - `404 NOT FOUND`: No active running replay job found for this source.
+
+---
+
+### 3.8 Tenant-Scoped Vendor Webhooks
+
+Provides self-service registration and health monitoring for vendor-owned external alert sinks. Accessible strictly to authenticated users with the `VENDOR` role.
+
+#### `GET /v1/vendor/webhook`
+Retrieves the active webhook configuration and delivery health metrics for the authenticated vendor.
+
+* **Headers**: `Authorization: Bearer <token>` (Role: `VENDOR`)
+* **Response (200 OK)**:
+  ```json
+  {
+    "webhookId": "wh_45a6b7c8",
+    "vendorId": "vnd_987654",
+    "webhookUrl": "https://api.vendor.com/webhooks/ulpf",
+    "hasSecret": true,
+    "isActive": true,
+    "status": "HEALTHY",
+    "lastStatusCode": 200,
+    "lastAttemptAt": "2026-10-25T14:22:10",
+    "consecutiveFails": 0,
+    "updatedAt": "2026-10-25T12:00:00"
+  }
+  ```
+* **Error Responses**:
+  - `404 NOT FOUND`: No webhook currently configured for this vendor.
+
+#### `POST /v1/vendor/webhook`
+Registers a new webhook URL or updates the existing configuration. Omission of `secretKey` preserves the existing secret in SQLite.
+
+* **Headers**: `Authorization: Bearer <token>` (Role: `VENDOR`)
+* **Request Body**:
+  ```json
+  {
+    "webhookUrl": "https://api.vendor.com/webhooks/ulpf",
+    "secretKey": "my-optional-new-hmac-secret",
+    "isActive": true
+  }
+  ```
+* **SSRF Protection Rules**:
+  - Rejects loopback destinations (`127.0.0.1`, `localhost`, `::1`).
+  - Rejects cloud metadata addresses (`169.254.169.254`).
+  - Requires valid `http` or `https` protocol schemes.
+* **Response (200 OK)**: Returns the updated `VendorWebhookResponse` object.
+
+#### `POST /v1/vendor/webhook/test`
+Dispatches an immediate out-of-band test ping (`TEST_PING`) to verify external endpoint reachability and signature computation.
+
+* **Headers**: `Authorization: Bearer <token>` (Role: `VENDOR`)
+* **Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "statusCode": 200,
+    "latencyMs": 48,
+    "message": "Test ping delivered successfully"
+  }
+  ```
+
+#### Outbound Webhook Payload Format & HMAC Headers
+All outbound webhook HTTP POST requests dispatched by `AlertDispatcher` include:
+* **Headers**:
+  - `Content-Type: application/json`
+  - `X-ULPF-Event: SCHEMA_DRIFT | INGESTION_FAILURE | TEST_PING`
+  - `X-ULPF-Timestamp: 1792940000000` (Unix millisecond epoch)
+  - `X-ULPF-Signature-256: <hex-encoded-hmac-sha256>` (Computed over `${timestamp}.${rawJsonBody}`)
+* **Payload Structure**:
+  ```json
+  {
+    "alertType": "SCHEMA_DRIFT",
+    "severity": "WARNING",
+    "sourceId": "src_123456",
+    "vendorId": "vnd_987654",
+    "title": "High Schema Drift Detected",
+    "message": "Source 'Firewall-1' has unmapped drift ratio of 42.5%",
+    "timestamp": "2026-10-25T14:22:10",
+    "details": {
+      "unmappedRatio": 0.425,
+      "unmappedKeys": ["custom_tag", "sensor_vlan"]
+    }
+  }
+  ```
 
 ---
 

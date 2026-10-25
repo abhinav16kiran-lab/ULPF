@@ -34,8 +34,8 @@ core-engine/
 ├── src/main/java/com/ulpf/
 │   ├── analytics/        # ClickHouse query execution, time-series, table catalog & dynamic column discovery
 │   ├── common/           # DB connection pools, JWT utilities & security filter chain (shouldNotFilter)
-│   ├── controlplane/     # Auth (login/signup), onboarding workflows, notification dispatch & admin governance
-│   ├── dataplane/        # High-throughput event ingestion, protocol autodetector & micro-batch pipeline
+│   ├── controlplane/     # Auth (login/signup), onboarding workflows, vendor webhooks, notifications & governance
+│   ├── dataplane/        # High-throughput event ingestion, protocol autodetector, schema drift & alert dispatcher
 │   ├── integrity/        # Cryptographic Merkle tree forensic audit engine & bulk tamper detection
 │   ├── mapping/          # 4-layer AI schema mapping engine, shared transformer & human feedback loop
 │   └── replay/           # Asynchronous historical log replay, cursor streaming & backfill service
