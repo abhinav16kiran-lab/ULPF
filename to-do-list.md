@@ -10,11 +10,17 @@
   - Rate-limited chunking / batching to avoid ClickHouse memory spikes or lock contention.
   - Status tracking (e.g. CLI command or admin API `POST /api/v1/sources/{id}/replay` with job progress reporting).
 
-### 2. Table Ingestion Failure & Drift Notification System
+### 2. Table Ingestion Failure & Drift Notification System [COMPLETED]
 - **Problem**: When a log source emits events but the dynamic table has not been provisioned or is missing required columns, logs are safely stored in `ulpf_raw.raw_events` but fail to insert into `ulpf_events.events_{source}`.
 - **Requirement**: Notify system admins and the respective vendor via `NotificationService` / webhook alerts when:
   - Events cannot be loaded into the dynamic table (e.g. table does not exist or schema mismatch).
   - Unmapped schema drift rate exceeds acceptable thresholds.
+- **Implementation Summary**:
+  - Built `TableIngestionFailureNotificationService` with sliding window throttling (default: 30-minute quiet window), atomic event drop accumulators, and digest dispatch.
+  - Hooked failure detection directly into `ClickHouseIngestionRepository.flushCanonical()` for missing target table metadata, missing/unprovisioned tables, and batch insert exceptions.
+  - Upgraded `SchemaDriftNotificationService` and `EventIngestionService` with high drift ratio (>30%) and total drift (100% unmapped fields) detection with actionable replay recovery instructions (`POST /v1/admin/sources/{sourceId}/replay`).
+  - Added `DynamicSchemaProvisioningService.addColumnIfNotExists()` for schema column reconciliation.
+  - Validated with unit tests in `TableIngestionFailureNotificationServiceTest`, `SchemaDriftNotificationServiceTest`, and `ClickHouseIngestionRepositoryTest` (243/243 test pass rate).
 - **Design Considerations**:
   - Deduplicate and throttle notifications to prevent alerting spam.
   - Provide actionable metadata (vendor ID, source ID, affected event counts, missing table name).

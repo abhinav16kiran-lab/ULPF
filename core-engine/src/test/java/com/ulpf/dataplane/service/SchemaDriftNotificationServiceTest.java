@@ -103,10 +103,16 @@ class SchemaDriftNotificationServiceTest {
         // 1st key set -> Notification 1 sent
         driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("key_alpha"));
 
-        // 2nd distinct key set -> Notification 2 sent!
+        // 2nd distinct key set -> Suppressed within 30-min window, accumulated for digest
         driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("key_beta"));
 
-        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        SchemaDriftNotificationService.DriftState state = driftNotificationService.getDriftStateCache().get(sourceId + ":SCHEMA_DRIFT");
+        assertNotNull(state);
+        assertTrue(state.accumulatedKeys().contains("key_alpha"));
+        assertTrue(state.accumulatedKeys().contains("key_beta"));
+        assertEquals(2, state.eventCount().get());
     }
 
     @Test
@@ -182,4 +188,233 @@ class SchemaDriftNotificationServiceTest {
         assertEquals("Schema Version Resumed: " + sourceId, titles.get(1));
         assertTrue(messages.get(1).contains("resumed using active mapping version v2"));
     }
+
+    @Test
+    void testTotalSchemaDriftDispatchesCriticalAlert() {
+        String sourceId = "src_fw_total";
+        String vendorId = "ven_total";
+        String ownerUserId = "usr_vendor_total";
+
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Firewall Total", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Vendor Total", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 5 keys in payload, all 5 unmapped -> isTotalDrift = true
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k1", "k2", "k3", "k4", "k5"), 5, true);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(onboardingRepository, times(2)).saveNotification(
+                anyString(),
+                titleCaptor.capture(),
+                msgCaptor.capture()
+        );
+
+        List<String> titles = titleCaptor.getAllValues();
+        List<String> messages = msgCaptor.getAllValues();
+
+        assertTrue(titles.get(0).contains("[CRITICAL] Total Schema Drift"));
+        assertTrue(messages.get(0).contains("All payload fields"));
+        assertTrue(messages.get(0).contains("/replay"));
+
+        assertTrue(titles.get(1).contains("[CRITICAL ACTION REQUIRED] Total Schema Drift"));
+        assertTrue(messages.get(1).contains("100% of payload fields"));
+    }
+
+    @Test
+    void testHighSchemaDriftRatioAlert() {
+        String sourceId = "src_fw_high_ratio";
+        String vendorId = "ven_high";
+        String ownerUserId = "usr_vendor_high";
+
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Firewall Ratio", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Vendor High", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 4 unmapped out of 10 total keys = 40% drift (exceeds 30% threshold)
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("f1", "f2", "f3", "f4"), 10, false);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), titleCaptor.capture(), anyString());
+
+        assertTrue(titleCaptor.getAllValues().get(0).contains("Schema Drift Alert (40%)"));
+        assertTrue(titleCaptor.getAllValues().get(1).contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
+    }
+
+    @Test
+    void testRoutingThroughNotificationService() {
+        com.ulpf.controlplane.service.NotificationService notificationService =
+                mock(com.ulpf.controlplane.service.NotificationService.class);
+        driftNotificationService.setNotificationService(notificationService);
+
+        String sourceId = "src_fw_routing";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("unmapped_col"));
+
+        // Verify createNotification on NotificationService was called
+        verify(notificationService, atLeastOnce()).createNotification(anyString(), anyString(), anyString());
+
+        // Verify fallback onboardingRepository.saveNotification was NOT called
+        verify(onboardingRepository, never()).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void test10000CallsRapidlyTriggerExactlyOneAlert() {
+        String sourceId = "src_high_volume";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        for (int i = 0; i < 10000; i++) {
+            driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("unmapped_field_" + (i % 20)));
+        }
+
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+        SchemaDriftNotificationService.DriftState state = driftNotificationService.getDriftStateCache().get(sourceId + ":SCHEMA_DRIFT");
+        assertNotNull(state);
+        assertEquals(10000, state.eventCount().get());
+        assertTrue(state.accumulatedKeys().size() <= 50);
+    }
+
+    @Test
+    void testDifferentSourcesHaveIndependentAlerts() {
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        driftNotificationService.checkAndNotifyDrift("source_A", Set.of("k1"));
+        driftNotificationService.checkAndNotifyDrift("source_B", Set.of("k2"));
+
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testDriftThenTotalDriftTriggersEscalationAlert() {
+        String sourceId = "src_escalation";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // Normal drift
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("extra_field"), 10, false);
+        // Total drift on same source -> Escalates immediately!
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("field1", "field2"), 2, true);
+
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testWindowExpiryWithNoNewEventsScheduledFlushSendsDigest() throws InterruptedException {
+        driftNotificationService.setCooldownMs(50L); // 50ms for test
+        String sourceId = "src_quiet_drift";
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // First event
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k_alpha"));
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        // Second event (suppressed)
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("k_beta"));
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), anyString(), anyString());
+
+        Thread.sleep(70);
+
+        // Scheduled flush runs
+        driftNotificationService.flushExpiredDigests();
+
+        // 1 initial alert + 1 digest = 2 notifications total
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), titleCaptor.capture(), msgCaptor.capture());
+
+        assertTrue(titleCaptor.getAllValues().get(1).contains("[DIGEST] Schema Drift Summary"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("k_alpha"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("k_beta"));
+        assertTrue(msgCaptor.getAllValues().get(1).contains("2 drifted events"));
+    }
+
+    @Test
+    void testBoundaryDriftThreshold3Of10NormalVersus4Of10HighDrift() {
+        when(sourceRepository.findById(anyString())).thenReturn(Optional.empty());
+
+        // 3 of 10 = 30% ratio -> strictly <= 30%, normal drift alert
+        driftNotificationService.checkAndNotifyDrift("src_normal_drift", Set.of("a", "b", "c"), 10, false);
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(1)).saveNotification(anyString(), titleCaptor.capture(), anyString());
+        assertEquals("[ADMIN ACTION REQUIRED] Schema Drift: src_normal_drift", titleCaptor.getValue());
+
+        // 4 of 10 = 40% ratio -> > 30%, HIGH drift alert
+        driftNotificationService.checkAndNotifyDrift("src_high_drift", Set.of("a", "b", "c", "d"), 10, false);
+
+        ArgumentCaptor<String> highTitleCaptor = ArgumentCaptor.forClass(String.class);
+        verify(onboardingRepository, times(2)).saveNotification(anyString(), highTitleCaptor.capture(), anyString());
+        assertTrue(highTitleCaptor.getValue().contains("[ADMIN ACTION REQUIRED] High Schema Drift (40%)"));
+    }
+
+    @Test
+    void testOneThousandSuppressedDriftCalls_SourceLookupCalledExactlyOnce() {
+        String sourceId = "src_fw_hot_path";
+        String vendorId = "ven_hot_path";
+        String ownerUserId = "usr_vendor_hot_path";
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Hot Path Source", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Hot Path Vendor", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        // 1st call -> alerts, invokes sourceRepository.findById and vendorRepository.findById
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("new_key_1"));
+
+        // 1000 suppressed calls -> suppressed on hot path, should NOT invoke sourceRepository.findById
+        for (int i = 0; i < 1000; i++) {
+            driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("new_key_1"));
+        }
+
+        // Verify sourceRepository.findById was called exactly once in total!
+        verify(sourceRepository, times(1)).findById(sourceId);
+        verify(vendorRepository, times(1)).findById(vendorId);
+    }
+
+    @Test
+    void testDigestAfterWindowExpiry_ResolvesVendorAndKeys() throws InterruptedException {
+        String sourceId = "src_fw_digest_test";
+        String vendorId = "ven_digest_test";
+        String ownerUserId = "usr_vendor_digest";
+        SourceRecord source = new SourceRecord(sourceId, vendorId, "Digest Source", "FIREWALL", "ACTIVE", LocalDateTime.now());
+        VendorRecord vendor = new VendorRecord(vendorId, ownerUserId, "Digest Vendor Inc", "ACTIVE", LocalDateTime.now());
+
+        when(sourceRepository.findById(sourceId)).thenReturn(Optional.of(source));
+        when(vendorRepository.findById(vendorId)).thenReturn(Optional.of(vendor));
+
+        driftNotificationService.setCooldownMs(40L); // 40ms cooldown
+
+        // Call 1: initial alert
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("alpha_key"));
+
+        // Call 2: suppressed during window, accumulates beta_key
+        driftNotificationService.checkAndNotifyDrift(sourceId, Set.of("beta_key"));
+
+        // Wait for cooldown to expire
+        Thread.sleep(60);
+
+        // Scheduled flush of expired digests
+        driftNotificationService.flushExpiredDigests();
+
+        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> msgCaptor = ArgumentCaptor.forClass(String.class);
+
+        // 2 notifications from initial alert (vendor + admin) + 2 from digest (admin + vendor) = 4 total
+        verify(onboardingRepository, times(4)).saveNotification(
+                anyString(),
+                titleCaptor.capture(),
+                msgCaptor.capture()
+        );
+
+        List<String> messages = msgCaptor.getAllValues();
+        // The digest message should mention the resolved vendor name and the accumulated keys
+        boolean foundVendorInDigest = messages.stream().anyMatch(m -> m.contains("Digest Vendor Inc") && m.contains("alpha_key") && m.contains("beta_key"));
+        assertTrue(foundVendorInDigest, "Digest notification should resolve vendor name and include accumulated unmapped keys");
+    }
 }
+

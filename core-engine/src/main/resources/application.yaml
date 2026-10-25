@@ -18,6 +18,15 @@ ulpf:
   admin:
     username: ${ULPF_ADMIN_USERNAME:admin}
     password: ${ULPF_ADMIN_PASSWORD:Admin@12345}
+  alert:
+    webhook-url: ${ULPF_ALERT_WEBHOOK_URL:}
+    webhook-secret: ${ULPF_ALERT_WEBHOOK_SECRET:}
+  table-failure:
+    cooldown-ms: ${ULPF_TABLE_FAILURE_COOLDOWN_MS:1800000}
+    recovery-quiet-ms: ${ULPF_TABLE_FAILURE_RECOVERY_QUIET_MS:300000}
+    replay-margin-minutes: ${ULPF_TABLE_FAILURE_REPLAY_MARGIN_MIN:5}
+  schema-drift:
+    cooldown-ms: ${ULPF_SCHEMA_DRIFT_COOLDOWN_MS:1800000}
 
 jwt:
   secret: ${JWT_SECRET:super-secret-jwt-signing-key-for-ulpf-dev-12345-minimum-256-bits}
