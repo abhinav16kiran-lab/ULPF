@@ -74,6 +74,33 @@
   - Ensure cursor persistence updates periodically (e.g., every 5,000 events) rather than per-event to minimize SQLite write contention.
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
+### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack
+- **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
+- **Requirement**:
+  - Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.
+  - Integrate an industry-standard open-source observability stack using **Prometheus** and **Grafana** into the platform deployment configuration (e.g. `docker-compose.yml`).
+  - Configure **Micrometer & Spring Boot Actuator** (`/actuator/prometheus`) in `core-engine` to export production metrics:
+    - *Ingestion Throughput*: Events ingested per second segmented by `source_id`, `vendor_id`, and `source_type`.
+    - *Queue & Backpressure*: In-memory buffer depth, worker thread pool utilization, and event drop counters.
+    - *ClickHouse Analytical Pipeline*: Batch flush frequency, batch size distribution, flush duration/latency, and insert error counts.
+    - *Alerting & Webhook Metrics*: Schema drift rates, incident counts, and webhook delivery latency/success ratios.
+  - Provide pre-configured Grafana dashboards (provisioned via code/JSON) with datasources automatically wired to Prometheus and ClickHouse (via ClickHouse Grafana plugin), giving administrators immediate visibility into log spikes, system health, and pipeline errors.
+- **Design Considerations**:
+  - Keep `/actuator/prometheus` endpoints protected or restricted to internal Docker networks / admin authentication.
+  - Ensure metric recording uses lightweight Micrometer counters/timers with sub-microsecond overhead off the ingestion hot path.
+  - Provide a clean admin portal navigation action / link to launch the dedicated Grafana dashboard.
 
-
-
+### 8. Modular Architecture Refactoring: Decoupled Mapping & Transformation Pipeline
+- **Problem**: The current mapping engine logic is tightly coupled across monolithic classes (`MappingProposalService`, etc.). Header detection, raw payload parsing, type casting, schema version resolution, proposal generation, and candidate promotion are intertwined in dense blocks. This violates the Single Responsibility Principle, creates merge conflicts, and prevents multiple developers from working on mapping features in parallel.
+- **Requirement**:
+  - Refactor the mapping engine into a decoupled, layer-by-layer modular pipeline:
+    1. *Payload Parsing & Normalization Layer*: Pluggable extractors for JSON, CSV, Syslog, Key-Value, and Delimited formats (`PayloadExtractor` SPI).
+    2. *Field Extraction & Auto-Detection Layer*: Isolated strategy classes for header inspection, sample profiling, and column candidate deduction (`FormatDetector`, `FieldDetector`).
+    3. *Transformation & Mapping Pipeline*: Dedicated transformers for type coercion (string to int/datetime/uuid), expression evaluation, and canonical field alignment (`ValueTransformer`, `MappingRule`).
+    4. *Schema Versioning & Promotion Lifecycle*: Pure state machine handling candidate proposals, version increments (`v1`, `v2`, ...), fallback resolution, and approval promotion.
+  - Define clear Java interfaces (`MappingExtractor`, `FieldTransformer`, `MappingValidator`, `ProposalStrategy`) so new formats and transformations can be implemented independently without touching core engine orchestration.
+  - Enable concurrent developer contributions by isolating domain models, unit tests, and strategy implementations into dedicated packages under `com.ulpf.core.mapping.*`.
+- **Design Considerations**:
+  - Preserve 100% backward compatibility with existing stored mapping JSON schemas and SQLite tables.
+  - Performance: Avoid unnecessary intermediate object allocation on the live ingestion hot path.
+  - Comprehensive unit test isolation for each individual strategy and transformation step.
