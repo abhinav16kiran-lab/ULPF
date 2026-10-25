@@ -564,7 +564,7 @@ function NotificationsPage() {
         </div>
 
         {/* ── Vendor Webhook Integration Card (VENDOR users only) ── */}
-        {(userRole === "VENDOR" || userRole === "ADMIN") && <WebhookIntegrationCard />}
+        {userRole === "VENDOR" && <WebhookIntegrationCard />}
 
         {/* Filter Strip & Search Card */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">

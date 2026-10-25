@@ -50,7 +50,11 @@ public class SchemaDriftNotificationService {
     @Autowired(required = false)
     private AlertDispatcher alertDispatcher;
 
-    public record VendorInfo(String name, String ownerUserId) {}
+    public record VendorInfo(String vendorId, String name, String ownerUserId) {
+        public VendorInfo(String name, String ownerUserId) {
+            this(null, name, ownerUserId);
+        }
+    }
 
     public record DriftState(
             long firstSeen,
@@ -187,6 +191,7 @@ public class SchemaDriftNotificationService {
         if (activeState != null) {
             activeState.vendor().set(vendorInfo);
         }
+        String vendorId = vendorInfo.vendorId();
         String vendorName = vendorInfo.name();
         String vendorOwnerUserId = vendorInfo.ownerUserId();
 
@@ -246,7 +251,7 @@ public class SchemaDriftNotificationService {
                 isTotalDrift ? "CRITICAL" : (driftRatio > 0.30 ? "WARN" : "INFO"),
                 sourceId,
                 sourceId,
-                null,
+                vendorId,
                 vendorName,
                 null,
                 isTotalDrift ? "100% of payload fields unmapped" : driftPercent + "% unmapped fields",
@@ -288,12 +293,14 @@ public class SchemaDriftNotificationService {
     }
 
     private VendorInfo resolveVendorInfo(String sourceId) {
+        String vendorId = null;
         String vendorName = "Vendor";
         String vendorOwnerUserId = null;
         try {
             Optional<SourceRecord> sourceOpt = sourceRepository.findById(sourceId);
             if (sourceOpt.isPresent()) {
-                Optional<VendorRecord> vendorOpt = vendorRepository.findById(sourceOpt.get().vendorId());
+                vendorId = sourceOpt.get().vendorId();
+                Optional<VendorRecord> vendorOpt = vendorRepository.findById(vendorId);
                 if (vendorOpt.isPresent()) {
                     vendorName = vendorOpt.get().vendorName();
                     vendorOwnerUserId = vendorOpt.get().ownerUserId();
@@ -302,7 +309,7 @@ public class SchemaDriftNotificationService {
         } catch (Exception e) {
             log.warn("Could not resolve vendor info for source {}: {}", sourceId, e.getMessage());
         }
-        return new VendorInfo(vendorName, vendorOwnerUserId);
+        return new VendorInfo(vendorId, vendorName, vendorOwnerUserId);
     }
 
     private void sendDriftDigest(String sourceId, boolean isTotalDrift, DriftState state) {
@@ -315,6 +322,7 @@ public class SchemaDriftNotificationService {
             vendorInfo = resolveVendorInfo(sourceId);
             state.vendor().set(vendorInfo);
         }
+        String vendorId = vendorInfo.vendorId();
         String vendorName = vendorInfo.name();
         String vendorOwnerUserId = vendorInfo.ownerUserId();
 
@@ -338,7 +346,7 @@ public class SchemaDriftNotificationService {
                 "INFO",
                 sourceId,
                 sourceId,
-                null,
+                vendorId,
                 vendorName,
                 null,
                 "Drift digest summary",

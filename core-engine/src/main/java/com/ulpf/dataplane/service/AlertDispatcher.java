@@ -182,19 +182,22 @@ public class AlertDispatcher {
                 long latency = System.currentTimeMillis() - start;
                 boolean success = (statusCode >= 200 && statusCode < 300);
 
+                boolean isTestPing = "TEST_PING".equalsIgnoreCase(payload.alertType());
+
                 // Record delivery log in SQLite
                 logDeliveryRecord(vendorId, targetUri.toString(), payload.alertType(), statusCode, success, null, (int) latency);
 
                 // Handle failure & notify vendor inbox if vendor webhook failed
-                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), success, statusCode);
+                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), success, statusCode, isTestPing);
 
                 log.info("[WEBHOOK] Dispatched {} to {} -> Status {} ({}ms)", payload.alertType(), targetUri.getHost(), statusCode, latency);
                 return new DeliveryResult(success, statusCode, null, latency);
 
             } catch (Exception e) {
                 long latency = System.currentTimeMillis() - start;
+                boolean isTestPing = "TEST_PING".equalsIgnoreCase(payload.alertType());
                 logDeliveryRecord(vendorId, targetUri.toString(), payload.alertType(), 0, false, e.getMessage(), (int) latency);
-                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), false, 0);
+                handleVendorDeliveryOutcome(vendorId, targetUri.toString(), false, 0, isTestPing);
 
                 log.warn("[WEBHOOK ERROR] Failed to deliver to {}: {}", targetUri.getHost(), e.getMessage());
                 return new DeliveryResult(false, 0, e.getMessage(), latency);
@@ -240,9 +243,9 @@ public class AlertDispatcher {
 
     /**
      * Handles vendor webhook delivery outcome: updates webhook health status,
-     * and sends in-app notifications when the webhook endpoint is broken.
+     * and sends in-app notifications when the webhook endpoint is persistently failing.
      */
-    private void handleVendorDeliveryOutcome(String vendorId, String url, boolean success, int statusCode) {
+    private void handleVendorDeliveryOutcome(String vendorId, String url, boolean success, int statusCode, boolean isTestPing) {
         if (vendorId == null || vendorWebhookRepository == null) {
             return; // Global admin webhook or no repository available
         }
@@ -260,13 +263,14 @@ public class AlertDispatcher {
                 int newFails = webhook.consecutiveFails() + 1;
                 vendorWebhookRepository.updateDeliveryStatus(vendorId, false, statusCode, newFails);
 
-                // Send in-app notification on first failure or every 5th consecutive failure
-                if (newFails == 1 || newFails % 5 == 0) {
+                // Send in-app notification when reaching threshold (3 consecutive fails) or every 5th thereafter.
+                // Test pings from the UI do not spam the inbox since the user sees the result interactively.
+                if (!isTestPing && (newFails == 3 || (newFails > 3 && newFails % 5 == 0))) {
                     String ownerUserId = resolveVendorOwnerUserId(vendorId);
                     if (ownerUserId != null) {
                         String title = "⚠️ Webhook Endpoint Failing";
                         String message = "Your webhook to " + url + " returned HTTP " + statusCode
-                            + ". Please check your endpoint settings in Notifications > Webhook Integration.";
+                            + " (" + newFails + " consecutive delivery failures). Please check your endpoint settings in Notifications > Webhook Integration.";
                         saveNotificationSafely(ownerUserId, title, message);
                     }
                 }
@@ -349,13 +353,21 @@ public class AlertDispatcher {
         }
 
         // 2. Dispatch Specific Vendor Webhook (from SQLite vendor_webhooks)
-        if (payload.vendorId() != null && vendorWebhookRepository != null) {
-            vendorWebhookRepository.findByVendorId(payload.vendorId())
+        String targetVendorId = payload.vendorId();
+        if (targetVendorId == null && vendorOwnerUserId != null && vendorRepository != null) {
+            targetVendorId = vendorRepository.findByOwnerUserId(vendorOwnerUserId)
+                    .map(VendorRepository.VendorRecord::vendorId)
+                    .orElse(null);
+        }
+
+        if (targetVendorId != null && vendorWebhookRepository != null) {
+            final String finalVendorId = targetVendorId;
+            vendorWebhookRepository.findByVendorId(targetVendorId)
                 .filter(VendorWebhookRecord::isActive)
                 .ifPresent(vw -> {
                     try {
                         URI uri = URI.create(vw.webhookUrl());
-                        sendWebhook(uri, vw.secretKey(), payload, vw.vendorId());
+                        sendWebhook(uri, vw.secretKey(), payload, finalVendorId);
                     } catch (Exception e) {
                         log.warn("Invalid vendor webhook URI for vendor {}: {}", vw.vendorId(), e.getMessage());
                     }

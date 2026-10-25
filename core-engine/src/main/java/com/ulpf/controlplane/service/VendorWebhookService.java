@@ -106,27 +106,24 @@ public class VendorWebhookService {
      * Resets status to UNTESTED when URL or secret changes.
      */
     public VendorWebhookResponse saveOrUpdateWebhook(String userId, WebhookConfigRequest request) {
-        if (request.webhookUrl() == null || request.webhookUrl().isBlank()) {
-            throw new IllegalArgumentException("Webhook URL is required");
-        }
-
-        // Validate URL format
+        // Validate URL format and enforce SSRF restrictions
+        validateWebhookUrl(request.webhookUrl());
         String url = request.webhookUrl().trim();
-        try {
-            URI uri = URI.create(url);
-            String scheme = uri.getScheme();
-            if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) || uri.getHost() == null) {
-                throw new IllegalArgumentException("Webhook URL must be a valid HTTP or HTTPS URL with a hostname");
-            }
-        } catch (IllegalArgumentException e) {
-            if (e.getMessage().contains("Webhook URL must be")) throw e;
-            throw new IllegalArgumentException("Invalid webhook URL format: " + e.getMessage());
-        }
 
         String vendorId = resolveVendorId(userId);
 
+        // If secretKey is provided, use it. If omitted or blank, preserve existing secret if already configured.
+        String secretToSave = null;
+        if (request.secretKey() != null && !request.secretKey().isBlank()) {
+            secretToSave = request.secretKey().trim();
+        } else {
+            secretToSave = vendorWebhookRepository.findByVendorId(vendorId)
+                    .map(VendorWebhookRecord::secretKey)
+                    .orElse(null);
+        }
+
         VendorWebhookRecord record = new VendorWebhookRecord(
-            null, vendorId, url, request.secretKey(),
+            null, vendorId, url, secretToSave,
             true, "UNTESTED", null, null, 0, null, null
         );
 
@@ -203,5 +200,49 @@ public class VendorWebhookService {
         int showStart = Math.min(4, len / 3);
         int showEnd = Math.min(3, len / 4);
         return secret.substring(0, showStart) + "••••" + secret.substring(len - showEnd);
+    }
+
+    /**
+     * Validates that the provided webhook URL is a valid HTTP/HTTPS URL
+     * and does not target restricted loopback or link-local cloud metadata addresses (SSRF protection).
+     */
+    static void validateWebhookUrl(String url) {
+        if (url == null || url.isBlank()) {
+            throw new IllegalArgumentException("Webhook URL is required");
+        }
+        try {
+            URI uri = URI.create(url.trim());
+            String scheme = uri.getScheme();
+            if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) || uri.getHost() == null) {
+                throw new IllegalArgumentException("Webhook URL must be a valid HTTP or HTTPS URL with a hostname");
+            }
+
+            String host = uri.getHost().toLowerCase();
+            if (isRestrictedHost(host)) {
+                throw new IllegalArgumentException("Webhook URL targets a restricted internal or link-local address: " + host);
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid webhook URL format: " + e.getMessage());
+        }
+    }
+
+    static boolean isRestrictedHost(String host) {
+        if (host == null || host.isBlank()) return true;
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+
+        if ("localhost".equals(host) || host.endsWith(".localhost") || "metadata.google.internal".equals(host)) {
+            return true;
+        }
+        if ("127.0.0.1".equals(host) || host.startsWith("127.") || "0.0.0.0".equals(host) || "::1".equals(host)) {
+            return true;
+        }
+        if ("169.254.169.254".equals(host) || host.startsWith("169.254.")) {
+            return true;
+        }
+        return false;
     }
 }
