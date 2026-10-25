@@ -107,6 +107,15 @@ public class BatchIntegrityService {
             String firstEventId = sourceBatch.get(0).eventId();
             String lastEventId = sourceBatch.get(sourceBatch.size() - 1).eventId();
 
+            Optional<IntegrityBlockRecord> existingOpt = integrityRepository.findExistingBlock(
+                    sourceId, firstEventId, lastEventId, merkleRoot);
+            if (existingOpt.isPresent()) {
+                log.info("Integrity block #{} already exists for source {} [{}..{}], skipping duplicate block creation.",
+                        existingOpt.get().blockId(), sourceId, firstEventId, lastEventId);
+                createdBlocks.add(existingOpt.get());
+                continue;
+            }
+
             IntegrityBlockRecord blockToSave = new IntegrityBlockRecord(
                     null,
                     sourceId,
@@ -160,7 +169,21 @@ public class BatchIntegrityService {
                     "No raw events found in ClickHouse storage for block verification");
         }
 
-        List<String> leafHashes = rawRecords.stream()
+        // Defensive deterministic sort matching processRawBatch ordering
+        List<RawEventRecord> sortedRecords = new ArrayList<>(rawRecords);
+        sortedRecords.sort(java.util.Comparator.comparing(RawEventRecord::receivedAt, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder()))
+                .thenComparing(RawEventRecord::eventId, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
+
+        // Deduplicate records by eventId in case of duplicate database rows from retry flushes
+        java.util.Map<String, RawEventRecord> distinctRecordsMap = new java.util.LinkedHashMap<>();
+        for (RawEventRecord r : sortedRecords) {
+            if (r.eventId() != null && !distinctRecordsMap.containsKey(r.eventId())) {
+                distinctRecordsMap.put(r.eventId(), r);
+            }
+        }
+        List<RawEventRecord> deduplicatedRecords = new ArrayList<>(distinctRecordsMap.values());
+
+        List<String> leafHashes = deduplicatedRecords.stream()
                 .map(r -> MerkleTreeCalculator.hashSha256(
                         (r.eventId() != null ? r.eventId() : "") +
                         (r.vendorId() != null ? r.vendorId() : "") +
@@ -224,7 +247,7 @@ public class BatchIntegrityService {
             );
 
             if (firstEventId != null && firstEventId.equals(lastEventId)) {
-                String sql = "SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload FROM ulpf_raw.raw_events WHERE source_id = ? AND event_id = ?";
+                String sql = "SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload FROM ulpf_raw.raw_events WHERE source_id = ? AND event_id = ? LIMIT 1";
                 return clickhouseJdbcTemplate.query(sql, rowMapper, sourceId, firstEventId);
             }
 
@@ -235,7 +258,8 @@ public class BatchIntegrityService {
                         WHERE source_id = ?
                           AND received_at >= (SELECT received_at FROM ulpf_raw.raw_events WHERE event_id = ? LIMIT 1)
                           AND received_at <= (SELECT received_at FROM ulpf_raw.raw_events WHERE event_id = ? LIMIT 1)
-                        ORDER BY received_at ASC, event_id ASC
+                        ORDER BY received_at ASC NULLS FIRST, event_id ASC NULLS FIRST
+                        LIMIT 1 BY event_id
                         LIMIT ?
                         """;
                 List<RawEventRecord> records = clickhouseJdbcTemplate.query(
@@ -255,7 +279,8 @@ public class BatchIntegrityService {
                     SELECT event_id, lineage_id, vendor_id, source_id, mapping_version, received_at, raw_payload
                     FROM ulpf_raw.raw_events
                     WHERE source_id = ?
-                    ORDER BY received_at ASC, event_id ASC
+                    ORDER BY received_at ASC NULLS FIRST, event_id ASC NULLS FIRST
+                    LIMIT 1 BY event_id
                     LIMIT ?
                     """;
             return clickhouseJdbcTemplate.query(fallbackSql, rowMapper, sourceId, limit);

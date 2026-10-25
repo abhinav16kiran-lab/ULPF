@@ -19,6 +19,8 @@ import com.ulpf.analytics.service.AnalyticsService;
 @PreAuthorize("hasRole('ADMIN')")
 public class AnalyticsController {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AnalyticsController.class);
+
     private final AnalyticsService analyticsService;
     private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
 
@@ -89,14 +91,20 @@ public class AnalyticsController {
             ));
         }
 
-        var result = analyticsService.runQuery(table, column, aggregation, timeRange, from, to);
+        try {
+            var result = analyticsService.runQuery(table, column, aggregation, timeRange, from, to);
 
-        return ResponseEntity.ok(Map.of(
-                "table", result.table(),
-                "column", result.column(),
-                "aggregation", result.aggregation(),
-                "result", result.result()
-        ));
+            return ResponseEntity.ok(Map.of(
+                    "table", result.table(),
+                    "column", result.column(),
+                    "aggregation", result.aggregation(),
+                    "result", result.result()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/analytics/lineage/{lineageId}")
@@ -115,7 +123,7 @@ public class AnalyticsController {
     }
 
     @GetMapping("/analytics/export/parquet")
-    public ResponseEntity<byte[]> exportParquet(
+    public ResponseEntity<?> exportParquet(
             @RequestParam(required = false) String table,
             @RequestParam(required = false) String vendorId,
             @RequestParam(required = false) String sourceId,
@@ -123,17 +131,29 @@ public class AnalyticsController {
             @RequestParam(required = false) String to,
             @RequestParam(required = false, defaultValue = "10000") Integer limit
     ) {
-        byte[] parquetData = analyticsService.exportParquet(table, vendorId, sourceId, from, to, limit);
+        try {
+            byte[] parquetData = analyticsService.exportParquet(table, vendorId, sourceId, from, to, limit);
 
-        String timestamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
-                .format(java.time.LocalDateTime.now());
-        String filename = "ulpf_export_" + (vendorId != null && !vendorId.isBlank() ? vendorId : "all") + "_" + timestamp + ".parquet";
+            if (parquetData == null || parquetData.length == 0) {
+                return ResponseEntity.noContent().build();
+            }
 
-        return ResponseEntity.ok()
-                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet")
-                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-                .body(parquetData);
+            String timestamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+                    .format(java.time.LocalDateTime.now());
+            String filename = "ulpf_export_" + (vendorId != null && !vendorId.isBlank() ? vendorId : "all") + "_" + timestamp + ".parquet";
+
+            return ResponseEntity.ok()
+                    .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                    .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet")
+                    .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .body(parquetData);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Failed to export parquet data: {}", e.getMessage(), e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.BAD_GATEWAY)
+                    .body(Map.of("error", "Failed to export Parquet data from storage: " + e.getMessage()));
+        }
     }
 
     @GetMapping("/analytics/search")
@@ -157,12 +177,16 @@ public class AnalyticsController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to
     ) {
-        var buckets = analyticsService.getTimeSeries(query, interval, from, to);
-        return ResponseEntity.ok(Map.of(
-                "interval", interval,
-                "totalBuckets", buckets.size(),
-                "buckets", buckets
-        ));
+        try {
+            var buckets = analyticsService.getTimeSeries(query, interval, from, to);
+            return ResponseEntity.ok(Map.of(
+                    "interval", interval,
+                    "totalBuckets", buckets.size(),
+                    "buckets", buckets
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @org.springframework.web.bind.annotation.PostMapping(value = "/analytics/import/file", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)

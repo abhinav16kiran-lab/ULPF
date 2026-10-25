@@ -317,7 +317,39 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ---
 
-## 6. Technology Stack
+## 6. Asynchronous Historical Replay & Backfill Engine
+
+When a new source is approved or an existing mapping is updated, historical events residing in `ulpf_raw.raw_events` can be replayed into target dynamic tables (`ulpf_events.events_{vendor}_{source}`) without service interruption:
+- **On-Demand & Automated**: Automatically kicks off on onboarding approval or on-demand via `POST /v1/admin/sources/{sourceId}/replay`.
+- **$O(1)$ Bounded Memory Cursor Streaming**: Streams raw events using composite primary index pagination `(received_at, event_id)` in configurable batches (1,000 events), preventing JVM heap exhaustion regardless of historical log volume.
+- **Idempotency & Deduplication**: Checks target ClickHouse primary keys per batch before insertion, guaranteeing zero duplicate entries on retries.
+- **Adaptive Memory Throttling**: Monitors ClickHouse `MemoryTracking` metrics and pauses replay if cluster memory pressure exceeds 80%.
+
+---
+
+## 7. Ingestion Failure & Schema Drift Governance
+
+ULPF actively safeguards data integrity and operational visibility during live ingestion:
+- **Zero Raw Data Loss**: If a target dynamic table or column has not yet been provisioned, raw logs are safely preserved in `ulpf_raw.raw_events` while dropped canonical writes trigger operational failure incidents (`ingestion_alert_incidents`).
+- **Sliding-Window Throttling**: A 30-minute quiet window per `(source_id, failure_type)` aggregates dropped event counts into periodic digests, eliminating notification and webhook flooding.
+- **Schema Drift Detection**: Evaluates runtime payloads on the ingestion hot path:
+  - *High Drift Alert*: Flags when $>30\%$ of extracted keys are diverted to `raw_unmapped`.
+  - *Complete Drift Alert*: Flags when $100\%$ of keys fail mapping, dispatching actionable curl commands to trigger backfills.
+- **Dynamic Schema Evolution**: Leverages `DynamicSchemaProvisioningService.addColumnIfNotExists()` to reconcile newly approved fields on the fly.
+
+---
+
+## 8. Tenant-Scoped Vendor Webhooks & Outbound Alerting
+
+Vendors can register external webhook endpoints in the self-service portal to receive automated real-time alerts:
+- **Decoupled Architecture**: `AlertDispatcher` handles multi-channel routing asynchronously without slowing down high-throughput ingestion.
+- **HMAC-SHA256 Cryptographic Verification**: Outbound webhooks include `X-ULPF-Signature-256`, `X-ULPF-Timestamp`, and `X-ULPF-Event` headers signed with the vendor's private secret.
+- **Circuit Breaker & Flapping Mitigation**: Tracks consecutive delivery errors. Isolated network hiccups remain non-fatal; after 3 consecutive failures, the webhook is transitioned to `FAILING` and an inbox notification alerts the vendor.
+- **SSRF Hardening**: Rejects loopback addresses (`127.0.0.1`, `localhost`, `::1`), cloud metadata services (`169.254.169.254`), and non-HTTP protocols at registration time.
+
+---
+
+## 9. Technology Stack
 
 | Layer | Technology | Details |
 | :--- | :--- | :--- |
@@ -326,11 +358,11 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | **Analytics Engine**| ClickHouse Server 26.3 | High-throughput columnar storage & async insert |
 | **AI Model** | ONNX Runtime | Local `all-MiniLM-L6-v2` embedding model |
 | **Frontend UI** | React 19 + Vite 6 | Modern design system, Lucide icons, Tailwind CSS |
-| **CI/CD & Containers**| Docker / Podman + GitHub Actions | Automated build, unit tests (144/144 passing), GHCR publish |
+| **CI/CD & Containers**| Docker / Podman + GitHub Actions | Automated build, unit tests (329/329 passing), GHCR publish |
 
 ---
 
-## 7. Complete REST API Reference
+## 10. Complete REST API Reference
 
 | Method | Endpoint | Auth | Description |
 | :--- | :--- | :--- | :--- |
@@ -341,6 +373,14 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 | `GET` | `/v1/admin/onboard` | Admin Token | List pending onboarding requests |
 | `POST` | `/v1/admin/onboard/{id}/approve` | Admin Token | Approve request & issue API key |
 | `POST` | `/v1/admin/onboard/{id}/reject` | Admin Token | Reject onboarding request |
+| `POST` | `/v1/admin/sources/{id}/replay` | Admin Token | Trigger historical raw-to-dynamic table replay |
+| `GET` | `/v1/admin/sources/{id}/replay/status` | Admin Token | Check progress of active/past replay job |
+| `DELETE` | `/v1/admin/sources/{id}/replay` | Admin Token | Cancel running replay backfill job |
+| `GET` | `/v1/vendor/webhook` | Vendor Token | Fetch registered webhook config & delivery status |
+| `POST` | `/v1/vendor/webhook` | Vendor Token | Register/update webhook URL & HMAC secret |
+| `POST` | `/v1/vendor/webhook/test` | Vendor Token | Dispatch HMAC-signed test ping to external webhook |
+| `GET` | `/v1/notifications` | Bearer Token | List in-app notifications and issued credentials |
+| `PUT` | `/v1/notifications/{id}/read` | Bearer Token | Mark in-app notification item as read |
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
 | `GET` | `/v1/analytics/tables` | Admin Token | Fetch available ClickHouse table names |
 | `GET` | `/v1/analytics/tables/{table}/columns` | Admin Token | Inspect dynamic column metadata for selected table |
@@ -357,7 +397,7 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ---
 
-## 8. System Performance Benchmarks
+## 11. System Performance Benchmarks
 
 The core ingestion engine (`/v1/events`) was subjected to a continuous load test using auto-ramping concurrency threads to identify the saturation point. 
 
@@ -373,7 +413,7 @@ The core ingestion engine (`/v1/events`) was subjected to a continuous load test
 
 ---
 
-## 9. License & Authors
+## 12. License & Authors
 
 This project is licensed under the custom **Competitor's Right License (CRL-1.0)**.
 It is a source-available project strictly for competition evaluation, and is **not** open-source.  

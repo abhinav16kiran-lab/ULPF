@@ -1,6 +1,6 @@
 package com.ulpf.controlplane.service;
 
-// import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ulpf.common.db.CredentialRepository;
@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
@@ -55,6 +56,7 @@ public class OnboardingService {
     private final LogFormatDetector logFormatDetector;
     private final MappingEngineOrchestrator mappingEngineOrchestrator;
     private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
+    private com.ulpf.replay.service.ReplayBackfillService replayBackfillService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public record AdminStats(int pendingReviewCount, int activeVendorsCount) {}
@@ -96,6 +98,23 @@ public class OnboardingService {
                 mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null, null);
     }
 
+    public OnboardingService(
+            UserRepository userRepository,
+            VendorRepository vendorRepository,
+            SourceRepository sourceRepository,
+            CredentialRepository credentialRepository,
+            OnboardingRepository onboardingRepository,
+            MappingRepository mappingRepository,
+            MappingProposalService mappingProposalService,
+            MappingLearningService mappingLearningService,
+            LogFormatDetector logFormatDetector,
+            MappingEngineOrchestrator mappingEngineOrchestrator,
+            com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository,
+                mappingRepository, mappingProposalService, mappingLearningService, logFormatDetector,
+                mappingEngineOrchestrator, dynamicSchemaProvisioningService, null);
+    }
+
     @Autowired
     public OnboardingService(
             UserRepository userRepository,
@@ -108,7 +127,8 @@ public class OnboardingService {
             MappingLearningService mappingLearningService,
             LogFormatDetector logFormatDetector,
             @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator,
-            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
+            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService,
+            @Autowired(required = false) com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -120,6 +140,12 @@ public class OnboardingService {
         this.logFormatDetector = logFormatDetector;
         this.mappingEngineOrchestrator = mappingEngineOrchestrator;
         this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
+        this.replayBackfillService = replayBackfillService;
+    }
+
+    @Autowired(required = false)
+    public void setReplayBackfillService(com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
+        this.replayBackfillService = replayBackfillService;
     }
 
     public record OnboardingSubmissionResult(
@@ -142,6 +168,7 @@ public class OnboardingService {
                 schemaFile);
     }
 
+    @Transactional
     public OnboardingSubmissionResult submitRequest(
             String username,
             String vendorName,
@@ -209,6 +236,7 @@ public class OnboardingService {
                 "Onboarding request submitted successfully. Please save your API key now — for security reasons, it will not be displayed again. The key will become ACTIVE once approved by an administrator.");
     }
 
+    @Transactional
     public OnboardingSubmissionResult submitUpdateRequest(
             String username,
             String sourceId,
@@ -225,29 +253,38 @@ public class OnboardingService {
         SourceRecord source = sourceRepository.findById(sourceId)
                 .orElseThrow(() -> new IllegalArgumentException("Log source not found: " + sourceId));
 
+        // 1. Conflict guard: Reject duplicate submission if an in-flight request is already awaiting admin review
+        List<OnboardingRequestRecord> pending = onboardingRepository.findPendingRequestsBySourceId(sourceId);
+        if (!pending.isEmpty()) {
+            throw new IllegalStateException(
+                    "A schema update request for this source is already awaiting review (Request ID: "
+                            + pending.get(0).requestId() + "). Please wait for admin approval."
+            );
+        }
+
         String effectiveLogType = (logType != null && !logType.isBlank()) ? logType.toUpperCase() : "REG_LOG";
         if ("SENSOR".equals(effectiveLogType)) {
             effectiveLogType = "SEN_TEL";
         }
 
-        // 1. Delete any stale candidate mapping for this source if present before generating new candidate
+        // 2. Delete any stale candidate mapping for this source if present before generating new candidate
         mappingRepository.deleteCandidateVersions(sourceId);
 
-        // 2. Generate new candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        // 3. Generate new candidate mapping version via AI mapping engine using format autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
-        // 3. Inject metadata block into candidate mapping_json
+        // 4. Inject metadata block into candidate mapping_json
         injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
 
-        // 4. Extract sample snippet, include candidate mappings & store files
+        // 5. Extract sample snippet, include candidate mappings & store files
         String requestId = UUID.randomUUID().toString();
         String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
                 delta, maxIntervalMs, sensorField, proposals);
 
-        // 5. Save onboarding request record with request_type = "UPDATE_SOURCE"
+        // 6. Save onboarding request record with request_type = "SCHEMA_UPDATE"
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
-                requestId, user.userId(), source.sourceId(), "UPDATE_SOURCE", sampleMetadataJson, "SUBMITTED",
+                requestId, user.userId(), source.sourceId(), "SCHEMA_UPDATE", sampleMetadataJson, "SUBMITTED",
                 LocalDateTime.now()));
 
         invalidateAdminStatsCache();
@@ -311,16 +348,24 @@ public class OnboardingService {
         return sourceRepository.findByVendorId(vendorOpt.get().vendorId());
     }
 
+    @Transactional
     public OnboardingRequestRecord processAdminDecision(String requestId, String decision) {
         return processAdminDecision(requestId, decision, null);
     }
 
+    @Transactional
     public OnboardingRequestRecord processAdminDecision(String requestId, String decision, String feedbackNote) {
         OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
 
         if (!"APPROVED".equalsIgnoreCase(decision) && !"REJECTED".equalsIgnoreCase(decision)) {
             throw new IllegalArgumentException("Decision must be APPROVED or REJECTED");
+        }
+
+        if (!"SUBMITTED".equalsIgnoreCase(req.status())
+                && !"AI_ANALYSIS".equalsIgnoreCase(req.status())
+                && !"HUMAN_REVIEW".equalsIgnoreCase(req.status())) {
+            throw new IllegalStateException("Request is already in terminal state: " + req.status());
         }
 
         boolean isApproved = "APPROVED".equalsIgnoreCase(decision);
@@ -344,6 +389,16 @@ public class OnboardingService {
                         "Onboarding Request Approved",
                         "Your onboarding request (ID: " + requestId
                                 + ") for log source has been APPROVED! Your API key is now ACTIVE.");
+
+                // 4. AUTOMATIC REPLAY TRIGGER (only for new source onboarding, not schema updates per Q10/Q11):
+                if (replayBackfillService != null && !"SCHEMA_UPDATE".equalsIgnoreCase(req.requestType())) {
+                    try {
+                        log.info("Triggering automatic background replay for approved source {}", req.sourceId());
+                        replayBackfillService.triggerReplayAsync(req.sourceId(), null);
+                    } catch (Exception e) {
+                        log.warn("Automatic replay failed to start for source {}: {}", req.sourceId(), e.getMessage());
+                    }
+                }
             } else {
                 onboardingRepository.updateRequestStatus(requestId, "APPROVED");
             }
@@ -351,7 +406,10 @@ public class OnboardingService {
             // REJECTED flow
             onboardingRepository.updateRequestStatus(requestId, "REJECTED");
             if (req.sourceId() != null) {
-                sourceRepository.revokeSource(req.sourceId());
+                // For schema updates on existing active sources, rejecting the proposal must NOT revoke the active source
+                if (!"SCHEMA_UPDATE".equals(req.requestType())) {
+                    sourceRepository.revokeSource(req.sourceId());
+                }
                 mappingRepository.deleteCandidateVersions(req.sourceId());
 
                 String notifMsg = "Your onboarding request (ID: " + requestId + ") was REJECTED.";
@@ -372,16 +430,80 @@ public class OnboardingService {
         return onboardingRepository.findRequestById(requestId).orElse(req);
     }
 
+    @Transactional
+    public OnboardingRequestRecord withdrawRequest(String username, String requestId) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+
+        OnboardingRequestRecord req = onboardingRepository.findRequestById(requestId)
+                .orElseThrow(() -> new IllegalArgumentException("Onboarding request not found: " + requestId));
+
+        if (!req.userId().equals(user.userId())) {
+            throw new IllegalArgumentException("You can only withdraw your own onboarding requests");
+        }
+
+        if (!"SUBMITTED".equalsIgnoreCase(req.status())
+                && !"AI_ANALYSIS".equalsIgnoreCase(req.status())
+                && !"HUMAN_REVIEW".equalsIgnoreCase(req.status())) {
+            throw new IllegalStateException("Cannot withdraw request in terminal state: " + req.status());
+        }
+
+        // Terminal state in DB: REJECTED (withdrawn by vendor)
+        onboardingRepository.updateRequestStatus(requestId, "REJECTED");
+
+        if (req.sourceId() != null) {
+            // Delete candidate mapping draft
+            mappingRepository.deleteCandidateVersions(req.sourceId());
+
+            // For initial onboarding requests (NEW_VENDOR / NEW_SOURCE), revoke the pending source
+            if (!"SCHEMA_UPDATE".equals(req.requestType())) {
+                sourceRepository.revokeSource(req.sourceId());
+            }
+        }
+
+        onboardingRepository.saveNotification(
+                user.userId(),
+                "Request Withdrawn",
+                "Your onboarding request (ID: " + requestId + ") has been withdrawn."
+        );
+
+        invalidateAdminStatsCache();
+        credentialRepository.clearCache();
+        mappingRepository.clearCache();
+
+        return onboardingRepository.findRequestById(requestId).orElse(req);
+    }
+
     private void activateCandidateMappingForSource(String sourceId) {
         Optional<MappingVersionRecord> candidateOpt = mappingRepository.findCandidateBySourceId(sourceId);
         if (candidateOpt.isPresent()) {
             MappingVersionRecord candidate = candidateOpt.get();
 
             // 1. Provision ClickHouse schema FIRST
+            String targetTable = null;
             if (dynamicSchemaProvisioningService != null) {
-                Optional<SourceRecord> srcOpt = sourceRepository.findById(sourceId);
-                String sourceName = srcOpt.map(SourceRecord::sourceName).orElse("stream_" + sourceId);
-                dynamicSchemaProvisioningService.provisionSchemaForSource(sourceId, sourceName, candidate.mappingJson());
+                String sourceName = sourceRepository.findById(sourceId)
+                        .map(src -> src.sourceName())
+                        .filter(name -> name != null && !name.isBlank())
+                        .orElse("stream_" + sourceId);
+                targetTable = dynamicSchemaProvisioningService.provisionSchemaForSource(sourceId, sourceName, candidate.mappingJson());
+            }
+
+            // Save target_table in candidate mapping metadata if provisioned
+            if (targetTable != null && !targetTable.isBlank()) {
+                try {
+                    JsonNode rootNode = objectMapper.readTree(candidate.mappingJson());
+                    if (rootNode.isObject()) {
+                        ObjectNode objNode = (ObjectNode) rootNode;
+                        ObjectNode metaNode = objNode.has("metadata") && objNode.get("metadata").isObject()
+                                ? (ObjectNode) objNode.get("metadata")
+                                : objNode.putObject("metadata");
+                        metaNode.put("target_table", targetTable);
+                        mappingRepository.updateCandidateMappingJson(sourceId, objectMapper.writeValueAsString(objNode));
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to inject target_table into candidate mapping for sourceId {}: {}", sourceId, e.getMessage());
+                }
             }
 
             // 2. Activate mapping version record in SQLite ONLY after ClickHouse schema provisioning succeeds

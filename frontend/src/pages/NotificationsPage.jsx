@@ -3,6 +3,376 @@ import client from "../api/client";
 import Navbar from "../components/Navbar";
 import EmptyState from "../components/EmptyState";
 
+// ── Vendor Webhook Integration Card ──────────────────────────────────
+function WebhookIntegrationCard() {
+  const [webhookData, setWebhookData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
+  const [showLogs, setShowLogs] = useState(false);
+
+  // Form state
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+
+  // Test result
+  const [testResult, setTestResult] = useState(null);
+
+  async function fetchWebhook() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await client.get("/v1/vendor/webhook");
+      setWebhookData(res.data);
+      if (res.data.configured && res.data.webhookUrl) {
+        setWebhookUrl(res.data.webhookUrl);
+        setSecretKey(""); // Don't prefill secret
+      }
+    } catch (err) {
+      if (err.response?.status !== 404) {
+        setError(err.response?.data?.error || err.message || "Failed to load webhook config");
+      }
+      setWebhookData({ configured: false });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { fetchWebhook(); }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSuccessMsg(null);
+    setTestResult(null);
+    try {
+      const body = { webhookUrl };
+      if (secretKey && secretKey.trim()) body.secretKey = secretKey.trim();
+      const res = await client.put("/v1/vendor/webhook", body);
+      setWebhookData(res.data);
+      setSuccessMsg("Webhook configuration saved successfully.");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || "Failed to save webhook");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTestPing() {
+    setTesting(true);
+    setError(null);
+    setSuccessMsg(null);
+    setTestResult(null);
+    try {
+      const res = await client.post("/v1/vendor/webhook/test");
+      setTestResult(res.data);
+      // Refresh to get updated status and logs
+      await fetchWebhook();
+    } catch (err) {
+      setTestResult({
+        success: false,
+        statusCode: 0,
+        latencyMs: 0,
+        errorMessage: err.response?.data?.error || err.message || "Test ping failed"
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!window.confirm("Remove webhook configuration? Alert deliveries to this endpoint will stop immediately.")) return;
+    setRemoving(true);
+    setError(null);
+    setSuccessMsg(null);
+    setTestResult(null);
+    try {
+      await client.delete("/v1/vendor/webhook");
+      setWebhookData({ configured: false });
+      setWebhookUrl("");
+      setSecretKey("");
+      setSuccessMsg("Webhook configuration removed.");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || "Failed to remove webhook");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  // Status badge rendering
+  const getStatusBadge = (status, lastStatusCode) => {
+    if (status === "HEALTHY") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+          HEALTHY{lastStatusCode ? ` (${lastStatusCode})` : ""}
+        </span>
+      );
+    }
+    if (status === "FAILING") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+          FAILING{lastStatusCode ? ` (${lastStatusCode})` : ""}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200 gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+        UNTESTED
+      </span>
+    );
+  };
+
+  const formatTimestamp = (rawTs) => {
+    if (!rawTs) return "—";
+    try {
+      const d = new Date(rawTs);
+      if (isNaN(d.getTime())) return String(rawTs);
+      return d.toLocaleString("en-US", {
+        month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit"
+      });
+    } catch (e) {
+      return String(rawTs);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 mb-8 animate-pulse">
+        <div className="h-6 bg-slate-200 rounded w-1/3 mb-4"></div>
+        <div className="h-4 bg-slate-100 rounded w-2/3 mb-3"></div>
+        <div className="h-10 bg-slate-100 rounded w-full"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 mb-8">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+        <div>
+          <h2 className="text-lg font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+            <svg className="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Out-of-Band Webhook Integration
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Route ingestion failure and schema drift alerts to Slack, Discord, PagerDuty, or any HTTP endpoint.
+          </p>
+        </div>
+        {webhookData?.configured && getStatusBadge(webhookData.status, webhookData.lastStatusCode)}
+      </div>
+
+      {/* Error / Success banners */}
+      {error && (
+        <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+          <svg className="w-4 h-4 text-rose-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          {error}
+        </div>
+      )}
+      {successMsg && (
+        <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium flex items-center gap-2">
+          <svg className="w-4 h-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+          </svg>
+          {successMsg}
+        </div>
+      )}
+
+      {/* Test Result Banner */}
+      {testResult && (
+        <div className={`mb-4 p-3 rounded-xl border text-xs font-medium flex items-center gap-2 ${
+          testResult.success
+            ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+            : "bg-rose-50 border-rose-200 text-rose-700"
+        }`}>
+          {testResult.success ? (
+            <>
+              <svg className="w-4 h-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+              </svg>
+              Test ping successful — HTTP {testResult.statusCode} in {testResult.latencyMs}ms
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4 text-rose-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Test ping failed{testResult.statusCode > 0 ? ` — HTTP ${testResult.statusCode}` : ""}{testResult.errorMessage ? `: ${testResult.errorMessage}` : ""}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Configuration Form */}
+      <form onSubmit={handleSave} className="space-y-4">
+        <div>
+          <label htmlFor="webhook-url-input" className="block text-xs font-bold text-slate-700 mb-1.5">
+            Webhook URL
+          </label>
+          <input
+            id="webhook-url-input"
+            type="url"
+            placeholder="https://hooks.slack.com/services/T00/B00/XXXXX"
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            required
+            className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-slate-800 placeholder-slate-400"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="webhook-secret-input" className="block text-xs font-bold text-slate-700 mb-1.5">
+            Secret Key <span className="font-normal text-slate-400">(optional, for HMAC-SHA256 signature verification)</span>
+          </label>
+          <input
+            id="webhook-secret-input"
+            type="password"
+            placeholder={webhookData?.configured && webhookData?.maskedSecret ? webhookData.maskedSecret : "my-shared-hmac-secret"}
+            value={secretKey}
+            onChange={(e) => setSecretKey(e.target.value)}
+            className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-slate-800 placeholder-slate-400"
+          />
+          {webhookData?.configured && webhookData?.maskedSecret && (
+            <p className="text-[11px] text-slate-400 mt-1 font-mono">
+              Current secret: {webhookData.maskedSecret} — leave blank to keep existing
+            </p>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <button
+            type="submit"
+            disabled={saving || !webhookUrl.trim()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Saving...
+              </>
+            ) : "Save Configuration"}
+          </button>
+
+          {webhookData?.configured && (
+            <button
+              type="button"
+              onClick={handleTestPing}
+              disabled={testing}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs rounded-xl shadow-sm transition-all active:scale-95 disabled:opacity-50"
+            >
+              {testing ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin text-slate-500" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  Pinging...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Send Test Ping
+                </>
+              )}
+            </button>
+          )}
+
+          {webhookData?.configured && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={removing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-all"
+            >
+              {removing ? "Removing..." : "Remove Webhook"}
+            </button>
+          )}
+        </div>
+      </form>
+
+      {/* Recent Deliveries Accordion */}
+      {webhookData?.configured && webhookData?.recentLogs && webhookData.recentLogs.length > 0 && (
+        <div className="mt-6 border-t border-slate-100 pt-4">
+          <button
+            type="button"
+            onClick={() => setShowLogs(!showLogs)}
+            className="flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors"
+          >
+            <svg className={`w-4 h-4 transition-transform ${showLogs ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+            </svg>
+            Recent Deliveries ({webhookData.recentLogs.length})
+          </button>
+
+          {showLogs && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-2 pr-4 font-bold text-slate-500 uppercase tracking-wider">Alert Type</th>
+                    <th className="text-left py-2 pr-4 font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                    <th className="text-left py-2 pr-4 font-bold text-slate-500 uppercase tracking-wider">Latency</th>
+                    <th className="text-left py-2 font-bold text-slate-500 uppercase tracking-wider">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {webhookData.recentLogs.map((log, i) => (
+                    <tr key={i} className="border-b border-slate-100 last:border-0">
+                      <td className="py-2 pr-4 font-mono font-semibold text-slate-700">{log.alertType}</td>
+                      <td className="py-2 pr-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold ${
+                          log.success
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : "bg-rose-50 text-rose-700 border border-rose-200"
+                        }`}>
+                          {log.success ? "✓" : "✗"} {log.statusCode || "ERR"}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 font-mono text-slate-600">{log.latencyMs != null ? `${log.latencyMs}ms` : "—"}</td>
+                      <td className="py-2 font-mono text-slate-500">{formatTimestamp(log.attemptedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Consecutive failures warning */}
+      {webhookData?.configured && webhookData?.consecutiveFails > 0 && (
+        <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium flex items-center gap-2">
+          <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+          </svg>
+          {webhookData.consecutiveFails} consecutive delivery failure{webhookData.consecutiveFails > 1 ? "s" : ""} detected. Please verify your endpoint is reachable.
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── Main Notifications Page ──────────────────────────────────────────
 function NotificationsPage() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -10,6 +380,8 @@ function NotificationsPage() {
   const [activeTab, setActiveTab] = useState("ALL"); // 'ALL' | 'UNREAD' | 'SECURITY' | 'SYSTEM'
   const [searchQuery, setSearchQuery] = useState("");
   const [markingAll, setMarkingAll] = useState(false);
+
+  const userRole = localStorage.getItem("role");
 
   async function fetchNotifications() {
     setLoading(true);
@@ -190,6 +562,9 @@ function NotificationsPage() {
             </button>
           </div>
         </div>
+
+        {/* ── Vendor Webhook Integration Card (VENDOR users only) ── */}
+        {userRole === "VENDOR" && <WebhookIntegrationCard />}
 
         {/* Filter Strip & Search Card */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">

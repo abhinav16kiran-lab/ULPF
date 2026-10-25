@@ -154,10 +154,17 @@ public class AnalyticsService {
             }
         }
 
+        // Prohibit external ClickHouse table/integration functions (file, url, remote, s3, etc.)
+        java.util.regex.Pattern forbiddenFunctionsPattern = java.util.regex.Pattern.compile(
+                "(?i)\\b(FILE|URL|REMOTE|REMOTE_SECURE|S3|HDFS|EXECUTABLE)\\s*\\(");
+        if (forbiddenFunctionsPattern.matcher(trimmed).find()) {
+            throw new IllegalArgumentException("Access to external system functions (file, url, remote, etc.) is prohibited");
+        }
+
         // Automatically qualify tables if unqualified
         String executableSql = trimmed;
-        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+canonical_events\\b", "FROM ulpf_events.canonical_events");
-        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+canonical_events\\b", "JOIN ulpf_events.canonical_events");
+        executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+(events_[a-zA-Z0-9_]+)\\b", "FROM ulpf_events.$1");
+        executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+(events_[a-zA-Z0-9_]+)\\b", "JOIN ulpf_events.$1");
         executableSql = executableSql.replaceAll("(?i)\\bFROM\\s+raw_events\\b", "FROM ulpf_raw.raw_events");
         executableSql = executableSql.replaceAll("(?i)\\bJOIN\\s+raw_events\\b", "JOIN ulpf_raw.raw_events");
 
@@ -307,6 +314,16 @@ public class AnalyticsService {
             params.add(sourceId.trim());
         }
 
+        String timeCol = "raw_events".equalsIgnoreCase(safeTable) ? "received_at" : "timestamp";
+        if (from != null && !from.isBlank()) {
+            whereClauses.add(timeCol + " >= parseDateTime64BestEffortOrNull(?)");
+            params.add(from.trim());
+        }
+        if (to != null && !to.isBlank()) {
+            whereClauses.add(timeCol + " <= parseDateTime64BestEffortOrNull(?)");
+            params.add(to.trim());
+        }
+
         if (!whereClauses.isEmpty()) {
             sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
         }
@@ -317,6 +334,40 @@ public class AnalyticsService {
         String sql = sqlBuilder.toString();
         log.info("Executing Parquet Export query against ClickHouse: {}", sql);
 
+        if (clickhouseJdbcTemplate == null) {
+            throw new IllegalStateException("ClickHouse database connection is not configured");
+        }
+
+        // 1. Try direct raw binary streaming via ClickHouse JDBC statement
+        try {
+            byte[] bytes = clickhouseJdbcTemplate.execute((org.springframework.jdbc.core.ConnectionCallback<byte[]>) conn -> {
+                if (conn == null) return null;
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                    for (int i = 0; i < params.size(); i++) {
+                        ps.setObject(i + 1, params.get(i));
+                    }
+                    if (ps.isWrapperFor(com.clickhouse.jdbc.ClickHouseStatement.class)) {
+                        ps.unwrap(com.clickhouse.jdbc.ClickHouseStatement.class).setMirroredOutput(baos);
+                    }
+                    try {
+                        ps.execute();
+                    } catch (Exception e) {
+                        log.debug("Handled JDBC parse during raw stream capture: {}", e.getMessage());
+                    }
+                }
+                byte[] raw = baos.toByteArray();
+                return (raw.length > 0) ? raw : null;
+            });
+
+            if (bytes != null && bytes.length > 0) {
+                return bytes;
+            }
+        } catch (Exception e) {
+            log.debug("Direct ClickHouse connection streaming query attempt: {}", e.getMessage());
+        }
+
+        // 2. Query via template (supports mock JdbcTemplate in tests or standard query)
         try {
             byte[] parquetBytes = clickhouseJdbcTemplate.query(sql, rs -> {
                 if (rs.next()) {
@@ -329,25 +380,12 @@ public class AnalyticsService {
                 return parquetBytes;
             }
         } catch (Exception e) {
-            log.warn("ClickHouse Parquet export query execution fallback: {}", e.getMessage());
+            log.error("ClickHouse Parquet export query execution failed: {}", e.getMessage());
+            throw new RuntimeException("ClickHouse Parquet export query failed: " + e.getMessage(), e);
         }
 
-        return generateFallbackParquet(fullTableName, vendorId, sourceId);
-    }
-
-    private byte[] generateFallbackParquet(String table, String vendorId, String sourceId) {
-        // Apache Parquet magic header (PAR1)
-        byte[] magic = new byte[] {0x50, 0x41, 0x52, 0x31};
-        byte[] footer = new byte[] {0x00, 0x00, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
-
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        try {
-            out.write(magic);
-            String meta = "{\"schema\":\"ulpf_parquet_v1\",\"table\":\"" + table + "\",\"vendorId\":\"" + (vendorId != null ? vendorId : "all") + "\"}";
-            out.write(meta.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            out.write(footer);
-        } catch (Exception ignored) {}
-        return out.toByteArray();
+        // Return empty array when no matching rows are found (0 records)
+        return new byte[0];
     }
 
     private String sanitizeIdentifier(String input) {
@@ -390,6 +428,16 @@ public class AnalyticsService {
             params.add(sourceId.trim());
         }
 
+        if (from != null && !from.isBlank()) {
+            whereClauses.add("received_at >= parseDateTime64BestEffortOrNull(?)");
+            params.add(from.trim());
+        }
+
+        if (to != null && !to.isBlank()) {
+            whereClauses.add("received_at <= parseDateTime64BestEffortOrNull(?)");
+            params.add(to.trim());
+        }
+
         if (!whereClauses.isEmpty()) {
             sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
         }
@@ -420,35 +468,105 @@ public class AnalyticsService {
         }
     }
 
+    public long resolveIntervalSeconds(String interval) {
+        if (interval == null || interval.isBlank()) {
+            return 300L; // default 5m
+        }
+
+        String trimmed = interval.trim().toLowerCase();
+        if (trimmed.length() < 2) {
+            throw new IllegalArgumentException(
+                    "Invalid interval '" + interval + "'. Format must be <positive_integer>[s|m|h|d], e.g. '30s', '5m', '1h', '1d'."
+            );
+        }
+
+        char unit = trimmed.charAt(trimmed.length() - 1);
+        String numPart = trimmed.substring(0, trimmed.length() - 1);
+
+        if (!numPart.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException(
+                    "Invalid interval '" + interval + "'. Format must be <positive_integer>[s|m|h|d], e.g. '30s', '5m', '1h', '1d'."
+            );
+        }
+
+        long value;
+        try {
+            value = Long.parseLong(numPart);
+            if (value <= 0) {
+                throw new IllegalArgumentException("Interval value must be greater than 0: " + interval);
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Interval value is too large: " + numPart);
+        }
+
+        return switch (unit) {
+            case 's' -> value;
+            case 'm' -> value * 60L;
+            case 'h' -> value * 3600L;
+            case 'd' -> value * 86400L;
+            default -> throw new IllegalArgumentException(
+                    "Invalid unit '" + unit + "'. Supported units: s (seconds), m (minutes), h (hours), d (days)."
+            );
+        };
+    }
+
     public List<TimeSeriesBucket> getTimeSeries(String query, String interval, String from, String to) {
-        String safeInterval = (interval != null && !interval.isBlank()) ? interval.trim() : "5m";
-        log.info("Executing ClickHouse time-series histogram query for interval: {}", safeInterval);
+        long intervalSeconds = resolveIntervalSeconds(interval);
+        log.info("Executing ClickHouse time-series histogram query for interval: {}s (input: {})", intervalSeconds, interval);
 
         try {
-            String sql = """
+            StringBuilder sqlBuilder = new StringBuilder("""
                 SELECT 
-                    toStartOfInterval(received_at, INTERVAL 5 MINUTE) AS time_bucket,
+                    toStartOfInterval(received_at, toIntervalSecond(?)) AS time_bucket,
                     count(*) AS total_count,
                     countIf(positionCaseInsensitive(raw_payload, 'error') > 0 OR positionCaseInsensitive(raw_payload, 'fail') > 0) AS error_count
                 FROM ulpf_raw.raw_events
-                GROUP BY time_bucket
+                """);
+
+            List<Object> params = new java.util.ArrayList<>();
+            params.add(intervalSeconds);
+
+            List<String> whereClauses = new java.util.ArrayList<>();
+
+            if (query != null && !query.isBlank()) {
+                whereClauses.add("positionCaseInsensitive(raw_payload, ?) > 0");
+                params.add(query.trim());
+            }
+
+            if (from != null && !from.isBlank()) {
+                whereClauses.add("received_at >= parseDateTime64BestEffortOrNull(?)");
+                params.add(from.trim());
+            }
+
+            if (to != null && !to.isBlank()) {
+                whereClauses.add("received_at <= parseDateTime64BestEffortOrNull(?)");
+                params.add(to.trim());
+            }
+
+            if (!whereClauses.isEmpty()) {
+                sqlBuilder.append(" WHERE ").append(String.join(" AND ", whereClauses));
+            }
+
+            sqlBuilder.append("""
+                 GROUP BY time_bucket
                 ORDER BY time_bucket ASC
-                LIMIT 60
-                """;
+                LIMIT 100
+                """);
+
+            String sql = sqlBuilder.toString();
+            log.debug("Generated ClickHouse time-series query: {}", sql);
 
             List<TimeSeriesBucket> buckets = clickhouseJdbcTemplate.query(sql, (rs, rowNum) -> new TimeSeriesBucket(
                     rs.getTimestamp("time_bucket") != null ? rs.getTimestamp("time_bucket").toInstant().toString() : java.time.Instant.now().toString(),
                     rs.getLong("total_count"),
                     rs.getLong("error_count")
-            ));
+            ), params.toArray());
 
-            if (buckets != null && !buckets.isEmpty()) {
-                return buckets;
-            }
+            return buckets != null ? buckets : java.util.Collections.emptyList();
         } catch (Exception e) {
             log.warn("ClickHouse time-series query execution error: {}, generating synthetic time-series buckets", e.getMessage());
+            return generateMockTimeSeries();
         }
-        return generateMockTimeSeries();
     }
 
     private List<TimeSeriesBucket> generateMockTimeSeries() {

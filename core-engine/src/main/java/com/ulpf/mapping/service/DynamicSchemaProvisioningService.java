@@ -25,10 +25,16 @@ public class DynamicSchemaProvisioningService {
 
     private final JdbcTemplate clickhouseJdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private com.ulpf.common.db.ClickHouseIngestionRepository clickhouseIngestionRepository;
 
     public DynamicSchemaProvisioningService(
             @Autowired(required = false) @Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+    }
+
+    @Autowired(required = false)
+    public void setClickhouseIngestionRepository(@org.springframework.context.annotation.Lazy com.ulpf.common.db.ClickHouseIngestionRepository clickhouseIngestionRepository) {
+        this.clickhouseIngestionRepository = clickhouseIngestionRepository;
     }
 
     /**
@@ -44,7 +50,7 @@ public class DynamicSchemaProvisioningService {
     public String provisionSchemaForSource(String sourceId, String sourceName, String mappingJson) {
         if (clickhouseJdbcTemplate == null) {
             log.warn("ClickHouse JDBC template is null. Skipping dynamic ClickHouse table provisioning.");
-            return "canonical_events";
+            return constructTableName(sourceName);
         }
 
         try {
@@ -92,10 +98,28 @@ public class DynamicSchemaProvisioningService {
                 }
             }
 
-            // 2. If a compatible existing table is found, re-use it! Extra unmapped fields flow into raw_unmapped.
+            // 2. If a compatible existing table is found, re-use it! Provision missing columns so new fields are queryable.
             if (bestMatchingTable != null) {
-                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'. Extra unmapped fields will store in raw_unmapped.",
+                log.info("Found existing compatible table 'ulpf_events.{}' ({}% schema match). Re-using table for stream '{}'.",
                         bestMatchingTable, (int) (highestMatchRatio * 100), sourceName);
+
+                if (missingFieldsToAlter != null && !missingFieldsToAlter.isEmpty()) {
+                    for (String missingCol : missingFieldsToAlter) {
+                        if (missingCol == null || missingCol.isBlank()) continue;
+                        try {
+                            String alterSql = "ALTER TABLE ulpf_events." + bestMatchingTable +
+                                              " ADD COLUMN IF NOT EXISTS " + missingCol + " Nullable(String)";
+                            log.info("Applying dynamic schema evolution: {}", alterSql);
+                            clickhouseJdbcTemplate.execute(alterSql);
+                        } catch (Exception e) {
+                            log.warn("Failed to alter table ulpf_events.{} to add column {}: {}",
+                                    bestMatchingTable, missingCol, e.getMessage());
+                        }
+                    }
+                }
+                if (clickhouseIngestionRepository != null) {
+                    clickhouseIngestionRepository.invalidateColumnsCache(bestMatchingTable);
+                }
                 return bestMatchingTable;
             }
 
@@ -127,6 +151,10 @@ public class DynamicSchemaProvisioningService {
             clickhouseJdbcTemplate.execute(ddl.toString());
             log.info("Successfully created dynamic ClickHouse table 'ulpf_events.{}'", newTableName);
 
+            if (clickhouseIngestionRepository != null) {
+                clickhouseIngestionRepository.invalidateColumnsCache(newTableName);
+            }
+
             return newTableName;
 
         } catch (Exception e) {
@@ -146,7 +174,12 @@ public class DynamicSchemaProvisioningService {
                 for (JsonNode node : mappings) {
                     if (node.has("canonical_field")) {
                         String field = node.get("canonical_field").asText();
-                        if (!"unmapped".equalsIgnoreCase(field)) {
+                        if (!"unmapped".equalsIgnoreCase(field) && !field.isBlank()) {
+                            fields.add(field);
+                        }
+                    } else if (node.has("canonicalField")) {
+                        String field = node.get("canonicalField").asText();
+                        if (!"unmapped".equalsIgnoreCase(field) && !field.isBlank()) {
                             fields.add(field);
                         }
                     }
@@ -156,9 +189,24 @@ public class DynamicSchemaProvisioningService {
                 while (keys.hasNext()) {
                     String k = keys.next();
                     if (!"metadata".equalsIgnoreCase(k)) {
-                        String val = mappings.get(k).asText();
-                        if (!"unmapped".equalsIgnoreCase(val)) {
-                            fields.add(val);
+                        JsonNode valNode = mappings.get(k);
+                        if (valNode.isTextual()) {
+                            String val = valNode.asText();
+                            if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                fields.add(val);
+                            }
+                        } else if (valNode.isObject()) {
+                            if (valNode.has("canonicalField")) {
+                                String val = valNode.get("canonicalField").asText();
+                                if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                    fields.add(val);
+                                }
+                            } else if (valNode.has("canonical_field")) {
+                                String val = valNode.get("canonical_field").asText();
+                                if (!"unmapped".equalsIgnoreCase(val) && !val.isBlank()) {
+                                    fields.add(val);
+                                }
+                            }
                         }
                     }
                 }
@@ -193,25 +241,7 @@ public class DynamicSchemaProvisioningService {
                 ORDER BY (vendor_id, source_id, received_at, event_id)
             """);
 
-            clickhouseJdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS ulpf_events.canonical_events
-                (
-                    event_id          String,
-                    lineage_id        String,
-                    vendor_id         String,
-                    source_id         String,
-                    mapping_version   Nullable(UInt32),
-                    timestamp         DateTime64(3) DEFAULT now64(3),
-                    numeric_value     Nullable(Float64),
-                    canonical_payload String CODEC(ZSTD(1)),
-                    raw_unmapped      String CODEC(ZSTD(1))
-                )
-                ENGINE = MergeTree
-                PARTITION BY toYYYYMM(timestamp)
-                ORDER BY (vendor_id, source_id, timestamp, event_id)
-            """);
-
-            log.info("Baseline ClickHouse schemas (ulpf_raw.raw_events & ulpf_events.canonical_events) verified successfully.");
+            log.info("Baseline ClickHouse schemas (ulpf_raw.raw_events) verified successfully.");
         } catch (Exception e) {
             log.warn("ClickHouse baseline initialization warning: {}", e.getMessage());
         }
@@ -266,12 +296,12 @@ public class DynamicSchemaProvisioningService {
         return result;
     }
 
-    private String normalizeColumnName(String canonicalField) {
+    public String normalizeColumnName(String canonicalField) {
         if (canonicalField == null) return "";
         return canonicalField.replace('.', '_').replace('-', '_').trim().toLowerCase();
     }
 
-    private String sanitizeTableName(String sourceName) {
+    public String sanitizeTableName(String sourceName) {
         if (sourceName == null) return "";
         String clean = sourceName.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
         clean = clean.replaceAll("_+", "_").replaceAll("^_+|_+$", "");
@@ -309,5 +339,48 @@ public class DynamicSchemaProvisioningService {
         }
 
         return tableName;
+    }
+
+    public boolean tableExists(String tableName) {
+        return tableExists("ulpf_events", tableName);
+    }
+
+    public boolean tableExists(String database, String tableName) {
+        if (clickhouseJdbcTemplate == null || tableName == null || tableName.isBlank()) {
+            return false;
+        }
+        String db = (database == null || database.isBlank()) ? "ulpf_events" : database;
+        try {
+            Integer count = clickhouseJdbcTemplate.queryForObject(
+                    "SELECT count() FROM system.tables WHERE database = ? AND name = ?",
+                    Integer.class,
+                    db, tableName
+            );
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.warn("Failed to check if table {}.{} exists: {}", db, tableName, e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean addColumnIfNotExists(String tableName, String columnName, String columnType) {
+        if (clickhouseJdbcTemplate == null || tableName == null || columnName == null) {
+            return false;
+        }
+        String cleanCol = normalizeColumnName(columnName);
+        if (cleanCol.isBlank()) return false;
+        String type = (columnType != null && !columnType.isBlank()) ? columnType : "Nullable(String)";
+        try {
+            String sql = "ALTER TABLE ulpf_events." + tableName + " ADD COLUMN IF NOT EXISTS " + cleanCol + " " + type;
+            log.info("Executing dynamic column addition: {}", sql);
+            clickhouseJdbcTemplate.execute(sql);
+            if (clickhouseIngestionRepository != null) {
+                clickhouseIngestionRepository.invalidateColumnsCache(tableName);
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to add column {} to ulpf_events.{}: {}", cleanCol, tableName, e.getMessage());
+            return false;
+        }
     }
 }

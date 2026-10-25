@@ -82,6 +82,12 @@ class EventIngestionServiceTest {
         assertTrue(rawUnmapped.contains("overflow_debug_tag"), "raw_unmapped should contain overflow_debug_tag");
         assertFalse(rawUnmapped.contains("vendor_src_ip"), "raw_unmapped should NOT contain vendor_src_ip because it is mapped");
         assertFalse(rawUnmapped.contains("vendor_user"), "raw_unmapped should NOT contain vendor_user because it is mapped");
+
+        assertNotNull(capturedCanonical.mappedFields(), "mappedFields should not be null");
+        assertEquals("192.168.1.100", capturedCanonical.mappedFields().get("source_ip"));
+        assertEquals("admin", capturedCanonical.mappedFields().get("user_id"));
+        assertTrue(capturedCanonical.canonicalPayload().contains("source_ip"), "canonicalPayload should contain normalized field names");
+        assertFalse(capturedCanonical.canonicalPayload().contains("vendor_src_ip"), "canonicalPayload should NOT contain original vendor field names");
     }
 
     @Test

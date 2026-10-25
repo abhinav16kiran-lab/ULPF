@@ -220,6 +220,81 @@ POST /v1/events ──► enqueue(RawEventRecord) ──► [ ConcurrentLinkedQu
 ##### `int getQueueSize()`
 * **Description:** Returns current number of buffered events waiting in memory.
 
+##### `List<RawEventRecord> readRawEventsChunk(String sourceId, LocalDateTime from, LocalDateTime to, LocalDateTime cursorTime, String cursorEventId, int limit)`
+* **Description:** Performs composite cursor-paginated streaming of historical raw events from `ulpf_raw.raw_events` using indexed `(received_at, event_id)` ordering. Ensures constant $O(1)$ RAM usage during large replays.
+
+##### `Set<String> findExistingEventIds(String tableName, Collection<String> eventIds)`
+* **Description:** Performs a batch primary key membership query (`SELECT event_id FROM ulpf_events.{table} WHERE event_id IN (...)`) to detect records already inserted, preventing duplicate insertions on job retries.
+
+##### `int batchInsertDynamicRecords(String tableName, List<CanonicalEventRecord> records)`
+* **Description:** Executes high-speed bulk JDBC batch inserts into dynamic canonical tables (`ulpf_events.{tableName}`) during replay backfills.
+
+##### `boolean isMemoryPressureHigh()`
+* **Description:** Queries ClickHouse `system.metrics` (`MemoryTracking`) to check if cluster memory pressure exceeds 80%, enabling adaptive backpressure throttling in background replay jobs.
+
+##### `long countRawEventsForSource(String sourceId, LocalDateTime fromTime, LocalDateTime toTime)`
+* **Description:** Counts total raw events within a time range for a source to provide accurate progress tracking percentages.
+
+##### `void invalidateColumnsCache(String tableName)`
+* **Description:** Evicts the cached column list for a dynamic table from the in-memory `ConcurrentHashMap`, forcing a refresh from `system.columns` upon dynamic schema alterations.
+
+---
+
+### 3.8 `VendorWebhookRepository`
+
+* **File Location:** `com/ulpf/common/db/VendorWebhookRepository.java`
+* **Purpose:** Manages tenant-scoped webhook destination configs and outbound delivery audit logs in SQLite (`vendor_webhooks`, `webhook_delivery_logs`).
+
+#### Public Methods:
+
+##### `Optional<VendorWebhookRecord> findByVendorId(String vendorId)`
+* **Description:** Retrieves the registered webhook configuration record for a vendor organization.
+* **Parameters:** `String vendorId`
+* **Returns:** `Optional<VendorWebhookRecord>` with configured URL, HMAC secret key, delivery health status, and failure counters.
+
+##### `VendorWebhookRecord saveOrUpdate(VendorWebhookRecord webhook)`
+* **Description:** Atomically registers or updates a vendor webhook endpoint using SQLite `ON CONFLICT(vendor_id) DO UPDATE`. Preserves existing HMAC secret keys when omitted/blank. Resets consecutive failure counters and status to `UNTESTED` on URL configuration updates.
+* **Parameters:** `VendorWebhookRecord webhook`
+* **Returns:** Stored `VendorWebhookRecord`.
+
+##### `void updateDeliveryStatus(String vendorId, boolean success, int statusCode, int consecutiveFails)`
+* **Description:** Records delivery results. Transitions status to `HEALTHY` on success (`consecutiveFails == 0`), or to `FAILING` when `consecutiveFails >= 3` (implementing circuit-breaker flapping mitigation).
+* **Parameters:** `String vendorId`, `boolean success`, `int statusCode`, `int consecutiveFails`.
+
+##### `void saveDeliveryLog(WebhookDeliveryLogRecord logRecord)`
+* **Description:** Appends an immutable audit log entry into `webhook_delivery_logs` tracking alert type, target URL, latency, HTTP status code, and error messages.
+* **Parameters:** `WebhookDeliveryLogRecord logRecord`.
+
+##### `void deleteByVendorId(String vendorId)`
+* **Description:** Deletes the webhook configuration for a vendor organization.
+* **Parameters:** `String vendorId`.
+
+---
+
+### 3.9 `IngestionIncidentRepository`
+
+* **File Location:** `com/ulpf/common/db/IngestionIncidentRepository.java`
+* **Purpose:** Manages persistent ingestion incident tracking, failure categorization, affected event drop counts, and replay backfill recovery windows (`ingestion_alert_incidents`).
+
+#### Public Methods:
+
+##### `void createIncident(IncidentRecord record)`
+* **Description:** Persists a new operational failure incident (`MISSING_TABLE`, `UNPROVISIONED_SCHEMA`, `BATCH_INSERT_ERROR`, `HIGH_SCHEMA_DRIFT`).
+* **Parameters:** `IncidentRecord record`.
+
+##### `void recordOrUpdateIncident(String sourceId, String failureType, String tableName, long count, String details)`
+* **Description:** Upserts an active incident; increments `affected_count` and updates `last_seen_at` if already open, or creates a new incident if none exists.
+* **Parameters:** `String sourceId`, `String failureType`, `String tableName`, `long count`, `String details`.
+
+##### `void resolveIncident(String sourceId, String failureType)`
+* **Description:** Marks an active incident as `RESOLVED`, recording `resolved_at` timestamp.
+* **Parameters:** `String sourceId`, `String failureType`.
+
+##### `Optional<IncidentRecord> findOpenIncident(String sourceId, String failureType)`
+* **Description:** Queries SQLite for an active `OPEN` incident for a specific source and failure type.
+* **Parameters:** `String sourceId`, `String failureType`.
+* **Returns:** `Optional<IncidentRecord>`.
+
 ---
 
 ## 4. How to Use in Application Services
@@ -290,7 +365,10 @@ The database and engine package is verified by dedicated unit & integration test
 | **`UserRepositoryTest`** | `UserRepository` | Verifies user creation (`save`), username uniqueness checks, SQL timestamp parsing, and `findByUsername` queries against in-memory SQLite. |
 | **`CredentialRepositoryTest`** | `CredentialRepository` | Verifies early-exit subquery resolving active API key hashes against linked `credentials`, `sources`, and `vendors` tables, and suspension handling. |
 | **`MappingRepositoryTest`** | `MappingRepository` | Verifies active mapping lazy-loading into RAM cache, cache invalidation, version numbering (`getNextVersionNumber`), and version activation. |
-| **`ClickHouseIngestionRepositoryTest`** | `ClickHouseIngestionRepository` | Verifies in-memory queue buffer enqueueing, 500-batch limit trigger, `flush()` execution, and queue draining. |
+| **`VendorWebhookRepositoryTest`**| `VendorWebhookRepository` | Verifies upsert secret preservation (`COALESCE`), status flapping transitions (`FAILING` at $\ge 3$), delivery log persistence, and deletion cascades. |
+| **`ClickHouseIngestionRepositoryTest`** | `ClickHouseIngestionRepository` | Verifies in-memory queue buffer enqueueing, 500-batch limit trigger, `flush()` execution, cursor pagination, and queue draining. |
+| **`TableIngestionFailureNotificationServiceTest`** | Ingestion failure pipeline | Verifies 30-minute sliding window alert throttling, atomic drop counters, recovery re-arming, and incident lifecycle persistence. |
+| **`SchemaDriftNotificationServiceTest`** | Schema drift detection | Verifies high drift (>30%) and total drift (100% unmapped) alert dispatching with vendor webhook routing. |
 | **`OnboardingServiceTest`** | `OnboardingService` | Verifies request submission, SHA-256 key hash generation, candidate mapping creation, and admin approval flow. |
 | **`AnalyticsServiceTest`** | `AnalyticsService` | Verifies ClickHouse SQL aggregation query building and strict identifier regex sanitization. |
 | **`NotificationPurgeSchedulerTest`** | `NotificationPurgeScheduler` | Verifies 14d read / 60d unread notification TTL purging and 7d `sample_metadata` JSON nullification. |
@@ -301,4 +379,4 @@ cd core-engine
 mvn test
 ```
 
-All **74 test cases** across the application compile and pass cleanly (`BUILD SUCCESS`).
+All unit and integration test suites compile and pass cleanly (`BUILD SUCCESS`).

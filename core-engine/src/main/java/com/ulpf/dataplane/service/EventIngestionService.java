@@ -24,6 +24,7 @@ import java.util.UUID;
  */
 import com.ulpf.dataplane.format.FormatDetectionResult;
 import com.ulpf.dataplane.format.LogFormatDetector;
+import com.ulpf.mapping.service.MappingTransformer;
 
 @Service
 public class EventIngestionService {
@@ -36,6 +37,7 @@ public class EventIngestionService {
     private final SensorTelemetryEvaluator sensorTelemetryEvaluator;
     private final SchemaDriftNotificationService schemaDriftNotificationService;
     private final LogFormatDetector logFormatDetector;
+    private final MappingTransformer mappingTransformer;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EventIngestionService(
@@ -44,7 +46,7 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator
     ) {
-        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null, new LogFormatDetector());
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, null, new LogFormatDetector(), new MappingTransformer());
     }
 
     public EventIngestionService(
@@ -54,7 +56,18 @@ public class EventIngestionService {
             SensorTelemetryEvaluator sensorTelemetryEvaluator,
             SchemaDriftNotificationService schemaDriftNotificationService
     ) {
-        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, new LogFormatDetector());
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, new LogFormatDetector(), new MappingTransformer());
+    }
+
+    public EventIngestionService(
+            CredentialRepository credentialRepository,
+            MappingRepository mappingRepository,
+            ClickHouseIngestionRepository clickHouseIngestionRepository,
+            SensorTelemetryEvaluator sensorTelemetryEvaluator,
+            SchemaDriftNotificationService schemaDriftNotificationService,
+            LogFormatDetector logFormatDetector
+    ) {
+        this(credentialRepository, mappingRepository, clickHouseIngestionRepository, sensorTelemetryEvaluator, schemaDriftNotificationService, logFormatDetector, new MappingTransformer());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -64,7 +77,8 @@ public class EventIngestionService {
             ClickHouseIngestionRepository clickHouseIngestionRepository,
             SensorTelemetryEvaluator sensorTelemetryEvaluator,
             @org.springframework.beans.factory.annotation.Autowired(required = false) SchemaDriftNotificationService schemaDriftNotificationService,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) LogFormatDetector logFormatDetector
+            @org.springframework.beans.factory.annotation.Autowired(required = false) LogFormatDetector logFormatDetector,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) MappingTransformer mappingTransformer
     ) {
         this.credentialRepository = credentialRepository;
         this.mappingRepository = mappingRepository;
@@ -72,6 +86,7 @@ public class EventIngestionService {
         this.sensorTelemetryEvaluator = sensorTelemetryEvaluator;
         this.schemaDriftNotificationService = schemaDriftNotificationService;
         this.logFormatDetector = logFormatDetector != null ? logFormatDetector : new LogFormatDetector();
+        this.mappingTransformer = mappingTransformer != null ? mappingTransformer : new MappingTransformer();
     }
 
     public record IngestResult(String eventId, String vendorId, String sourceId, String status, LocalDateTime receivedAt, String traceId, String detectedFormat) {
@@ -134,12 +149,16 @@ public class EventIngestionService {
         Double delta = null;
         Long maxIntervalMs = 60000L;
         String sensorField = null;
+        String targetTable = null;
 
         if (mappingOpt.isPresent()) {
             try {
                 JsonNode mappingRoot = objectMapper.readTree(mappingOpt.get().mappingJson());
                 if (mappingRoot.has("metadata")) {
                     JsonNode meta = mappingRoot.get("metadata");
+                    if (meta.has("target_table") && !meta.get("target_table").isNull()) {
+                        targetTable = meta.get("target_table").asText();
+                    }
                     if (meta.has("log_type")) {
                         logType = meta.get("log_type").asText("REG_LOG");
                     }
@@ -152,6 +171,9 @@ public class EventIngestionService {
                     if (meta.has("sensor_field") && !meta.get("sensor_field").isNull()) {
                         sensorField = meta.get("sensor_field").asText();
                     }
+                }
+                if (targetTable == null && mappingRoot.has("target_table") && !mappingRoot.get("target_table").isNull()) {
+                    targetTable = mappingRoot.get("target_table").asText();
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse metadata from mappingJson for source {}: {}", cred.sourceId(), e.getMessage());
@@ -187,10 +209,20 @@ public class EventIngestionService {
         // Extract unmapped fields into Lossless Overflow Field (raw_unmapped JSON)
         String rawUnmappedJson = extractUnmappedFields(parsedFields.isEmpty() ? payload : parsedFields, mappingOpt, cred.sourceId());
 
+        // Extract normalized mapped fields for dynamic table columns
+        java.util.Map<String, Object> mappedFields = extractMappedFields(parsedFields.isEmpty() ? payload : parsedFields, mappingOpt, cred.sourceId());
+        String canonicalPayloadJson;
+        try {
+            canonicalPayloadJson = objectMapper.writeValueAsString(mappedFields);
+        } catch (Exception e) {
+            canonicalPayloadJson = "{}";
+        }
+
         // STEP 2: Evaluator Divergence Path
         if (isSensor) {
             if (evalResult != null && evalResult.shouldEmit()) {
                 CanonicalEventRecord canonicalEvent = new CanonicalEventRecord(
+                        targetTable,
                         eventId,
                         lineageId,
                         cred.vendorId(),
@@ -198,14 +230,16 @@ public class EventIngestionService {
                         mappingVersion,
                         now,
                         evalResult.value(),
-                        rawJson,
-                        rawUnmappedJson
+                        canonicalPayloadJson,
+                        rawUnmappedJson,
+                        mappedFields
                 );
                 clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
             }
         } else {
             // Regular log path: emit canonical event immediately
             CanonicalEventRecord canonicalEvent = new CanonicalEventRecord(
+                    targetTable,
                     eventId,
                     lineageId,
                     cred.vendorId(),
@@ -213,8 +247,9 @@ public class EventIngestionService {
                     mappingVersion,
                     now,
                     null,
-                    rawJson,
-                    rawUnmappedJson
+                    canonicalPayloadJson,
+                    rawUnmappedJson,
+                    mappedFields
             );
             clickHouseIngestionRepository.enqueueCanonical(canonicalEvent);
         }
@@ -223,35 +258,7 @@ public class EventIngestionService {
     }
 
     private Double extractNumericValue(Object payload, String sensorField) {
-        if (payload == null) return null;
-        try {
-            JsonNode node = (payload instanceof JsonNode jn) ? jn : objectMapper.valueToTree(payload);
-            if (sensorField != null && !sensorField.isBlank() && node.has(sensorField)) {
-                JsonNode fieldNode = node.get(sensorField);
-                if (fieldNode.isNumber()) {
-                    return fieldNode.asDouble();
-                } else {
-                    try {
-                        return Double.parseDouble(fieldNode.asText());
-                    } catch (Exception ignored) {}
-                }
-            }
-            for (String candidate : List.of("value", "reading", "temp", "temperature", "val", "metric")) {
-                if (node.has(candidate) && node.get(candidate).isNumber()) {
-                    return node.get(candidate).asDouble();
-                }
-            }
-            if (node.isObject()) {
-                var fields = node.properties().iterator();
-                while (fields.hasNext()) {
-                    var entry = fields.next();
-                    if (entry.getValue().isNumber()) {
-                        return entry.getValue().asDouble();
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
+        return mappingTransformer.extractNumericValue(payload, sensorField);
     }
 
     private String extractUnmappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
@@ -286,6 +293,7 @@ public class EventIngestionService {
             }
 
             com.fasterxml.jackson.databind.node.ObjectNode unmappedNode = objectMapper.createObjectNode();
+            int totalPayloadKeys = payloadNode.size();
             var fields = payloadNode.properties().iterator();
 
             List<HistoricalVersion> historicalVersions = null;
@@ -331,13 +339,14 @@ public class EventIngestionService {
             }
 
             if (!unmappedNode.isEmpty()) {
-                if (schemaDriftNotificationService != null && sourceId != null) {
+                if (mappingOpt.isPresent() && schemaDriftNotificationService != null && sourceId != null) {
                     java.util.Set<String> unmappedKeys = new java.util.HashSet<>();
                     var fieldNames = unmappedNode.fieldNames();
                     while (fieldNames.hasNext()) {
                         unmappedKeys.add(fieldNames.next());
                     }
-                    schemaDriftNotificationService.checkAndNotifyDrift(sourceId, unmappedKeys);
+                    boolean isTotalDrift = totalPayloadKeys > 0 && unmappedKeys.size() == totalPayloadKeys;
+                    schemaDriftNotificationService.checkAndNotifyDrift(sourceId, unmappedKeys, totalPayloadKeys, isTotalDrift);
                 }
                 return objectMapper.writeValueAsString(unmappedNode);
             }
@@ -351,19 +360,77 @@ public class EventIngestionService {
 
     private record HistoricalVersion(int version, JsonNode rootNode) {}
 
+    private String resolveCanonicalField(String vendorKey, JsonNode mappingRoot) {
+        return mappingTransformer.resolveCanonicalField(vendorKey, mappingRoot);
+    }
+
     private boolean isKeyMappedInJson(String vendorKey, JsonNode mappingRoot) {
-        if (mappingRoot == null || !mappingRoot.has(vendorKey)) {
-            return false;
+        return mappingTransformer.isKeyMappedInJson(vendorKey, mappingRoot);
+    }
+
+    private java.util.Map<String, Object> extractMappedFields(Object payload, Optional<MappingVersionRecord> mappingOpt, String sourceId) {
+        java.util.Map<String, Object> mappedFields = new java.util.LinkedHashMap<>();
+        if (mappingOpt.isEmpty() || payload == null) {
+            return mappedFields;
         }
-        JsonNode fieldMapping = mappingRoot.get(vendorKey);
-        if (fieldMapping != null && fieldMapping.isObject() && fieldMapping.has("canonicalField")) {
-            String canonicalField = fieldMapping.get("canonicalField").asText();
-            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
-        } else if (fieldMapping != null && fieldMapping.isTextual()) {
-            String canonicalField = fieldMapping.asText();
-            return canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField);
+
+        try {
+            JsonNode payloadNode;
+            if (payload instanceof JsonNode jn) {
+                payloadNode = jn;
+            } else if (payload instanceof String strPayload) {
+                try {
+                    payloadNode = objectMapper.readTree(strPayload);
+                } catch (Exception e) {
+                    payloadNode = objectMapper.valueToTree(payload);
+                }
+            } else {
+                payloadNode = objectMapper.valueToTree(payload);
+            }
+
+            if (payloadNode == null || !payloadNode.isObject()) {
+                return mappedFields;
+            }
+
+            JsonNode mappingRoot = null;
+            try {
+                mappingRoot = objectMapper.readTree(mappingOpt.get().mappingJson());
+            } catch (Exception e) {
+                log.warn("Failed to parse mappingJson in extractMappedFields: {}", e.getMessage());
+            }
+
+            var fields = payloadNode.properties().iterator();
+            List<HistoricalVersion> historicalVersions = null;
+
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                String vendorKey = entry.getKey();
+                JsonNode value = entry.getValue();
+
+                String canonicalField = resolveCanonicalField(vendorKey, mappingRoot);
+                if (canonicalField == null && sourceId != null && mappingRepository != null) {
+                    if (historicalVersions == null) {
+                        historicalVersions = loadHistoricalVersions(sourceId, mappingOpt);
+                    }
+                    for (HistoricalVersion hist : historicalVersions) {
+                        canonicalField = resolveCanonicalField(vendorKey, hist.rootNode());
+                        if (canonicalField != null) break;
+                    }
+                }
+
+                if (canonicalField != null && !canonicalField.isBlank() && !"unmapped".equalsIgnoreCase(canonicalField)) {
+                    String normCol = mappingTransformer.normalizeColumnName(canonicalField);
+                    if (value.isValueNode()) {
+                        mappedFields.put(normCol, value.asText());
+                    } else {
+                        mappedFields.put(normCol, objectMapper.writeValueAsString(value));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract mapped fields: {}", e.getMessage());
         }
-        return false;
+        return mappedFields;
     }
 
     private List<HistoricalVersion> loadHistoricalVersions(String sourceId, Optional<MappingVersionRecord> activeMappingOpt) {

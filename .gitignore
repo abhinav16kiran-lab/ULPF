@@ -29,3 +29,5 @@ analytics-service/__pycache__/
 # OS
 .DS_Store
 dev-tools/
+
+GEMINI.md

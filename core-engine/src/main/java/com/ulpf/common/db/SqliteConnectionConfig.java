@@ -34,4 +34,10 @@ public class SqliteConnectionConfig {
     public JdbcTemplate jdbcTemplate(DataSource sqliteDataSource) {
         return new JdbcTemplate(sqliteDataSource);
     }
+
+    @Bean
+    @Primary
+    public org.springframework.transaction.PlatformTransactionManager transactionManager(DataSource sqliteDataSource) {
+        return new org.springframework.jdbc.datasource.DataSourceTransactionManager(sqliteDataSource);
+    }
 }

@@ -55,6 +55,22 @@ class AnalyticsControllerTest {
     }
 
     @Test
+    void testGetAnalytics_InvalidTableThrowsIllegalArgumentException_ReturnsBadRequest() throws Exception {
+        when(analyticsService.isValidAggregation("COUNT")).thenReturn(true);
+        when(analyticsService.runQuery(anyString(), anyString(), anyString(),
+                nullable(String.class), nullable(String.class), nullable(String.class)))
+                .thenThrow(new IllegalArgumentException("Invalid characters in SQL identifier: bad;table"));
+
+        mockMvc.perform(get("/v1/analytics")
+                        .param("table", "bad;table")
+                        .param("column", "src_ip")
+                        .param("aggregation", "COUNT"))
+                .andExpect(status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error")
+                        .value("Invalid characters in SQL identifier: bad;table"));
+    }
+
+    @Test
     void testExportParquet_ReturnsBinaryContent() throws Exception {
         byte[] mockParquet = new byte[] {0x50, 0x41, 0x52, 0x31, 0x00, 0x00, 0x00, 0x00, 0x50, 0x41, 0x52, 0x31};
         when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
@@ -65,6 +81,28 @@ class AnalyticsControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_TYPE, "application/vnd.apache.parquet"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header().string(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, org.hamcrest.Matchers.containsString("attachment; filename=\"ulpf_export_vendor-1_")));
+    }
+
+    @Test
+    void testExportParquet_ReturnsNoContentWhenEmpty() throws Exception {
+        when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(new byte[0]);
+
+        mockMvc.perform(get("/v1/analytics/export/parquet")
+                        .param("vendorId", "vendor-empty"))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void testExportParquet_ReturnsBadGatewayOnStorageFailure() throws Exception {
+        when(analyticsService.exportParquet(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenThrow(new RuntimeException("ClickHouse connection failed"));
+
+        mockMvc.perform(get("/v1/analytics/export/parquet")
+                        .param("vendorId", "vendor-1"))
+                .andExpect(status().isBadGateway())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error")
+                        .value(org.hamcrest.Matchers.containsString("Failed to export Parquet data from storage")));
     }
 
     @Test
@@ -84,7 +122,39 @@ class AnalyticsControllerTest {
 
         mockMvc.perform(get("/v1/analytics/timeseries")
                         .param("interval", "5m"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.interval").value("5m"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.totalBuckets").value(0));
+    }
+
+    @Test
+    void testGetTimeSeries_WithAllParameters_ReturnsOk() throws Exception {
+        when(analyticsService.getTimeSeries(org.mockito.ArgumentMatchers.eq("error"), org.mockito.ArgumentMatchers.eq("1h"), org.mockito.ArgumentMatchers.eq("2026-10-20T00:00:00Z"), org.mockito.ArgumentMatchers.eq("2026-10-20T23:59:59Z")))
+                .thenReturn(java.util.List.of(new AnalyticsService.TimeSeriesBucket("2026-10-20T10:00:00Z", 200L, 5L)));
+
+        mockMvc.perform(get("/v1/analytics/timeseries")
+                        .param("query", "error")
+                        .param("interval", "1h")
+                        .param("from", "2026-10-20T00:00:00Z")
+                        .param("to", "2026-10-20T23:59:59Z"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.interval").value("1h"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.totalBuckets").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.buckets[0].timestamp").value("2026-10-20T10:00:00Z"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.buckets[0].totalCount").value(200))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.buckets[0].errorCount").value(5));
+    }
+
+    @Test
+    void testGetTimeSeries_InvalidInterval_ReturnsBadRequest() throws Exception {
+        when(analyticsService.getTimeSeries(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("bad_interval"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalArgumentException("Invalid interval 'bad_interval'. Format must be <positive_integer>[s|m|h|d], e.g. '30s', '5m', '1h', '1d'."));
+
+        mockMvc.perform(get("/v1/analytics/timeseries")
+                        .param("interval", "bad_interval"))
+                .andExpect(status().isBadRequest())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.error")
+                        .value(org.hamcrest.Matchers.containsString("Format must be <positive_integer>[s|m|h|d]")));
     }
 
     @Test

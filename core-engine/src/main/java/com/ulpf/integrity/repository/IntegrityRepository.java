@@ -114,6 +114,33 @@ public class IntegrityRepository {
         }
     }
 
+    public Optional<IntegrityBlockRecord> findExistingBlock(String sourceId, String firstEventId, String lastEventId, String merkleRoot) {
+        try {
+            String sql = """
+                    SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
+                    FROM batch_integrity_blocks
+                    WHERE source_id = ? AND first_event_id = ? AND last_event_id = ? AND merkle_root = ?
+                    ORDER BY block_id DESC
+                    LIMIT 1
+                    """;
+            List<IntegrityBlockRecord> list = jdbcTemplate.query(sql, (rs, rowNum) -> new IntegrityBlockRecord(
+                    rs.getLong("block_id"),
+                    rs.getString("source_id"),
+                    rs.getInt("event_count"),
+                    rs.getString("first_event_id"),
+                    rs.getString("last_event_id"),
+                    rs.getString("merkle_root"),
+                    rs.getString("previous_block_hash"),
+                    rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toLocalDateTime() : null),
+                    sourceId, firstEventId, lastEventId, merkleRoot);
+
+            return list.stream().findFirst();
+        } catch (Exception e) {
+            log.warn("Failed to check for existing integrity block: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     public List<IntegrityBlockRecord> findAllBlocks(int limit) {
         String sql = """
                 SELECT block_id, source_id, event_count, first_event_id, last_event_id, merkle_root, previous_block_hash, created_at
