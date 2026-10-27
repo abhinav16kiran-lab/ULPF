@@ -88,7 +88,7 @@ To guarantee zero data loss and 99.999% uptime, every shard node maintains activ
 
 - **Consensus Synchronization**: ClickHouse Keeper (or ZooKeeper) coordinates log part replication asynchronously across replica nodes.
 - **Automatic Failover**: If `Shard 1 (Node 01)` crashes, `Shard 1 (Node 02)` immediately takes over reads and writes without dropping incoming HTTP log batches.
-- **Read Load-Balancing**: Analytical read queries (`/v1/analytics`, `/v1/analytics/search`) automatically load-balance across all active replicas.
+- **Read Load-Balancing**: Analytical read queries (`/v1/analytics`) automatically load-balance across all active replicas.
 
 ---
 

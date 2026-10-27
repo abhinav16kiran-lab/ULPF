@@ -74,10 +74,10 @@
   - Ensure cursor persistence updates periodically (e.g., every 5,000 events) rather than per-event to minimize SQLite write contention.
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
-### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack
+### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
 - **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
 - **Requirement**:
-  - Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.
+  - ~~Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.~~ **[DONE]**
   - Integrate an industry-standard open-source observability stack using **Prometheus** and **Grafana** into the platform deployment configuration (e.g. `docker-compose.yml`).
   - Configure **Micrometer & Spring Boot Actuator** (`/actuator/prometheus`) in `core-engine` to export production metrics:
     - *Ingestion Throughput*: Events ingested per second segmented by `source_id`, `vendor_id`, and `source_type`.
@@ -85,10 +85,22 @@
     - *ClickHouse Analytical Pipeline*: Batch flush frequency, batch size distribution, flush duration/latency, and insert error counts.
     - *Alerting & Webhook Metrics*: Schema drift rates, incident counts, and webhook delivery latency/success ratios.
   - Provide pre-configured Grafana dashboards (provisioned via code/JSON) with datasources automatically wired to Prometheus and ClickHouse (via ClickHouse Grafana plugin), giving administrators immediate visibility into log spikes, system health, and pipeline errors.
+  - Recreate the removed full-text search and log-volume/error-spike histogram as Grafana panels over `ulpf_raw.raw_events` (e.g. `positionCaseInsensitive` / `match()` filters and `toStartOfInterval` bucketing), so no feature is lost with the removal of `/v1/analytics/search` and `/v1/analytics/timeseries`.
+  - Restrict Grafana's ClickHouse access with a dedicated **read-only** ClickHouse user (limited to `ulpf_raw` / `ulpf_events`, with `max_execution_time`, `max_memory_usage`, and `max_result_rows` profile limits).
+  - Tighten `/actuator/**` security: it is currently `permitAll()` in `SpringSecurity.java` and `JwtFilter.java`; only `/actuator/health` may stay open, and `/actuator/prometheus` must be restricted.
 - **Design Considerations**:
   - Keep `/actuator/prometheus` endpoints protected or restricted to internal Docker networks / admin authentication.
   - Ensure metric recording uses lightweight Micrometer counters/timers with sub-microsecond overhead off the ingestion hot path.
   - Provide a clean admin portal navigation action / link to launch the dedicated Grafana dashboard.
+  - **RBAC gap**: Grafana connects to ClickHouse directly and bypasses the application's `@PreAuthorize("hasRole('ADMIN')")` checks (which previously guarded the removed search/timeseries endpoints). Access control must be re-established at the Grafana layer: Grafana login limited to admins (SSO/OIDC against ULPF auth, or a reverse-proxy auth check), anonymous access disabled, and no per-vendor data exposed to non-admin viewers. Revisit this together with item 3 (vendor-scoped data portal) if vendors are ever given dashboards.
+  - Do not expose Grafana, Prometheus, or ClickHouse ports publicly in `compose.yaml`; keep them on the internal `ulpf-net` network behind the authenticated proxy.
+- **Implementation Summary (completed part: legacy UI removal)**:
+  - Removed the "Grafana Search & Graphs" mode from `AnalyticsPage.jsx`: tab button, search form, results view (histogram + log viewer), state, `handleGrafanaSearch()` (including its hardcoded fake-data fallback), `highlightQuery()`, and every `mode === "grafana"` branch. Builder, Direct SQL, and Lineage modes are unchanged.
+  - Removed `GET /v1/analytics/search` and `GET /v1/analytics/timeseries` from `AnalyticsController`, and `searchLogs()`, `getTimeSeries()`, `resolveIntervalSeconds()`, `generateMockTimeSeries()`, `LogSearchResult`, and `TimeSeriesBucket` from `AnalyticsService`. No other code, tool, or script used them.
+  - Removed the 9 tests that covered only the deleted code from `AnalyticsControllerTest` and `AnalyticsServiceTest` (full `core-engine` suite: 320/320 passing; frontend production build verified).
+  - Updated `README.md`, `docs/ARCH/API_SPECIFICATION.md`, `docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md`, and `docs/frontend/frontend.md` to drop the removed endpoints and mode.
+  - Kept the `tokenbf_v1` Bloom filter index on `raw_events.raw_payload` for use by Grafana's ClickHouse queries.
+- **Remaining**: Prometheus + Grafana in `compose.yaml`, Micrometer/Actuator metrics, provisioned dashboards/datasources, and the RBAC and hardening items above.
 
 ### 8. Modular Architecture Refactoring: Decoupled Mapping & Transformation Pipeline
 - **Problem**: The current mapping engine logic is tightly coupled across monolithic classes (`MappingProposalService`, etc.). Header detection, raw payload parsing, type casting, schema version resolution, proposal generation, and candidate promotion are intertwined in dense blocks. This violates the Single Responsibility Principle, creates merge conflicts, and prevents multiple developers from working on mapping features in parallel.
@@ -104,3 +116,13 @@
   - Preserve 100% backward compatibility with existing stored mapping JSON schemas and SQLite tables.
   - Performance: Avoid unnecessary intermediate object allocation on the live ingestion hot path.
   - Comprehensive unit test isolation for each individual strategy and transformation step.
+
+### 9. Modular Frontend Refactoring: Split `AnalyticsPage.jsx` into Per-Mode Components
+- **Problem**: `frontend/src/pages/AnalyticsPage.jsx` is still ~1,700 lines even after removing the legacy Grafana mode. Builder, Direct SQL, and Lineage modes, the Parquet export, and the bulk-import modal all share one component with a large amount of interleaved state and `mode === ...` conditionals, making it hard to read, test, or change in parallel.
+- **Requirement**:
+  - Split the page into focused components under `frontend/src/pages/analytics/` (or similar): one per mode (`BuilderMode`, `SqlMode`, `LineageMode`), plus `BulkImportModal`, a shared results/metrics panel, and a slim `AnalyticsPage` that owns only mode switching and shared state (`viewState`, `loading`, `errorMessage`).
+  - Extract the dynamic table/column loading logic into a custom hook (e.g. `useClickHouseSchema`) and API calls into `api/analytics.js` instead of inline `client.get/post` calls.
+  - Remove the repeated `mode === "lineage" ? ... : ...` ternaries in favor of per-mode components that render their own labels and results.
+- **Design Considerations**:
+  - Pure refactor: no behavior, endpoint, or styling changes; verify each mode manually (or with tests) before and after.
+  - The frontend currently has no test runner; add Vitest + React Testing Library alongside this work so the extracted components are covered.

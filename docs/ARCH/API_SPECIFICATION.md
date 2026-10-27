@@ -31,8 +31,6 @@
 | `/v1/analytics/tables` | `GET` | `ADMIN` | Fetch list of accessible ClickHouse table names |
 | `/v1/analytics/tables/{table}/columns` | `GET` | `ADMIN` | Retrieve schema column metadata for specific ClickHouse table |
 | `/v1/analytics/schemas` | `GET` | `ADMIN` | Get ClickHouse database catalog tables and dynamic columns |
-| `/v1/analytics/search` | `GET` | `ADMIN` | Full-text substring & regex raw log search with Bloom filter |
-| `/v1/analytics/timeseries` | `GET` | `ADMIN` | Time-series histogram throughput & error spike aggregation |
 | `/v1/analytics/import/file` | `POST` | `ADMIN` | Bulk upload `.json`, `.gz`, `.log`, or `.csv` files into ClickHouse |
 | `/v1/analytics/export/parquet` | `GET` | `ADMIN` | Export ClickHouse logs into Snappy-compressed Apache Parquet |
 | `/v1/integrity/blocks` | `GET` | Authenticated | List all cryptographic batch integrity blocks |

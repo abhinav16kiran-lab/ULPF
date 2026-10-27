@@ -297,12 +297,10 @@ AI mapping takes place **exclusively during vendor onboarding** (`/v1/onboard`):
 
 ---
 
-## 4. Grafana-Style Full-Text Search & Time-Series Histogram Engine
+## 4. ClickHouse Analytics Console & Parquet Export
 
-The Analytics Console (`/analytics`) features Grafana-style log stream observability backed by ClickHouse `tokenbf_v1` Bloom Filter token indexing over ZSTD-compressed payloads:
+The Analytics Console (`/analytics`) offers a query builder, direct SQL, and lineage lookup over ClickHouse, with ZSTD-compressed payload storage:
 - **Bloom Filter Skip Indexing**: `INDEX idx_raw_token raw_payload TYPE tokenbf_v1(30720, 2, 0)` allows ClickHouse to perform full-text string matching over compressed log chunks without full disk read decompression.
-- **Log Stream Viewer (`GET /v1/analytics/search`)**: Real-time substring and regex matching with client-side keyword string highlighting.
-- **Time-Series Histogram (`GET /v1/analytics/timeseries`)**: Dual-color bar chart visualizer tracking total log volume alongside stacked error/failure spikes.
 - **Parquet Export (`GET /v1/analytics/export/parquet`)**: Automated batch exporter outputting Snappy-compressed Apache Parquet binaries for air-gapped AI/ML data lakes.
 - **Enterprise Scalability Guide**: Details on `PARTITION BY toYYYYMM()`, `ZSTD(1) → ZSTD(15)` TTL re-compression, `Distributed` engine sharding (`sipHash64`), and NVMe $\rightarrow$ S3 tiered storage are documented in [docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md](file:///home/venzz/Work/Projects/ULPF/docs/ARCH/SCALABILITY_AND_CLUSTER_GUIDE.md).
 
@@ -384,8 +382,6 @@ Vendors can register external webhook endpoints in the self-service portal to re
 | `GET` | `/v1/analytics` | Admin Token | Run ClickHouse analytical queries |
 | `GET` | `/v1/analytics/tables` | Admin Token | Fetch available ClickHouse table names |
 | `GET` | `/v1/analytics/tables/{table}/columns` | Admin Token | Inspect dynamic column metadata for selected table |
-| `GET` | `/v1/analytics/search` | Admin Token | Full-text log substring & regex search (ClickHouse `tokenbf_v1`) |
-| `GET` | `/v1/analytics/timeseries` | Admin Token | Time-series histogram throughput & error spike aggregation |
 | `POST` | `/v1/analytics/import/file` | Admin Token | Bulk upload legacy log files (`.json`, `.gz`, `.log`, `.csv`) |
 | `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |

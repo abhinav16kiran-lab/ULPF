@@ -56,7 +56,7 @@ All application views utilize the tokens established in the team's official **Wa
 | `/admin` | `AdminDashboardPage.jsx` | `ADMIN` | Schema governance, AI mapping review & one-click ClickHouse activation |
 | `/notifications` | `NotificationsPage.jsx` | Authenticated | User notification feed, unread toggles & API key delivery |
 | `/integrity` | `IntegrityConsolePage.jsx` | `ADMIN`, `VENDOR`, `USER` | Cryptographic Merkle tree forensic audit console |
-| `/analytics` | `AnalyticsPage.jsx` | `ADMIN` | ClickHouse query builder (Builder Mode, Direct SQL, Lineage, Grafana) |
+| `/analytics` | `AnalyticsPage.jsx` | `ADMIN` | ClickHouse query builder (Builder Mode, Direct SQL, Lineage) |
 
 ---
 

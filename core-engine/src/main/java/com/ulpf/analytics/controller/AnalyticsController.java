@@ -156,39 +156,6 @@ public class AnalyticsController {
         }
     }
 
-    @GetMapping("/analytics/search")
-    public ResponseEntity<?> searchLogs(
-            @RequestParam(required = false) String query,
-            @RequestParam(required = false, defaultValue = "CONTAINS") String searchType,
-            @RequestParam(required = false) String vendorId,
-            @RequestParam(required = false) String sourceId,
-            @RequestParam(required = false) String from,
-            @RequestParam(required = false) String to,
-            @RequestParam(required = false, defaultValue = "200") Integer limit
-    ) {
-        var result = analyticsService.searchLogs(query, searchType, vendorId, sourceId, from, to, limit);
-        return ResponseEntity.ok(result);
-    }
-
-    @GetMapping("/analytics/timeseries")
-    public ResponseEntity<?> getTimeSeries(
-            @RequestParam(required = false) String query,
-            @RequestParam(required = false, defaultValue = "5m") String interval,
-            @RequestParam(required = false) String from,
-            @RequestParam(required = false) String to
-    ) {
-        try {
-            var buckets = analyticsService.getTimeSeries(query, interval, from, to);
-            return ResponseEntity.ok(Map.of(
-                    "interval", interval,
-                    "totalBuckets", buckets.size(),
-                    "buckets", buckets
-            ));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
-    }
-
     @org.springframework.web.bind.annotation.PostMapping(value = "/analytics/import/file", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> importLogFile(
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
