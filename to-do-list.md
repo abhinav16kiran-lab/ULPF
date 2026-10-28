@@ -38,7 +38,7 @@
   - Signed temporary download URLs or streaming responses for large Parquet export files.
 - **Resolution (false positive)**: The stated problem does not exist in the code. `/v1/analytics/**` and `/v1/admin/**` are restricted to `ADMIN` in `SpringSecurity.java`, and `AnalyticsController` carries a class-level `@PreAuthorize("hasRole('ADMIN')")`, covering `/analytics/export/parquet` and `/analytics/import/file`. Vendors and regular users cannot request exports or analytics, so there is no cross-tenant leak today, and the frontend has no export feature. The only `VENDOR`-accessible controller is `VendorWebhookController`. A vendor-facing portal would be a new feature, not a fix; if it is ever wanted, re-file it as such and start with a plan (verify whether the JWT/user model carries a `vendorId`).
 
-### 4. Non-Compliant Trace ID Vendor Notification & Source-Scoped Tracing
+### 4. Non-Compliant Trace ID Vendor Notification & Source-Scoped Tracing [ON HOLD]
 - **Problem**: When vendors emit log events with invalid or non-W3C compliant trace identifiers (e.g., non-hex characters, invalid lengths, or truncated strings like `"abc"`), the system sets `trace_id` to `null` to avoid corrupting distributed traces. However, vendors intending to correlate events receive no feedback that their IDs were dropped. Furthermore, in large enterprise deployments with hundreds of sources, independent sources may inadvertently generate colliding trace IDs.
 - **Requirement**:
   - Build an asynchronous alert / notification job via `NotificationService` that informs vendors when their emitted trace IDs fail W3C validation (`[0-9a-f]{32}` or standard UUID), providing sample rejected values and standard compliance guidelines.
@@ -47,6 +47,7 @@
 - **Design Considerations**:
   - Maintain an in-memory or sliding window counter to deduplicate warnings per source per hour.
   - Ensure zero performance degradation on the high-throughput ingestion critical path.
+- **Status (on hold)**: Parked until the infrastructure can support it. Trace IDs are not persisted or queryable today (no `trace_id` in the ClickHouse schema or analytics queries; they only live in the request context, response header and logging), so source-scoped tracing has nothing to scope yet. Also, most vendors will not send a trace ID at all, so the notification behaviour needs a configurable design (per-vendor/source opt-in, what counts as "expected" vs. "non-compliant") and likely some redesign outside this item. Revisit once trace storage and per-source configuration exist, and start with a plan.
 
 ### 5. Decouple Dynamic Table Provisioning from Source Names (Domain-Level Canonical Tables)
 - **Problem**: Dynamic schema provisioning currently defaults table names to `ulpf_events.events_{sourceName}` (e.g. `events_firewall_alpha`). This creates a table-per-source anti-pattern, violates the canonical domain model outlined in `DATABASE_SCHEMA.md` Section 4 (`network_events`, `web_events`, `sensor_events`, `database_events`), and leads to ClickHouse table sprawl. Even with the 60% column similarity re-use heuristic, subsequent sources end up writing to a table named after whichever source was approved first (e.g., a "Firewall Beta" stream writing into `events_firewall_alpha`).
@@ -117,6 +118,7 @@
   - Preserve 100% backward compatibility with existing stored mapping JSON schemas and SQLite tables.
   - Performance: Avoid unnecessary intermediate object allocation on the live ingestion hot path.
   - Comprehensive unit test isolation for each individual strategy and transformation step.
+- **Note**: The proposal-generation part of this item (`ProposalStrategy`, field candidate deduction) is superseded by item 10 (LLM mapping agent). Payload parsing and value transformation remain in scope here.
 
 ### 9. Modular Frontend Refactoring: Split `AnalyticsPage.jsx` into Per-Mode Components
 - **Problem**: `frontend/src/pages/AnalyticsPage.jsx` is still ~1,700 lines even after removing the legacy Grafana mode. Builder, Direct SQL, and Lineage modes, the Parquet export, and the bulk-import modal all share one component with a large amount of interleaved state and `mode === ...` conditionals, making it hard to read, test, or change in parallel.
@@ -127,3 +129,33 @@
 - **Design Considerations**:
   - Pure refactor: no behavior, endpoint, or styling changes; verify each mode manually (or with tests) before and after.
   - The frontend currently has no test runner; add Vitest + React Testing Library alongside this work so the extracted components are covered.
+
+### 10. Replace the 4-Layer Mapping Engine with a Single LLM Mapping Agent [Adarsh has assumed the ownership]
+- **Plan**: [`docs/plans/2026-10-28-llm-mapping-agent.md`](docs/plans/2026-10-28-llm-mapping-agent.md) (Status: Draft, awaiting approval).
+- **Problem**: The alias → TF-IDF → Levenshtein → ONNX cascade decides each field from its name alone, with no sample values or context and no explanation. In practice it is weaker than it looks:
+  - Layer 4 uses a placeholder hash tokenizer instead of MiniLM's real one, and `mapping_embeddings` is never populated, so it cannot produce meaningful matches.
+  - TF-IDF is trained on 10 examples.
+  - The alias seeds (`source.ip`) and the TF-IDF and description data (`src_ip`) use different canonical vocabularies.
+  - The admin review UI fabricates layer names and confidence scores.
+- **Requirement**:
+  - One decision layer: a locally hosted, instruction-tuned Qwen or Gemma model (chosen by measurement on a labelled eval set), running as a sidecar behind an OpenAI-compatible API.
+  - Simple in-house vector store (SQLite plus in-memory cosine) holding embeddings of canonical fields, existing tables and their schemas, mapping rules, and human-approved mappings. The agent gets a read-only search handle only.
+  - RAG over versioned rule files, plus a versioned system prompt.
+  - The agent has no tools and no DB or network access. Context is assembled in Java; output is strict JSON checked by a deterministic validator (closed vocabulary, reserved columns, DDL-safe names); a human still approves.
+  - Per-field decision (`MAP` / `NEW_FIELD` / `UNMAPPED`), model-stated confidence, reasoning and evidence, plus a target-table recommendation, shown in the admin UI.
+  - Async onboarding (`AI_ANALYSIS` → `HUMAN_REVIEW`) so inference never runs inside the submit request.
+  - Full audit record per run (model digest, prompt version, rules hash, retrieved context, raw and validated output).
+  - Ingestion hot path (`MappingTransformer`, ingestion, replay) unchanged; `mapping_json` changes are additive only.
+- **Phases**:
+  - 0: spike, gold eval set and legacy baseline, model choice.
+  - 1: `MappingProposer` port, canonical field registry, sample profiler, fix metadata loss on admin edit.
+  - 2: vector store and indexer, model sidecar in compose.
+  - 3: agent core, validator and audit, behind a flag.
+  - 4: async onboarding and target-table recommendation.
+  - 5: frontend, with Vitest added first.
+  - 6: eval gate, then delete the legacy layers, the ONNX model and their tests.
+- **Design Considerations**:
+  - CPU-only inference latency and RAM on the current host (16 cores, 15 GB, no GPU); measure before choosing the model size.
+  - Prompt injection via vendor sample logs; LLM confidence is not calibrated, so nothing is auto-approved.
+  - Interacts with item 5 (domain-level tables) through the target-table recommendation, and supersedes part of item 8.
+  - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
