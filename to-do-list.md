@@ -25,7 +25,7 @@
   - Deduplicate and throttle notifications to prevent alerting spam.
   - Provide actionable metadata (vendor ID, source ID, affected event counts, missing table name).
 
-### 3. Vendor-Scoped Self-Service Data Portal (Tenant Isolation & RBAC)
+### ~~3. Vendor-Scoped Self-Service Data Portal (Tenant Isolation & RBAC)~~ [FALSE POSITIVE]
 - **Problem**: Currently, any authenticated client or admin can request exports or analytics across all sources and vendors unless filtered in the request. Vendors need secure, tenant-isolated access to upload logs and download exported data (e.g. Parquet / JSON) strictly restricted to their own `vendor_id` and assigned `source_id`s.
 - **Requirement**:
   - Implement vendor authorization filters checking user session / API credential vendor identity.
@@ -36,6 +36,7 @@
   - Strict multi-tenant row-level access control (prevent Insecure Direct Object Reference / IDOR vulnerabilities).
   - Rate limiting and payload size limits on bulk uploads.
   - Signed temporary download URLs or streaming responses for large Parquet export files.
+- **Resolution (false positive)**: The stated problem does not exist in the code. `/v1/analytics/**` and `/v1/admin/**` are restricted to `ADMIN` in `SpringSecurity.java`, and `AnalyticsController` carries a class-level `@PreAuthorize("hasRole('ADMIN')")`, covering `/analytics/export/parquet` and `/analytics/import/file`. Vendors and regular users cannot request exports or analytics, so there is no cross-tenant leak today, and the frontend has no export feature. The only `VENDOR`-accessible controller is `VendorWebhookController`. A vendor-facing portal would be a new feature, not a fix; if it is ever wanted, re-file it as such and start with a plan (verify whether the JWT/user model carries a `vendorId`).
 
 ### 4. Non-Compliant Trace ID Vendor Notification & Source-Scoped Tracing
 - **Problem**: When vendors emit log events with invalid or non-W3C compliant trace identifiers (e.g., non-hex characters, invalid lengths, or truncated strings like `"abc"`), the system sets `trace_id` to `null` to avoid corrupting distributed traces. However, vendors intending to correlate events receive no feedback that their IDs were dropped. Furthermore, in large enterprise deployments with hundreds of sources, independent sources may inadvertently generate colliding trace IDs.
