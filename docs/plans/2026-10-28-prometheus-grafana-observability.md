@@ -314,7 +314,7 @@ Objective: Keep docs current (AGENTS.md §6). `ARCHITECTURE.md` (observability s
 - **Q1 (decided 2026-10-29):** vendors ingest through nginx `:3000/v1/events`; `8080` becomes internal-only after Task 12a and the vendor cut-over in Task 14.
 - **Ingestion depends on the frontend container:** nginx lives in the frontend image, so every frontend redeploy briefly interrupts ingestion (`502` for a few seconds). Acceptable for now if vendors retry on `502`/`503`; a standalone gateway container is the long-term fix (out of scope for this plan).
 - **Ingest body limit:** `10m` is a placeholder; set it from the largest real vendor batch before release.
-- **Q2 (open):** does the team have a local registry address and preferred Grafana/Prometheus versions? Otherwise use pinned stable tags.
+- **Q2 (decided 2026-10-29):** no local registry and no Maven mirror. Images are built and pulled with internet during setup. After that the stack must run with no internet at all.
 - **Q3 (open):** is the deployment served over HTTPS (for the cookie `Secure` flag)?
 
 ## 8. Outcome
