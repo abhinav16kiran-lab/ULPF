@@ -77,6 +77,7 @@
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
+- **Prerequisite**: item 11 (single-admin enforcement) must be completed before the Grafana integration starts. Grafana access is granted to `ADMIN` only, so `ADMIN` has to reliably mean "the one account defined in `.env`".
 - **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
 - **Requirement**:
   - ~~Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.~~ **[DONE]**
@@ -159,3 +160,18 @@
   - Prompt injection via vendor sample logs; LLM confidence is not calibrated, so nothing is auto-approved.
   - Interacts with item 5 (domain-level tables) through the target-table recommendation, and supersedes part of item 8.
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
+
+### 11. Single-Admin Enforcement: Demote Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
+- **Plan**: [`docs/plans/2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Status: Draft, awaiting approval).
+- **Priority**: Must be completed **before item 7** (Prometheus + Grafana).
+- **Problem**: ULPF supports one admin, defined by `ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`, but nothing enforces it:
+  - `AdminUserSeeder` only creates or updates the configured account. After changing `ULPF_ADMIN_USERNAME`, the previous admin stays `ADMIN` with its old password and keeps receiving system alerts.
+  - `/v1/onboard/**` has no role check (any logged-in user passes; the UI only hides the page from admins). An admin token can file a request for its own account (reproduced: 201), and `OnboardingService.processAdminDecision` then sets the owner to `VENDOR` without checking their current role, turning the admin into a `VENDOR` until the next restart. `AuthService` has the right guard (`role == USER`); this call does not.
+- **Requirement**:
+  - After the configured admin is created or confirmed at startup, demote every other `ADMIN` row to `USER` (never delete: other tables reference users) and log a `WARN` per demotion. Blank `.env` values demote nobody.
+  - Reject `ADMIN` on `/v1/onboard/**` in `SpringSecurity` (`hasAnyRole("USER","VENDOR")`), and promote to `VENDOR` during onboarding approval only when the owner is currently `USER` (backup). Note this changes the documented API (`API_SPECIFICATION.md` lists these endpoints as `VENDOR`/`ADMIN`); to be confirmed in the plan, §7.
+  - Tests first: new `AdminUserSeederTest` (real in-memory SQLite), a security-chain test `OnboardingSecurityTest`, and two additions to `OnboardingServiceTest`.
+- **Design Considerations**:
+  - Ensure the configured admin first, demote last: there is never a moment without an admin, and the step is idempotent.
+  - Databases that already hold several admins will demote the extra ones on the first start after upgrade.
+  - Not covered here: a demoted admin's existing login token stays valid as admin for up to 24 h (`JwtFilter` trusts the token's role claim). The fix is a short-lived cached role check in `JwtFilter`, which the Grafana plan's `validate-grafana` also needs; proposed as a separate follow-up item.
