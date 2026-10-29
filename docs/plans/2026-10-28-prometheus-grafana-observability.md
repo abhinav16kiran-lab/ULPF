@@ -28,6 +28,7 @@ This revision applies the findings of the codebase review against rev 1. Summary
 | 15 | **Q1 decided (2026-10-29, team lead):** vendors ingest through nginx on `:3000/v1/events`; core-engine `8080` becomes internal-only. Added Task 12a to make nginx fit for ingest traffic | One public entry point; `8080` would otherwise expose `/actuator/prometheus` and `/v1/auth/validate-grafana`. Today's `/v1/` proxy has a 1 MB body limit and no upstream keep-alive |
 | 16 | **Q3 decided (2026-10-29, team lead):** support both HTTP and HTTPS. Cookie `Secure` is set per request from `X-Forwarded-Proto` (override `ULPF_COOKIE_SECURE`); Grafana `root_url` comes from `ULPF_PUBLIC_URL` | ULPF is a product installed by others; we can't know whether a deployment uses HTTPS. A fixed config value breaks Grafana login on HTTP if `Secure` is on |
 | 17 | **Task 13a approved (2026-10-29, team lead):** Vitest + React Testing Library + jsdom, pinned, dev dependencies only, `npm test` added to CI in the same change | Lets the Grafana button be built test-first (AGENTS.md §4); also unblocks the LLM mapping agent plan (Phase 5). Runtime image is unaffected (multi-stage build) |
+| 18 | **Task 0 added (prerequisite):** switch nginx → core-engine and core-engine → ClickHouse from `host.containers.internal` to service names, as its own small change before any Grafana work | Every new route in this plan uses service names and Task 14 closes the host ports; name resolution must be proven on Podman 3.4 first. Also faster: container-to-container traffic skips the host port forwarder |
 
 Corrections to rev 1's "What I verified": `source_type` is on the `sources` table but is **not** in `CredentialRecord` or the credential SQL select (it must be added); `openIncidents` lives in `TableIngestionFailureNotificationService` (as rev 1 already stated, not `AlertDispatcher`).
 
@@ -187,7 +188,8 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `infra/Containerfile` — COPY the new `users.d` XML (**no** grants SQL)
 - `frontend/nginx.conf` — `/grafana/` location with `auth_request`, header overwrite, WebSocket upgrade, cookie refresh; internal-only auth location; unauthenticated-from-inside health path if needed
 - `frontend/nginx.conf` (Task 12a) — upstream `backend_service` moves from `host.containers.internal:8080` to `core-engine:8080` with `keepalive`; new dedicated `location = /v1/events` for vendor ingestion (body size limit, keep-alive headers, timeouts)
-- `README.md` — vendor ingest example uses `:3000/v1/events` instead of `:8080`; service table notes `8080` is internal-only
+- `frontend/nginx.conf`, `compose.yaml`, `.env.example` (Task 0) — nginx upstream and `CLICKHOUSE_URL` move to service names (`core-engine:8080`, `clickhouse:8123`); no `resolver` directive; ports unchanged
+- `README.md` — minimum runtime note (Podman 4+ / Docker Compose v2, or Podman 3.x with `dnsname`); vendor ingest example uses `:3000/v1/events` instead of `:8080`; service table notes `8080` is internal-only
 
 **Frontend:**
 - `frontend/Containerfile` — `VITE_GRAFANA_URL` build arg
@@ -208,6 +210,18 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 ## 6. Steps (task breakdown)
 
 Each task is TDD, builds on the previous, and produces a demoable increment.
+
+**Task 0: Prerequisite — switch internal routes to service names (own small change, lands first).**
+Objective: containers reach each other by name (`core-engine:8080`, `clickhouse:8123`) instead of `host.containers.internal`, with **no behaviour change** and all host ports still open. Every later task (Prometheus scraping `core-engine:8080`, Grafana querying `clickhouse:8123`/`prometheus:9090`, nginx proxying to `grafana:3000`, and the loopback port binds in Task 14) depends on name resolution working, so it is proven first, in isolation. Why it also helps performance: with rootless Podman, `host.containers.internal` traffic leaves the container, passes the host's user-space port forwarder and re-enters; container-to-container over the bridge stays in the kernel. The core-engine → ClickHouse insert path is the hottest path in the system.
+Background: commit `fe2c3dd` replaced `proxy_pass http://core-engine:8080` with `host.containers.internal` after name lookup failed. The removed config used `resolver 127.0.0.11 10.88.0.1 10.89.0.1 8.8.8.8`; `127.0.0.11` is Docker's embedded DNS and does not exist on Podman, so that `resolver` line, not name lookup itself, is the likely cause. Reference environment: Podman 3.4.4 rootless on Ubuntu 22.04 (`podman-compose` 1.6.0, CNI `dnsname` plugin installed).
+Steps (test first):
+1. **Verify (red):** on the reference environment, bring the stack up and check from the frontend container that `core-engine` and `clickhouse` resolve and answer (`podman exec ulpf-frontend wget -qO- http://core-engine:8080/v1/health`, same for `http://clickhouse:8123/ping`). Record the result in this plan's Outcome. If this fails, stop and switch to the fallback below before continuing.
+2. **Change:** `frontend/nginx.conf` upstream → `server core-engine:8080;` with **no** `resolver` directive (the container's normal DNS is used). `compose.yaml` and `.env.example`: `CLICKHOUSE_URL` default → `jdbc:clickhouse:http://clickhouse:8123/ulpf_raw?...`. Note that nginx resolves an upstream name once at startup; `depends_on: core-engine: service_healthy` (already present) covers the start order.
+3. **Verify (green):** `./startup/start.sh`; UI login works through `:3000`; an event posted to `:3000/v1/events` lands in ClickHouse; full backend suite (AGENTS.md §5 command) still passes; stop and start only core-engine and confirm nginx recovers (document the behaviour if it needs an nginx reload).
+4. **Ports stay open** in this task. Closing/loopback-binding them remains in Task 14, after everything else works by name.
+Compatibility: minimum supported runtime is stated in the README: Podman 4+ or Docker Compose v2 (built-in DNS), or Podman 3.x with `dnsname` (verified above). Existing `.env` files that override `CLICKHOUSE_URL` must be edited by hand to `clickhouse:8123`.
+Fallback if names don't resolve on a target host: fixed container IPs on the fixed `ulpf-net` subnet (the subnet is already required by this plan), used in the nginx upstream and `CLICKHOUSE_URL`.
+Files: `frontend/nginx.conf`, `compose.yaml`, `.env.example`, `README.md`.
 
 **Task 1: Add Actuator + Micrometer and secure the endpoints.**
 Objective: `/actuator/health` open, `/actuator/prometheus` basic-auth protected. Guidance: resolve dependencies online first (`mvn dependency:resolve`) and confirm the Boot 4.x artifact names; add the two deps; add `management.endpoints.web.exposure.include=health,prometheus` and monitor creds to `application.yaml`; add an `@Order(1)` `SecurityFilterChain` with `securityMatcher("/actuator/**")` (health permitAll, prometheus `httpBasic`, BCrypt-hashed monitor user, stateless); remove `/actuator/**` `permitAll` from the main chain; leave `JwtFilter.EXCLUDED_PATHS` as is (see decision 3). Tests: the `ActuatorSecurityTest` rows. Demo: `curl /actuator/health` open; `curl -u monitor:pass /actuator/prometheus` returns metrics; no creds → 401; a user JWT → 401.
