@@ -25,6 +25,7 @@ This revision applies the findings of the codebase review against rev 1. Summary
 | 12 | Health checks and start.sh readiness fixed (`wget`; Grafana health check not behind `auth_request`) | `/grafana/api/health` through nginx would return 401 |
 | 13 | Docs task adds `docs/to-do-list.md` update; Task 14 test command reconciled with repo Hard Rule 2 | AGENTS.md §6 and Hard Rule 2 |
 | 14 | Spring Boot 4.x dependency/test notes added | Starter/module names and test auto-config differ in 4.x |
+| 15 | **Q1 decided (2026-10-29, team lead):** vendors ingest through nginx on `:3000/v1/events`; core-engine `8080` becomes internal-only. Added Task 12a to make nginx fit for ingest traffic | One public entry point; `8080` would otherwise expose `/actuator/prometheus` and `/v1/auth/validate-grafana`. Today's `/v1/` proxy has a 1 MB body limit and no upstream keep-alive |
 
 Corrections to rev 1's "What I verified": `source_type` is on the `sources` table but is **not** in `CredentialRecord` or the credential SQL select (it must be added); `openIncidents` lives in `TableIngestionFailureNotificationService` (as rev 1 already stated, not `AlertDispatcher`).
 
@@ -101,7 +102,7 @@ flowchart TD
 4. **Grafana exposure** = nginx sub-path `/grafana/` on port 3000; no public Grafana/Prometheus port. `proxy_pass` has **no trailing slash**; WebSocket upgrade headers are set.
 5. **Dashboards** = two: "Pipeline Health & Throughput" (Prometheus) + "Log Explorer" (ClickHouse read-only user, replaces removed search/timeseries).
 6. **source_type tagging** = add `sourceType` to `CredentialRecord` and the credential SQL select (`s.source_type`). Keep the 6-arg constructor as an overload delegating to the new canonical one with `"unknown"`. Counters are cached per (vendor, source, type) key (e.g. `ConcurrentHashMap`) to avoid per-event meter lookup allocation.
-7. **Port exposure:** ClickHouse ports bind to `127.0.0.1`. Core-engine `8080` is bound to `127.0.0.1:8080:8080` **unless** vendors/sources ingest directly on `:8080` (open question Q1); if they do, keep it public and rely on the Actuator chain + rate/brute-force controls, or add an nginx `location /v1/ingest` path and then bind 8080 locally.
+7. **Port exposure (Q1 decided):** nginx on `:3000` is the only public entry point, for the UI **and** for vendor ingestion (`:3000/v1/events`). Core-engine `8080` is bound to `127.0.0.1:8080:8080` (host-local debugging only) and reached by other containers by service name on `ulpf-net`. ClickHouse ports bind to `127.0.0.1`. nginx is made fit for ingest traffic first (Task 12a); `8080` is closed only after that and after vendors have moved (Task 14).
 8. **Air-gapped:** ClickHouse Grafana plugin baked into a custom Grafana image at build time; dashboards/datasources provisioned as files; all inter-service traffic internal; pinned images (no `latest`); pre-pull to the local registry. `ulpf-net` gets a fixed subnet so Grafana's `auth.proxy` `whitelist` can be a CIDR (container IPs are otherwise dynamic).
 9. **ClickHouse read-only user** is defined entirely in XML (user, password hash, `<networks>`, `<profile>`, `<grants>`). No SQL grants file.
 
@@ -182,6 +183,8 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `infra/clickhouse-config/users.d/grafana_user.xml` — `grafana` user (sha256 password hash), `<networks>`, `grafana_profile` (`readonly=1` + limits), `<grants>` for `ulpf_raw.*`, `ulpf_events.*`
 - `infra/Containerfile` — COPY the new `users.d` XML (**no** grants SQL)
 - `frontend/nginx.conf` — `/grafana/` location with `auth_request`, header overwrite, WebSocket upgrade, cookie refresh; internal-only auth location; unauthenticated-from-inside health path if needed
+- `frontend/nginx.conf` (Task 12a) — upstream `backend_service` moves from `host.containers.internal:8080` to `core-engine:8080` with `keepalive`; new dedicated `location = /v1/events` for vendor ingestion (body size limit, keep-alive headers, timeouts)
+- `README.md` — vendor ingest example uses `:3000/v1/events` instead of `:8080`; service table notes `8080` is internal-only
 
 **Frontend:**
 - `frontend/Containerfile` — `VITE_GRAFANA_URL` build arg
@@ -264,11 +267,34 @@ location /grafana/ {
 ```
 Verify `nginx -V` includes `--with-http_auth_request_module`. If the Grafana health check must be reachable by start.sh, either check from inside the network (`docker compose exec`) or add a narrow unauthenticated `location = /grafana/api/health`. Verification: no/invalid cookie → 401; admin cookie → dashboard loads auto-logged-in and stays logged in past the original TTL; WebSocket (Grafana Live) connects.
 
+**Task 12a: Make nginx the vendor ingestion entry point (Q1).**
+Objective: vendors send to `:3000/v1/events` with no loss of throughput or reliability compared with hitting `:8080` directly. Today's `/v1/` block was written for UI calls, not ingest traffic: nginx's default `client_max_body_size` is 1 MB (a larger vendor batch gets `413`, but would succeed on `:8080`), and there is no upstream keep-alive (a new TCP connection to core-engine for every event request). Guidance (in `frontend/nginx.conf`):
+```
+upstream backend_service {
+    server core-engine:8080;        # service name; host.containers.internal stops working once 8080 is loopback-bound
+    keepalive 32;                   # reuse connections to core-engine
+}
+
+# Vendor ingestion: separate from /v1/ so ingest limits never affect UI API calls
+location = /v1/events {
+    client_max_body_size 10m;       # set from the largest expected vendor batch; confirm with vendors
+    proxy_http_version 1.1;         # required for upstream keep-alive
+    proxy_set_header Connection ""; # required for upstream keep-alive
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 30s;
+    proxy_pass http://backend_service;
+}
+```
+Also add `proxy_http_version 1.1` + `proxy_set_header Connection ""` to the existing `/v1/` block so UI calls reuse connections too. `X-API-Key` passes through unchanged (nginx forwards request headers by default). Per-vendor rate limiting (`limit_req` keyed on `$http_x_api_key`) is optional and out of scope unless the team asks for it. Verification: `POST :3000/v1/events` with a valid key → same response as `:8080`; a body just under the limit → accepted; a body over the limit → `413`; with core-engine stopped → `502` (vendors must retry on `502`/`503`); a short load test shows nginx reusing upstream connections (`ss -tn` on core-engine shows a stable, small connection count) and no throughput drop versus `:8080`.
+
 **Task 13: Frontend — Vitest + RTL (separate approval), then the Grafana launch action.**
 Objective: Test the admin-only link per AGENTS.md §4. Step 13a is its **own proposal and change** (Vitest, RTL, jsdom, `vitest.config.js`, one sample test); obtain approval before proceeding. Step 13b: `frontend/src/api/grafana.js`, admin-only action in `Navbar.jsx` (existing Tailwind classes; reads role from localStorage; on click POSTs the session endpoint then opens `/grafana/` in a new tab); logout clears the cookie; `VITE_GRAFANA_URL` build arg. Tests: `Navbar.test.jsx`.
 
 **Task 14: Wire compose.yaml, .env.example, start.sh; full verification.**
-Objective: Everything integrated. Guidance: finalize `compose.yaml` (fixed `ulpf-net` subnet, loopback binds per Q1, volumes, depends_on, healthchecks); `.env.example` observability section; `start.sh` readiness for Prometheus and Grafana (via the approach in Task 12), banner URL, interactive prompts for new secrets, and a note that existing `.env` files need the new keys appended manually. Verification: run the full backend suite via the repo's sanctioned procedure (AGENTS.md; reconcile with Hard Rule 2 — do not run `mvn` directly if that rule forbids it) and expect at least the 320 baseline plus the new tests; `npm run build`. Demo: `./startup/start.sh` → all services up; admin launches Grafana.
+Objective: Everything integrated. Guidance: finalize `compose.yaml` (fixed `ulpf-net` subnet, loopback binds per decision 7: `127.0.0.1:8080:8080`, `127.0.0.1:8123:8123`, `127.0.0.1:9000:9000`; core-engine's `CLICKHOUSE_URL` default and `.env.example` move from `host.containers.internal:8123` to `clickhouse:8123`, otherwise core-engine loses ClickHouse once 8123 is loopback-bound; volumes, depends_on, healthchecks); `.env.example` observability section; `start.sh` readiness for Prometheus and Grafana (via the approach in Task 12), banner URL, interactive prompts for new secrets, and a note that existing `.env` files need the new keys appended manually (and an existing `CLICKHOUSE_URL` override must be changed to `clickhouse:8123` by hand). **Vendor cut-over:** before binding `8080` to loopback, confirm every vendor/source already sends to `:3000/v1/events`; if any still use `:8080`, keep both open for an agreed transition window. Verification: run the full backend suite via the repo's sanctioned procedure (AGENTS.md; reconcile with Hard Rule 2 — do not run `mvn` directly if that rule forbids it) and expect at least the 320 baseline plus the new tests; `npm run build`. Demo: `./startup/start.sh` → all services up; admin launches Grafana.
 
 **Task 15: Documentation.**
 Objective: Keep docs current (AGENTS.md §6). `ARCHITECTURE.md` (observability subsystem + diagram), `API_SPECIFICATION.md` (`/actuator/prometheus`, `/v1/auth/grafana-session`, `/v1/auth/validate-grafana`, security posture, token purpose), `FILE_GUIDE.md` (`infra/grafana`, `infra/prometheus`), `DATABASE_SCHEMA.md` (read-only grafana user via XML), `COMMON_DB_GUIDE.md` (metrics on `ClickHouseIngestionRepository`, `CredentialRecord.sourceType`), `frontend.md`, `README.md`, and `docs/to-do-list.md` (update the observability item). Set plan Status to Done.
@@ -285,7 +311,9 @@ Objective: Keep docs current (AGENTS.md §6). `ARCHITECTURE.md` (observability s
 - **Grafana ClickHouse plugin version**: pin at build; verify the air-gapped image contains it.
 - **Image availability in air-gapped deploy**: `grafana/grafana`, `prom/prometheus` and the existing images must be pre-pulled to the local registry.
 - **Regex search** over `raw_payload` cannot use the bloom-filter index; keep it behind a narrow time range.
-- **Q1 (open):** do vendors/sources send events directly to core-engine `:8080`? This decides whether `8080` can be loopback-bound or needs an nginx ingest route first.
+- **Q1 (decided 2026-10-29):** vendors ingest through nginx `:3000/v1/events`; `8080` becomes internal-only after Task 12a and the vendor cut-over in Task 14.
+- **Ingestion depends on the frontend container:** nginx lives in the frontend image, so every frontend redeploy briefly interrupts ingestion (`502` for a few seconds). Acceptable for now if vendors retry on `502`/`503`; a standalone gateway container is the long-term fix (out of scope for this plan).
+- **Ingest body limit:** `10m` is a placeholder; set it from the largest real vendor batch before release.
 - **Q2 (open):** does the team have a local registry address and preferred Grafana/Prometheus versions? Otherwise use pinned stable tags.
 - **Q3 (open):** is the deployment served over HTTPS (for the cookie `Secure` flag)?
 
