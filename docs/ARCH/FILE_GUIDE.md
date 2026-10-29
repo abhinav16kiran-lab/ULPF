@@ -15,7 +15,6 @@ ULPF/
 │   ├── stop.sh           # Linux/macOS shutdown script
 │   └── stop.bat          # Windows shutdown script
 ├── README.md             # Primary project overview & quickstart documentation
-├── MIGRATION.md          # Enterprise log platform migration guide
 ├── core-engine/          # Java Spring Boot backend engine
 ├── dev-tools/            # Performance load testing & benchmarking tools
 ├── docs/                 # System architecture, API specs & DB schemas
@@ -99,7 +98,6 @@ docs/
 ├── db/
 │   ├── COMMON_DB_GUIDE.md              # Centralized database package reference
 │   └── DATABASE_SCHEMA.md              # Complete SQLite & ClickHouse database schemas
-├── frontend/
-│   └── frontend.md                     # React frontend architecture & Nginx specs
-└── MIGRATION.md                        # Enterprise log migration guide
+└── frontend/
+    └── frontend.md                     # React frontend architecture & Nginx specs
 ```

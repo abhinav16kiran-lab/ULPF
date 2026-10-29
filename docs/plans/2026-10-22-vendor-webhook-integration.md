@@ -1,6 +1,12 @@
 # Vendor Webhook Integration & Decoupled Alerting Pipeline
 ## Architecture Specification & Step-by-Step Implementation Plan
 
+- **Date:** 2026-10-22
+- **Status:** Done (verified against the code on 2026-10-29; full suite 320/0)
+- **Author:** adarsh.v.h (commit 46c64da)
+- **Implemented in:** `common/db/VendorWebhookRepository`, `controlplane/service/VendorWebhookService`, `controlplane/controller/VendorWebhookController`, `dataplane/service/AlertDispatcher`, `frontend/src/pages/NotificationsPage.jsx`
+- **Note:** written before `docs/plans/TEMPLATE.md` existed; moved here from the repo root.
+
 > **Note for Implementing AI / Engineers:**  
 > This specification defines the complete end-to-end architecture, database schema, service contracts, REST endpoints, UI components, and testing guidelines for tenant-scoped vendor webhooks in ULPF.  
 > **Strict Instruction:** Follow the phases and rules sequentially. If any requirement seems ambiguous or if you consider altering database relationships or thread boundaries, **STOP and notify the user: "Discuss with your team about this before proceeding."** Do NOT guess or make ad-hoc architectural compromises.
@@ -354,9 +360,9 @@ For users with `role === 'VENDOR'`, display a dedicated **Webhook Alert Integrat
 
 ## 6. Definition of Done Checklist
 
-- [ ] SQLite tables `vendor_webhooks` and `webhook_delivery_logs` defined in `schema.sql`.
-- [ ] `AlertDispatcher.sendWebhook(...)` decoupled to accept dynamic URI, secret, and payload.
-- [ ] Broken webhook detection updates `status = 'FAILING'` and alerts vendor inbox.
-- [ ] `VendorWebhookController` endpoints implemented with RBAC (`VENDOR` or `ADMIN`).
-- [ ] Vendor Webhook card implemented in `NotificationsPage.jsx` with test ping and delivery history.
-- [ ] Full Maven build (`mvn clean test`) succeeds with 100% pass rate.
+- [x] SQLite tables `vendor_webhooks` and `webhook_delivery_logs` defined in `schema.sql`.
+- [x] `AlertDispatcher.sendWebhook(...)` decoupled to accept dynamic URI, secret, and payload.
+- [x] Broken webhook detection updates `status = 'FAILING'` and alerts vendor inbox.
+- [x] `VendorWebhookController` endpoints implemented with RBAC (`VENDOR` or `ADMIN`).
+- [x] Vendor Webhook card implemented in `NotificationsPage.jsx` with test ping and delivery history.
+- [x] Full Maven build (`mvn clean test`) succeeds with 100% pass rate.
