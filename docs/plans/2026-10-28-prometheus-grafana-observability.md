@@ -26,6 +26,7 @@ This revision applies the findings of the codebase review against rev 1. Summary
 | 13 | Docs task adds `docs/to-do-list.md` update; Task 14 test command reconciled with repo Hard Rule 2 | AGENTS.md §6 and Hard Rule 2 |
 | 14 | Spring Boot 4.x dependency/test notes added | Starter/module names and test auto-config differ in 4.x |
 | 15 | **Q1 decided (2026-10-29, team lead):** vendors ingest through nginx on `:3000/v1/events`; core-engine `8080` becomes internal-only. Added Task 12a to make nginx fit for ingest traffic | One public entry point; `8080` would otherwise expose `/actuator/prometheus` and `/v1/auth/validate-grafana`. Today's `/v1/` proxy has a 1 MB body limit and no upstream keep-alive |
+| 16 | **Q3 decided (2026-10-29, team lead):** support both HTTP and HTTPS. Cookie `Secure` is set per request from `X-Forwarded-Proto` (override `ULPF_COOKIE_SECURE`); Grafana `root_url` comes from `ULPF_PUBLIC_URL` | ULPF is a product installed by others; we can't know whether a deployment uses HTTPS. A fixed config value breaks Grafana login on HTTP if `Secure` is on |
 
 Corrections to rev 1's "What I verified": `source_type` is on the `sources` table but is **not** in `CredentialRecord` or the credential SQL select (it must be added); `openIncidents` lives in `TableIngestionFailureNotificationService` (as rev 1 already stated, not `AlertDispatcher`).
 
@@ -96,7 +97,7 @@ flowchart TD
 **Key design decisions:**
 1. **Grafana RBAC** = nginx reverse-proxy auth: nginx validates a ULPF admin session cookie via an `auth_request` subrequest to core-engine, then sets `X-WEBAUTH-USER` for Grafana's auth.proxy. Anonymous disabled. Because the browser can't send localStorage JWTs on navigation, the admin's "Launch Grafana" action POSTs the JWT to a session endpoint, receives an HttpOnly cookie, then opens `/grafana/`.
    - **Token type separation:** the cookie token is minted with a `purpose=grafana-session` claim and a configurable TTL (default 1h, `GRAFANA_SESSION_TTL_MINUTES`). `validate-grafana` *requires* that claim and `ROLE_ADMIN`; `JwtFilter` *rejects* tokens carrying it on all normal API routes.
-   - **Sliding refresh:** on a valid request, `validate-grafana` may return a refreshed `Set-Cookie` (only when the remaining TTL is below half). nginx forwards it with `auth_request_set $new_cookie $upstream_http_set_cookie;` + `add_header Set-Cookie $new_cookie always;`. Cookie is `HttpOnly; SameSite=Lax; Path=/grafana` (and `Secure` when served over HTTPS, controlled by config); it is cleared on frontend logout.
+   - **Sliding refresh:** on a valid request, `validate-grafana` may return a refreshed `Set-Cookie` (only when the remaining TTL is below half). nginx forwards it with `auth_request_set $new_cookie $upstream_http_set_cookie;` + `add_header Set-Cookie $new_cookie always;`. Cookie is `HttpOnly; SameSite=Lax; Path=/grafana` (and `Secure` when the request arrived over HTTPS, decided per request from `X-Forwarded-Proto`; `ULPF_COOKIE_SECURE=auto|true|false`, default `auto`); it is cleared on frontend logout.
 2. **Prometheus scrape auth** = HTTP Basic with a dedicated monitor credential. One `SecurityFilterChain` at `@Order(1)` with `securityMatcher("/actuator/**")`: `/actuator/health` open, `/actuator/prometheus` requires the monitor user (`httpBasic`). The password is supplied as a single env var (`MONITOR_PASSWORD`); the app hashes it with the existing `BCryptPasswordEncoder` at startup. Prometheus reads the same secret via `basic_auth.password_file` from a mounted secret file (Prometheus does not expand env vars in `prometheus.yml`).
 3. **JwtFilter on the actuator path:** keep `/actuator/**` in `JwtFilter.EXCLUDED_PATHS` so the JWT filter never sees `Authorization: Basic`. The Actuator chain's own `httpBasic` is the only gate. Only if testing shows `JwtFilter` executing twice (due to `@Component` auto-registration) add a `FilterRegistrationBean<JwtFilter>` with `setEnabled(false)` and keep it wired solely via `addFilterBefore` in the main chain.
 4. **Grafana exposure** = nginx sub-path `/grafana/` on port 3000; no public Grafana/Prometheus port. `proxy_pass` has **no trailing slash**; WebSocket upgrade headers are set.
@@ -141,6 +142,7 @@ Note: ingestion has no worker thread pool; "worker pool utilization" applies to 
 | `GET /v1/auth/validate-grafana` valid cookie → 200 + `X-Webauth-User` | `GrafanaAuthSessionTest` | endpoint doesn't exist |
 | validate-grafana missing/expired/invalid cookie → 401; normal login JWT (no purpose claim) → 401 | `GrafanaAuthSessionTest` | — |
 | validate-grafana near expiry → refreshed Set-Cookie | `GrafanaAuthSessionTest` | no refresh logic |
+| `auto`: `X-Forwarded-Proto: https` → cookie has `Secure`; `http` or header missing → no `Secure`; `true`/`false` override the header (session and refreshed cookie alike) | `GrafanaAuthSessionTest` | `Secure` not request-aware |
 | grafana-session token presented to a normal API route → 401 | `JwtFilterPurposeTest` | filter ignores purpose claim |
 | events-ingested counter increments with vendor/source/type tags | `EventIngestionMetricsTest` | no meter registered |
 | `CredentialRecord` 6-arg constructor still works; `sourceType` loaded from SQL | `CredentialRepositoryTest` (extend) | field missing |
@@ -177,7 +179,7 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `compose.yaml` — add `prometheus` + `grafana` services (internal-only, `ulpf-net`); fixed subnet on `ulpf-net`; bind ClickHouse ports and (per Q1) core-engine `8080` to `127.0.0.1`; named volumes; `depends_on`; healthchecks using `wget`
 - `infra/prometheus/prometheus.yml` — scrape config with `basic_auth.password_file`; mounted secret file for the monitor password
 - `infra/grafana/Containerfile` — `grafana/grafana:<pinned>`, bake `grafana-clickhouse-datasource@<pinned>` at build
-- `infra/grafana/grafana.ini` — `auth.proxy` (header `X-WEBAUTH-USER`, `whitelist=<ulpf-net CIDR>`, `auto_sign_up`), anonymous disabled, `root_url=%(protocol)s://%(domain)s/grafana/`, `serve_from_sub_path=true`
+- `infra/grafana/grafana.ini` — `auth.proxy` (header `X-WEBAUTH-USER`, `whitelist=<ulpf-net CIDR>`, `auto_sign_up`), anonymous disabled, `root_url` from `GF_SERVER_ROOT_URL=${ULPF_PUBLIC_URL}/grafana/` (not `%(protocol)s`, which is always `http` inside the container and would produce `http://` redirects on HTTPS sites), `serve_from_sub_path=true`
 - `infra/grafana/provisioning/datasources/` — Prometheus + ClickHouse (read-only `grafana` user)
 - `infra/grafana/provisioning/dashboards/` — provider config + two dashboard JSONs
 - `infra/clickhouse-config/users.d/grafana_user.xml` — `grafana` user (sha256 password hash), `<networks>`, `grafana_profile` (`readonly=1` + limits), `<grants>` for `ulpf_raw.*`, `ulpf_events.*`
@@ -191,7 +193,7 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `frontend/src/components/Navbar.jsx` — admin-only "Grafana Dashboard" action
 - New `frontend/src/api/grafana.js` — `createGrafanaSession()`; logout also clears the Grafana cookie
 - `frontend/package.json` + `vitest.config.js` — Vitest + RTL, **only after separate approval** (AGENTS.md §4)
-- `.env.example` — observability section (`MONITOR_USERNAME`, `MONITOR_PASSWORD`, `GRAFANA_CLICKHOUSE_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_SESSION_TTL_MINUTES`, `VITE_GRAFANA_URL`)
+- `.env.example` — observability section (`MONITOR_USERNAME`, `MONITOR_PASSWORD`, `GRAFANA_CLICKHOUSE_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_SESSION_TTL_MINUTES`, `VITE_GRAFANA_URL`, `ULPF_PUBLIC_URL` (default `http://localhost:3000`), `ULPF_COOKIE_SECURE` (default `auto`))
 - `startup/start.sh` — readiness + banner for Prometheus and Grafana; note on existing `.env`
 
 **Docs:**
@@ -209,7 +211,7 @@ Each task is TDD, builds on the previous, and produces a demoable increment.
 Objective: `/actuator/health` open, `/actuator/prometheus` basic-auth protected. Guidance: resolve dependencies online first (`mvn dependency:resolve`) and confirm the Boot 4.x artifact names; add the two deps; add `management.endpoints.web.exposure.include=health,prometheus` and monitor creds to `application.yaml`; add an `@Order(1)` `SecurityFilterChain` with `securityMatcher("/actuator/**")` (health permitAll, prometheus `httpBasic`, BCrypt-hashed monitor user, stateless); remove `/actuator/**` `permitAll` from the main chain; leave `JwtFilter.EXCLUDED_PATHS` as is (see decision 3). Tests: the `ActuatorSecurityTest` rows. Demo: `curl /actuator/health` open; `curl -u monitor:pass /actuator/prometheus` returns metrics; no creds → 401; a user JWT → 401.
 
 **Task 2: Grafana reverse-proxy auth session endpoints.**
-Objective: nginx can validate an admin session and hand Grafana the username. Guidance: overload `JwtUtil.generateToken` (TTL + `purpose` claim); `POST /v1/auth/grafana-session` (`@PreAuthorize("hasRole('ADMIN')")`) mints a `purpose=grafana-session` token and sets cookie `ulpf_grafana` (`HttpOnly; SameSite=Lax; Path=/grafana; Max-Age=<TTL>`, `Secure` when HTTPS); `GET /v1/auth/validate-grafana` verifies cookie, purpose, admin role and expiry, returns 200 + `X-Webauth-User` (and a refreshed `Set-Cookie` below half TTL) or 401; `JwtFilter` rejects tokens with a `purpose` claim on normal routes; logout clears the cookie. Tests: `GrafanaAuthSessionTest`, `JwtFilterPurposeTest`. Demo: curl flow login → session → validate.
+Objective: nginx can validate an admin session and hand Grafana the username. Guidance: overload `JwtUtil.generateToken` (TTL + `purpose` claim); `POST /v1/auth/grafana-session` (`@PreAuthorize("hasRole('ADMIN')")`) mints a `purpose=grafana-session` token and sets cookie `ulpf_grafana` (`HttpOnly; SameSite=Lax; Path=/grafana; Max-Age=<TTL>`; `Secure` added when `ULPF_COOKIE_SECURE=true`, or when `auto` and the request's `X-Forwarded-Proto` is `https`; never when `false`); `GET /v1/auth/validate-grafana` verifies cookie, purpose, admin role and expiry, returns 200 + `X-Webauth-User` (and a refreshed `Set-Cookie` below half TTL) or 401; `JwtFilter` rejects tokens with a `purpose` claim on normal routes; logout clears the cookie. Tests: `GrafanaAuthSessionTest`, `JwtFilterPurposeTest`. Demo: curl flow login → session → validate.
 
 **Task 3: Ingestion throughput metric (with source_type).**
 Objective: Count events by vendor/source/type with no hot-path lookup cost. Guidance: add `sourceType` to `CredentialRecord` (canonical 7-arg) plus the 6-arg overload; add `s.source_type` to the credential SQL and row mapper; register counters lazily and cache per tag set; increment in `EventIngestionService.ingest()`. Tests: `EventIngestionMetricsTest`; extend `CredentialRepositoryTest`; confirm all existing tests compile unchanged. Demo: ingest an event, grep `ulpf_events_ingested` in `/actuator/prometheus`.
@@ -270,6 +272,12 @@ Verify `nginx -V` includes `--with-http_auth_request_module`. If the Grafana hea
 **Task 12a: Make nginx the vendor ingestion entry point (Q1).**
 Objective: vendors send to `:3000/v1/events` with no loss of throughput or reliability compared with hitting `:8080` directly. Today's `/v1/` block was written for UI calls, not ingest traffic: nginx's default `client_max_body_size` is 1 MB (a larger vendor batch gets `413`, but would succeed on `:8080`), and there is no upstream keep-alive (a new TCP connection to core-engine for every event request). Guidance (in `frontend/nginx.conf`):
 ```
+# Keep the client-facing scheme when an outer HTTPS load balancer sits in front of this nginx
+map $http_x_forwarded_proto $forwarded_proto {
+    default $http_x_forwarded_proto;
+    ''      $scheme;
+}
+
 upstream backend_service {
     server core-engine:8080;        # service name; host.containers.internal stops working once 8080 is loopback-bound
     keepalive 32;                   # reuse connections to core-engine
@@ -283,12 +291,12 @@ location = /v1/events {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
     proxy_read_timeout 30s;
     proxy_pass http://backend_service;
 }
 ```
-Also add `proxy_http_version 1.1` + `proxy_set_header Connection ""` to the existing `/v1/` block so UI calls reuse connections too. `X-API-Key` passes through unchanged (nginx forwards request headers by default). Per-vendor rate limiting (`limit_req` keyed on `$http_x_api_key`) is optional and out of scope unless the team asks for it. Verification: `POST :3000/v1/events` with a valid key → same response as `:8080`; a body just under the limit → accepted; a body over the limit → `413`; with core-engine stopped → `502` (vendors must retry on `502`/`503`); a short load test shows nginx reusing upstream connections (`ss -tn` on core-engine shows a stable, small connection count) and no throughput drop versus `:8080`.
+Also add `proxy_http_version 1.1` + `proxy_set_header Connection ""` to the existing `/v1/` block so UI calls reuse connections too, and switch its `X-Forwarded-Proto` to `$forwarded_proto`. The `/_grafana_auth` location (Task 12) must send `proxy_set_header X-Forwarded-Proto $forwarded_proto;` too, so `validate-grafana` sets `Secure` correctly on refreshed cookies. (A client that fakes `https` over plain HTTP only gets a cookie its own browser drops; no security impact.) `X-API-Key` passes through unchanged (nginx forwards request headers by default). Per-vendor rate limiting (`limit_req` keyed on `$http_x_api_key`) is optional and out of scope unless the team asks for it. Verification: `POST :3000/v1/events` with a valid key → same response as `:8080`; a body just under the limit → accepted; a body over the limit → `413`; with core-engine stopped → `502` (vendors must retry on `502`/`503`); a short load test shows nginx reusing upstream connections (`ss -tn` on core-engine shows a stable, small connection count) and no throughput drop versus `:8080`.
 
 **Task 13: Frontend — Vitest + RTL (separate approval), then the Grafana launch action.**
 Objective: Test the admin-only link per AGENTS.md §4. Step 13a is its **own proposal and change** (Vitest, RTL, jsdom, `vitest.config.js`, one sample test); obtain approval before proceeding. Step 13b: `frontend/src/api/grafana.js`, admin-only action in `Navbar.jsx` (existing Tailwind classes; reads role from localStorage; on click POSTs the session endpoint then opens `/grafana/` in a new tab); logout clears the cookie; `VITE_GRAFANA_URL` build arg. Tests: `Navbar.test.jsx`.
@@ -315,7 +323,7 @@ Objective: Keep docs current (AGENTS.md §6). `ARCHITECTURE.md` (observability s
 - **Ingestion depends on the frontend container:** nginx lives in the frontend image, so every frontend redeploy briefly interrupts ingestion (`502` for a few seconds). Acceptable for now if vendors retry on `502`/`503`; a standalone gateway container is the long-term fix (out of scope for this plan).
 - **Ingest body limit:** `10m` is a placeholder; set it from the largest real vendor batch before release.
 - **Q2 (decided 2026-10-29):** no local registry and no Maven mirror. Images are built and pulled with internet during setup. After that the stack must run with no internet at all.
-- **Q3 (open):** is the deployment served over HTTPS (for the cookie `Secure` flag)?
+- **Q3 (decided 2026-10-29):** support both HTTP and HTTPS; ULPF is installed by others and we can't know which they use. Cookie `Secure` is decided per request from `X-Forwarded-Proto` (`ULPF_COOKIE_SECURE=auto|true|false`, default `auto`); Grafana `root_url` comes from `ULPF_PUBLIC_URL`. Who provides the TLS certificate (customer load balancer, or certs mounted into nginx) is a general deployment topic for the README, not part of this plan.
 
 ## 8. Outcome
 
