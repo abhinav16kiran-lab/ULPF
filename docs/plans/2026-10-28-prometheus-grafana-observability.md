@@ -32,6 +32,7 @@ This revision applies the findings of the codebase review against rev 1. Summary
 | 19 | **Grafana session revocation (A2, corrected 2026-10-29):** cookie TTL default 1h → 15 min; hard 8 h session cap that sliding refresh cannot extend; token bound to a password fingerprint so rotating `ULPF_ADMIN_PASSWORD` ends Grafana sessions; `validate-grafana` reads the user through a 60 s cache | Sliding refresh could keep a stolen cookie alive forever, and nothing ended Grafana sessions when the admin password was rotated. (An earlier draft framed this as demoted/deleted admins; in practice the only `ADMIN` is the account seeded from `.env`, so password rotation is the main trigger and the role check is defence in depth. Depends on backlog item 11 landing first) |
 | 20 | **Grafana logout (A3, 2026-10-30):** new `POST /v1/auth/grafana-logout` that expires the `HttpOnly` cookie; no auth, no DB, excluded from `JwtFilter`; both frontend logout paths call it for `ADMIN` | Frontend JavaScript cannot delete an `HttpOnly` cookie, and the 401 auto-logout runs with an expired ULPF token, which `JwtFilter` would otherwise reject before the endpoint runs |
 | 21 | **Monitor secret handling (A5, 2026-10-30):** one generated file `secrets/monitor_password` (created by `start.sh`), mounted into core-engine and Prometheus through compose `secrets:`; no default password (fails closed); `secrets/` `0700`, file `0644`; `MONITOR_PASSWORD` no longer in `.env` | Prometheus cannot expand env vars, so the same secret lived in two places with nothing creating or syncing the file; a known default would leave the metrics open |
+| 22 | **Prometheus retention and cardinality budget (A6, 2026-10-30):** retention defaults 30 days / 5 GB, overridable in `.env` (`PROMETHEUS_RETENTION_TIME`, `PROMETHEUS_RETENTION_SIZE`); timers and summaries lose their per-table and per-vendor tags and use explicit buckets; tag cap `ULPF_METRICS_MAX_TAG_VALUES` and Prometheus `sample_limit: 50000` | Measured: the first-draft metrics produced 171,568 series at 1,000 sources (16.8 MB per scrape, ~0.5-1 GB Prometheus RAM, and a 5 GB cap that would have trimmed history to a few days); the revised design produces 1,388 |
 
 Corrections to rev 1's "What I verified": `source_type` is on the `sources` table but is **not** in `CredentialRecord` or the credential SQL select (it must be added); `openIncidents` lives in `TableIngestionFailureNotificationService` (as rev 1 already stated, not `AlertDispatcher`).
 
@@ -128,17 +129,34 @@ flowchart TD
 | Queue depth | `ulpf.queue.raw.size`, `ulpf.queue.canonical.size` | Gauge | — | bound in `MetricsConfig` to `ClickHouseIngestionRepository` getters |
 | Webhook pool | `ulpf.webhook.executor.active`, `.queue.size`, `.pool.utilization` | Gauge | — | `AlertDispatcher.webhookExecutor` |
 | Webhook drops | `ulpf.webhook.dropped` | Counter | — | counted rejection handler wrapping `DiscardPolicy` |
-| Batch flush latency | `ulpf.clickhouse.flush.duration` | Timer | stage=raw\|canonical, table | `flush()`, `flushCanonical()` |
-| Batch size | `ulpf.clickhouse.batch.size` | DistributionSummary | stage=raw\|canonical | `flush()`, `flushCanonical()` |
-| Insert errors | `ulpf.clickhouse.insert.errors` | Counter | table | `insertWithIsolation` systemic failure |
-| Degraded/dropped/re-enqueued | `ulpf.records.degraded`, `.dropped`, `.reenqueued` | Counter | table | `isolateAndDegradeSingleRecord`, `flush()` re-enqueue |
-| Webhook delivery | `ulpf.webhook.delivery.duration` | Timer | alert_type, vendor_id | `AlertDispatcher.sendWebhook` (`whenComplete`) |
-| Webhook outcome | `ulpf.webhook.delivery.total` | Counter | alert_type, vendor_id, success | `AlertDispatcher.sendWebhook` (`whenComplete`) |
+| Batch flush latency | `ulpf.clickhouse.flush.duration` | Timer (explicit buckets) | stage=raw\|canonical | `flush()`, `flushCanonical()` |
+| Batch size | `ulpf.clickhouse.batch.size` | DistributionSummary (explicit buckets) | stage=raw\|canonical | `flush()`, `flushCanonical()` |
+| Insert errors | `ulpf.clickhouse.insert.errors` | Counter | table (created on first failure) | `insertWithIsolation` systemic failure |
+| Degraded/dropped/re-enqueued | `ulpf.records.degraded`, `.dropped`, `.reenqueued` | Counter | table (created on first failure) | `isolateAndDegradeSingleRecord`, `flush()` re-enqueue |
+| Webhook delivery | `ulpf.webhook.delivery.duration` | Timer (explicit buckets) | alert_type | `AlertDispatcher.sendWebhook` (`whenComplete`) |
+| Webhook outcome | `ulpf.webhook.delivery.total` | Counter | alert_type, success | `AlertDispatcher.sendWebhook` (`whenComplete`) |
 | Drift rate | `ulpf.drift.events` | Counter | type=SCHEMA_DRIFT\|TOTAL_DRIFT | `SchemaDriftNotificationService.checkAndNotifyDrift` |
 | Open incidents | `ulpf.incidents.open` | Gauge | — | bound to `TableIngestionFailureNotificationService.getOpenIncidents().size()` |
 | Failure events | `ulpf.ingestion.failures` | Counter | type | each `notify*()` method |
 
 Note: ingestion has no worker thread pool; "worker pool utilization" applies to the `webhookExecutor`.
+
+**Cardinality and memory budget (measured 2026-10-30).** Memory in Prometheus and in the app grows with the number of *series*, not with retention, and every timer or summary multiplies its tag combinations by its bucket count. Measured with Micrometer 1.17.0 (the version Spring Boot 4.1.0 pins) exporting the Prometheus text format, at 1,000 sources / 333 vendors:
+
+| Design | Series | Scrape size / time | Est. Prometheus RAM | Est. disk per day |
+|---|---|---|---|---|
+| First draft: `publishPercentileHistogram()` on timers tagged per table and per vendor | 171,568 | 16.8 MB / 151 ms | ~0.5-1 GB | ~1-2 GB (the 5 GB cap would trim history to a few days) |
+| This plan: explicit buckets, no per-table or per-vendor tags on timers | 1,388 | 112 KB / 15 ms | ~4-8 MB | ~8-16 MB |
+| This plan, worst case under the caps (5,000 sources, every table failing in all four error families) | 25,191 | 1.5 MB / 50 ms | ~76-151 MB | ~145-290 MB |
+
+Series and scrape figures are measured (JVM binders included; Actuator's own Tomcat/HTTP metrics excluded, a few hundred more). RAM (3-6 KB per active series) and disk (1-2 bytes per sample at a 15 s scrape) are rules of thumb, not measured on this stack. One timer exports 3 series with no histogram, 72 with `publishPercentileHistogram()`, and 12 with 8 explicit buckets (measured).
+
+Rules that keep it there:
+- **Per-source, per-vendor and per-table tags only on Counters and Gauges** (one series each), never on a Timer or DistributionSummary. Timers and summaries use explicit buckets (`serviceLevelObjectives`) and only low-cardinality tags (`stage`, `alert_type`, `success`, `type`). Per-vendor webhook state is already visible in the app (`FAILING` status and in-app alerts), so the webhook meters carry no `vendor_id`.
+- **Tag values come from the database** (source, vendor and table names), never from request content, so cardinality is bounded by what admins onboarded. `table` appears only on the error/degraded/dropped/re-enqueued counters, which are created on the first failure.
+- **Hard cap:** `MeterFilter.maximumAllowableTags` on `source_id` and `table` at `ULPF_METRICS_MAX_TAG_VALUES` (default 5000). Values beyond the cap get no meter (checked: 2,500 distinct ids against a cap of 1,000 exported exactly 1,000 series), and one `WARN` is logged when the cap is first reached.
+- **Prometheus seatbelt:** `sample_limit: 50000` in the scrape config (above the 25k worst case). An over-limit scrape fails and the target shows as down with a "sample limit exceeded" error, instead of memory growing unnoticed. `prometheus.yml` cannot read env vars, so raising it means editing the file.
+- **Hot path:** counters are cached per tag set: 9 ns per event versus 72 ns for a builder lookup on every event (measured), i.e. 0.09% of a core at 100k events/s. Timers and summaries are touched once per batch.
 
 **Backward-compatibility rule for instrumentation:** existing constructors stay intact. Classes that need a `MeterRegistry` get an additional constructor (the old one defaults to `new SimpleMeterRegistry()`), or the meters are bound externally in `MetricsConfig`. All 320 existing tests must continue to compile and pass unmodified except where a test is intentionally extended.
 
@@ -175,6 +193,9 @@ Note: ingestion has no worker thread pool; "worker pool utilization" applies to 
 | webhook drop counter + executor gauges | `AlertDispatcherMetricsTest` | no meters |
 | drift counter increments by type | `SchemaDriftMetricsTest` | no counter |
 | incident gauge tracks open incidents; failure counters per `notify*()` | `IncidentMetricsTest` | no meters |
+| after exercising each instrumented path, no `Timer` or `DistributionSummary` carries a `source_id`, `vendor_id` or `table` tag (guards the tag policy) | `MetricsCardinalityTest` | meters not defined yet |
+| each timer/summary exports at most 16 series (explicit buckets, no `publishPercentileHistogram()`) | `MetricsCardinalityTest` | meters not defined yet |
+| 2,500 distinct source ids with `ULPF_METRICS_MAX_TAG_VALUES=1000` → exactly 1,000 `ulpf_events_ingested` series, one `WARN` logged | `MetricsCardinalityTest` | no cap yet |
 | ClickHouse grafana user: SELECT ok, INSERT denied, DDL denied, limits enforced | `ReadOnlyUserTest` (integration, `@EnabledIfSystemProperty`) | user not provisioned |
 | Frontend: Grafana launch button visible to admin only; click calls session endpoint | `Navbar.test.jsx` (Vitest) | no Vitest yet (approved, added in Task 13a) |
 
@@ -184,12 +205,12 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 
 **Backend (core-engine):**
 - `pom.xml` — add `spring-boot-starter-actuator` + `micrometer-registry-prometheus` (coordinates confirmed online against Boot 4.1.0 BOM)
-- `application.yaml` — `management.endpoints.web.exposure.include=health,prometheus`; `MONITOR_USERNAME` (default `monitor`) / `GRAFANA_SESSION_TTL_MINUTES` (15) / `GRAFANA_SESSION_MAX_HOURS` (8) via env with safe defaults; `spring.config.import=optional:configtree:/run/secrets/` and `ulpf.monitor.password` from the `monitor_password` secret (no default; empty means the endpoint is denied)
+- `application.yaml` — `management.endpoints.web.exposure.include=health,prometheus`; `MONITOR_USERNAME` (default `monitor`) / `GRAFANA_SESSION_TTL_MINUTES` (15) / `GRAFANA_SESSION_MAX_HOURS` (8) via env with safe defaults; `spring.config.import=optional:configtree:/run/secrets/` and `ulpf.monitor.password` from the `monitor_password` secret (no default; empty means the endpoint is denied); `ulpf.metrics.max-tag-values: ${ULPF_METRICS_MAX_TAG_VALUES:5000}`
 - `SpringSecurity.java` — new `@Order(1)` actuator chain (`securityMatcher("/actuator/**")`, health open, prometheus basic-auth with BCrypt-hashed monitor user); remove `/actuator/**` from main-chain `permitAll`; allow `/v1/auth/validate-grafana` and `/v1/auth/grafana-session` according to their own auth rules; `permitAll` for `POST /v1/auth/grafana-logout`
 - `JwtFilter.java` — keep `/actuator/**` excluded; reject tokens with a `purpose` claim on normal routes; add `/v1/auth/grafana-logout` to `EXCLUDED_PATHS` (an expired Bearer token would otherwise get 401 before the endpoint runs)
 - `JwtUtil.java` — overload `generateToken` with custom TTL + `purpose` + `sessionStart` + `pwv` claims; add purpose-aware validation helper
 - `controlplane/service` (new small `GrafanaAccessService` or inside `GrafanaAuthController`) — 60 s cached user lookup (role + password fingerprint) for `validate-grafana`; `common/db/UserRepository.updatePasswordAndRole` evicts the entry
-- New `common/MetricsConfig.java` — gauge bindings (queue sizes, incident count) via `MeterBinder`/`MeterRegistry`; no constructor changes to existing classes
+- New `common/MetricsConfig.java` — gauge bindings (queue sizes, incident count) via `MeterBinder`/`MeterRegistry`; no constructor changes to existing classes; registers the tag-cap `MeterFilter`s (`ULPF_METRICS_MAX_TAG_VALUES`) and the explicit bucket sets
 - New `controlplane/controller/GrafanaAuthController.java` — `POST /v1/auth/grafana-session`, `GET /v1/auth/validate-grafana`, `POST /v1/auth/grafana-logout` (expires the cookie; no auth, no DB)
 - `common/db/CredentialRepository.java` + `CredentialRecord` — add `sourceType` (`s.source_type` in SQL); keep 6-arg overload (`"unknown"`)
 - `common/db/ClickHouseIngestionRepository.java` — add `MeterRegistry` constructor (keep 1-arg), flush timers, batch-size summary, error/drop/degraded/re-enqueue counters
@@ -200,7 +221,8 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 
 **Infrastructure:**
 - `compose.yaml` — add `prometheus` + `grafana` services (internal-only, `ulpf-net`); fixed subnet on `ulpf-net`; bind ClickHouse ports and (per Q1) core-engine `8080` to `127.0.0.1`; named volumes; `depends_on`; healthchecks using `wget`
-- `infra/prometheus/prometheus.yml` — scrape config with `basic_auth.password_file: /run/secrets/monitor_password`
+- `infra/prometheus/prometheus.yml` — scrape config with `basic_auth.password_file: /run/secrets/monitor_password` and `sample_limit: 50000`
+- `compose.yaml` (retention, A6) — `prometheus` `command` flags with `${PROMETHEUS_RETENTION_TIME:-30d}` / `${PROMETHEUS_RETENTION_SIZE:-5GB}`; `core-engine` gets `ULPF_METRICS_MAX_TAG_VALUES`
 - `.gitignore` — add `secrets/`
 - `infra/grafana/Containerfile` — `grafana/grafana:<pinned>`, bake `grafana-clickhouse-datasource@<pinned>` at build
 - `infra/grafana/grafana.ini` — `auth.proxy` (header `X-WEBAUTH-USER`, `whitelist=<ulpf-net CIDR>`, `auto_sign_up`), anonymous disabled, `root_url` from `GF_SERVER_ROOT_URL=${ULPF_PUBLIC_URL}/grafana/` (not `%(protocol)s`, which is always `http` inside the container and would produce `http://` redirects on HTTPS sites), `serve_from_sub_path=true`
@@ -220,7 +242,7 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `frontend/src/components/LogoutButton.jsx` and `frontend/src/api/client.js` (401 handler) — for role `ADMIN`, call `clearGrafanaSession()` fire-and-forget before clearing localStorage
 - `frontend/package.json` + `vitest.config.js` — Vitest + RTL + jsdom as pinned dev dependencies, `test` script (approved 2026-10-29, Task 13a)
 - `.github/workflows/ci-cd.yml` — run `npm test` after `npm ci` in the frontend job (Task 13a)
-- `.env.example` — observability section (`MONITOR_USERNAME`; the monitor password is generated into `secrets/monitor_password`, not `.env`; `GRAFANA_CLICKHOUSE_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_SESSION_TTL_MINUTES` (default 15), `GRAFANA_SESSION_MAX_HOURS` (default 8), `VITE_GRAFANA_URL`, `ULPF_PUBLIC_URL` (default `http://localhost:3000`), `ULPF_COOKIE_SECURE` (default `auto`))
+- `.env.example` — observability section (`MONITOR_USERNAME`; the monitor password is generated into `secrets/monitor_password`, not `.env`; `GRAFANA_CLICKHOUSE_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_SESSION_TTL_MINUTES` (default 15), `GRAFANA_SESSION_MAX_HOURS` (default 8), `VITE_GRAFANA_URL`, `ULPF_PUBLIC_URL` (default `http://localhost:3000`), `ULPF_COOKIE_SECURE` (default `auto`), `PROMETHEUS_RETENTION_TIME` (default `30d`), `PROMETHEUS_RETENTION_SIZE` (default `5GB`), `ULPF_METRICS_MAX_TAG_VALUES` (default `5000`))
 - `startup/start.sh` — readiness + banner for Prometheus and Grafana; note on existing `.env`; create `secrets/` (`0700`) and `secrets/monitor_password` (`0644`, only if missing, no trailing newline)
 
 **Docs:**
@@ -270,7 +292,7 @@ Objective: Webhook latency/success, drift rate, incident counts. Guidance: in `A
 Objective: A locked-down user for Grafana's log panels. Guidance: `infra/clickhouse-config/users.d/grafana_user.xml` defining the `grafana` user (sha256 password hash, `<networks>` limited to the `ulpf-net` subnet, profile `grafana_profile`) with `readonly=1`, `max_execution_time=30`, `max_memory_usage=1000000000`, `max_result_rows=1000000`, `result_overflow_mode=break`, and `<grants>` with `GRANT SELECT ON ulpf_raw.*` and `ulpf_events.*`; COPY it in `infra/Containerfile`; add `GRAFANA_CLICKHOUSE_PASSWORD` to `.env.example` (note: the XML needs the hash, so document how to generate it, or template it at container start). No SQL grants file. Because XML reloads on every start, existing volumes pick it up after a restart — no one-time command. Tests: `ReadOnlyUserTest` (SELECT ok; INSERT/DDL denied; row limit hit). Demo: `clickhouse-client --user grafana`.
 
 **Task 8: Prometheus service + scrape config.**
-Objective: Prometheus scrapes the secured endpoint internally. Guidance: `infra/prometheus/prometheus.yml` (target `core-engine:8080`, `metrics_path: /actuator/prometheus`, `basic_auth` with `password_file: /run/secrets/monitor_password`, 15s interval); give the `prometheus` service the `monitor_password` compose secret; add `prometheus` service (internal-only, `prometheus-data` volume, `depends_on` core-engine healthy, healthcheck `wget -q --spider http://localhost:9090/-/healthy`); pinned image. Verification: `/api/v1/targets` shows UP.
+Objective: Prometheus scrapes the secured endpoint internally. Guidance: `infra/prometheus/prometheus.yml` (target `core-engine:8080`, `metrics_path: /actuator/prometheus`, `basic_auth` with `password_file: /run/secrets/monitor_password`, 15s interval); give the `prometheus` service the `monitor_password` compose secret; add `prometheus` service (internal-only, `prometheus-data` volume, `depends_on` core-engine healthy, healthcheck `wget -q --spider http://localhost:9090/-/healthy`); pinned image. **Retention (A6):** `command` flags `--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-30d} --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-5GB}`. Defaults are 30 days and 5 GB, overridable in `.env`; whichever limit is hit first wins; units are required (`30d`, `12w`, `5GB`, `500MB`). Retention only decides disk use; memory depends on the series count (see **Cardinality and memory budget**). The size cap counts blocks, WAL and head chunks, but only blocks are deleted to honour it, and cleanup runs at compaction (roughly every 2 hours), so give the volume's disk about 10% headroom above the cap. At the typical load above, 30 days is about 0.25-0.5 GB, so the time limit is what binds and the size cap is the safety net. Verification: `/api/v1/targets` shows UP; `/api/v1/status/flags` shows the configured retention values; setting `PROMETHEUS_RETENTION_TIME=2h` and restarting changes them; an invalid value (e.g. `30` without a unit) makes the container exit with a clear error; an artificially oversized scrape is rejected by `sample_limit`.
 
 **Task 9: Grafana service + custom image + datasource provisioning.**
 Objective: Air-gapped Grafana with both datasources auto-wired. Guidance: custom image baking the ClickHouse plugin at build time; `grafana.ini` as in Section 5; provision Prometheus (`http://prometheus:9090`) and ClickHouse (`http://clickhouse:8123`, user `grafana`, password from env) datasources; `grafana` service on `ulpf-net` (internal-only, `grafana-data` volume, `depends_on` prometheus, healthcheck `wget -q --spider http://localhost:3000/grafana/api/health`); set `GF_SECURITY_ADMIN_PASSWORD` from `GRAFANA_ADMIN_PASSWORD`. Verification: both datasources healthy.
@@ -350,7 +372,7 @@ Objective: Keep docs current (AGENTS.md §6). `ARCHITECTURE.md` (observability s
 
 ## 7. Risks and open questions
 
-- **Cardinality**: `source_id`/`vendor_id` tags create high-cardinality series. Acceptable at current scale; monitor, and consider dropping `source_id` or top-N if the source count grows.
+- **Cardinality**: the main driver of memory in both the app and Prometheus. The first draft of the metrics measured 171,568 series at 1,000 sources; the tag policy, explicit buckets, the `ULPF_METRICS_MAX_TAG_VALUES` cap and the Prometheus `sample_limit` bring it to about 1.4k typical and 25k worst case (see **Cardinality and memory budget**). If a deployment onboards more than 5,000 sources, raise the cap and the `sample_limit` together and re-check RAM.
 - **Spring Boot 4.1.0 artifacts** are not cached locally; resolve online once (`mvn dependency:resolve`) and confirm starter/module names and test auto-config before Task 1 tests. Offline builds afterwards need the populated `~/.m2` or an internal mirror.
 - **Existing `.env`** won't auto-merge new keys (`start.sh` seeds only on first creation). Documented in Task 14.
 - **ClickHouse XML user** changes take effect on restart/config reload, so existing volumes are fine. Never define the same user in SQL as well.
