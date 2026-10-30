@@ -260,6 +260,27 @@ Spring Boot 4.x note: Prometheus export is typically disabled in `@SpringBootTes
 - `docs/frontend/frontend.md`, `README.md`
 - `to-do-list.md` (repo root) — update the observability item (AGENTS.md §6)
 
+### Runtime decision (rows 28 and 31): files to update
+
+Mapped 2026-10-31 by grepping the repo for `podman`, `docker`, `compose` and `host.containers.internal`. Lands with Task 0 unless stated otherwise.
+
+| File | Today | Change |
+|---|---|---|
+| `startup/start.sh` | Picks the first tool it finds: `podman-compose`, then `podman compose`, then `docker compose`, then `docker-compose` | **Version-aware selection:** use Podman only if `podman --version` ≥ 4.9; otherwise use `docker compose` (v2) if present; otherwise stop with a message pointing at the README's distro table. Drop the `docker-compose` (v1) fallback (untested, end of life). On a machine with both Podman 3.4.4 and Docker (e.g. Ubuntu 22.04 dev hosts), today's order would pick the broken Podman |
+| `startup/stop.sh` | Same detection order as `start.sh`; defaults to `docker compose` | Same selection logic; share it with `start.sh` (e.g. a sourced `startup/runtime.sh`) so both always pick the same runtime |
+| `startup/start.bat` | Detects `podman-compose` / `podman` / `docker` / `docker-compose`; error text sends users to Docker Desktop or Podman Desktop | Same rule (Podman ≥ 4.9, else Docker Compose v2, no v1). Windows always runs containers inside a VM (Podman Desktop / Docker Desktop), so the README states it is untested there; mention that Docker Desktop has paid tiers for larger companies, Podman Desktop does not |
+| `startup/stop.bat` | Hard-codes `docker compose down` | Use the same detection as `start.bat` |
+| `startup/check-network.sh` (new) | — | The runtime check from branch `test/container-network-check`, using an image the stack already builds (offline runtime) |
+| `compose.yaml` | `CLICKHOUSE_URL` default uses `host.containers.internal`; `ulpf-net` has no subnet | Service names (Task 0) and `ipam` subnet from `ULPF_NET_SUBNET` (Task 14). `host.containers.internal` is a Podman name; Docker Engine on Linux does not provide it, so today's stack is not expected to run on Docker until Task 0 lands (to be confirmed on the dev host once Docker is installed) |
+| `frontend/nginx.conf` | `server host.containers.internal:8080;` | `server core-engine:8080;` (Task 0) |
+| `.env.example` | `CLICKHOUSE_URL` with `host.containers.internal` | `clickhouse:8123` (Task 0); add `ULPF_NET_SUBNET` (Task 14) |
+| `README.md` (lines ~49-50, 81-85, 93-109, 123-128, 346) | Lists Podman, Podman Compose, Docker Compose and `docker-compose` with no versions; error text recommends Docker Desktop / Podman Desktop; manual and GHCR sections show only `docker compose` / `podman compose` | Requirements section with the supported runtimes (Podman ≥ 4.9 or Docker Engine + Compose v2), the per-distro table (row 31), the Docker Engine install pointer for Ubuntu 22.04 / Debian 12, the licence note (Engine Apache-2.0, Desktop paid tiers), `check-network.sh`; remove `docker-compose` v1; keep manual commands for both runtimes |
+| `docs/ARCH/ARCHITECTURE.md:124` | "Podman / Docker Compose" | "Podman ≥ 4.9 or Docker Engine + Compose v2" plus the network design (fixed subnet, service names) |
+| `docs/ARCH/FILE_GUIDE.md:11` | `compose.yaml` comment only | Add `startup/check-network.sh` (and `startup/runtime.sh` if created) |
+| `AGENTS.md` §2 table and §8 | "Podman/Docker compose" | Runtime versions; §8 quirk: Ubuntu 22.04's Podman 3.4.4 cannot run the stack, use Docker Engine or upgrade |
+| `.github/workflows/ci-cd.yml` | GHCR build with Docker Buildx | No change for the runtime decision. Follow-up: move the network check into CI (Podman 4.9.3, Docker, and later Podman 5.x/6.x) and bump `actions/checkout` off Node 20 |
+| No change | `HealthController.java` Javadoc ("Podman/Docker"), `*/Containerfile` (`dockerfile:` key and base images), `to-do-list.md` wording | Still accurate |
+
 ## 6. Steps (task breakdown)
 
 **Prerequisite:** backlog item 11 (single-admin enforcement, in `to-do-list.md`) must be completed before Task 0. Grafana access is granted to `ADMIN` only, so this plan relies on `ADMIN` meaning the single account defined in `.env`.
