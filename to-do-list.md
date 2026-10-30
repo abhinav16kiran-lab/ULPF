@@ -89,7 +89,7 @@
     - *ClickHouse Analytical Pipeline*: Batch flush frequency, batch size distribution, flush duration/latency, and insert error counts.
     - *Alerting & Webhook Metrics*: Schema drift rates, incident counts, and webhook delivery latency/success ratios.
   - Provide pre-configured Grafana dashboards (provisioned via code/JSON) with datasources automatically wired to Prometheus and ClickHouse (via ClickHouse Grafana plugin), giving administrators immediate visibility into log spikes, system health, and pipeline errors.
-  - Recreate the removed full-text search and log-volume/error-spike histogram as Grafana panels over `ulpf_raw.raw_events` (e.g. `positionCaseInsensitive` / `match()` filters and `toStartOfInterval` bucketing), so no feature is lost with the removal of `/v1/analytics/search` and `/v1/analytics/timeseries`.
+  - Recreate the removed full-text search and log-volume/error-spike histogram as Grafana panels over `ulpf_raw.raw_events` (a case-insensitive `positionCaseInsensitive` search scoped by Vendor/Source dropdowns and the time range, plus `toStartOfInterval` bucketing; regex search is intentionally dropped, see the plan), so no feature is lost with the removal of `/v1/analytics/search` and `/v1/analytics/timeseries`.
   - Restrict Grafana's ClickHouse access with a dedicated **read-only** ClickHouse user (limited to `ulpf_raw` / `ulpf_events`, with `max_execution_time`, `max_memory_usage`, and `max_result_rows` profile limits).
   - Tighten `/actuator/**` security: it is currently `permitAll()` in `SpringSecurity.java` and `JwtFilter.java`; only `/actuator/health` may stay open, and `/actuator/prometheus` must be restricted.
 - **Design Considerations**:
