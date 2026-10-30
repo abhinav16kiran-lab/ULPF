@@ -77,6 +77,7 @@
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
+- **Out of scope**: alerting. This item delivers dashboards only; metric-based alerts are tracked in item 12.
 - **Prerequisite**: item 11 (single-admin enforcement) must be completed before the Grafana integration starts. Grafana access is granted to `ADMIN` only, so `ADMIN` has to reliably mean "the one account defined in `.env`".
 - **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
 - **Requirement**:
@@ -175,3 +176,19 @@
   - Ensure the configured admin first, demote last: there is never a moment without an admin, and the step is idempotent.
   - Databases that already hold several admins will demote the extra ones on the first start after upgrade.
   - Not covered here: a demoted admin's existing login token stays valid as admin for up to 24 h (`JwtFilter` trusts the token's role claim). The fix is a short-lived cached role check in `JwtFilter`, which the Grafana plan's `validate-grafana` also needs; proposed as a separate follow-up item.
+
+### 12. Metric-Based Alerts for Gaps ULPF Cannot Raise Itself (follow-up to item 7)
+- **Depends on**: item 7 (Prometheus + Grafana) being live.
+- **Problem**: ULPF alerts on events it sees (`AlertDispatcher`: in-app, `ULPF_ALERT_WEBHOOK_URL`, vendor webhooks), but four situations are invisible from inside the app:
+  - *ULPF is down or hung*: the app's own alerting dies with it.
+  - *A source goes silent*: no code detects "no events from this source for N minutes".
+  - *Buffer queues keep growing*: the raw and canonical queues in `ClickHouseIngestionRepository` are unbounded, with no alert on their size.
+  - *Webhook sender drops alerts* when its pool is full (only a counter exists).
+- **Requirement**:
+  - Alert rules for the four cases above, evaluated outside core-engine (Prometheus `up == 0` for the first; the metrics from item 7 for the rest).
+  - Deliver to the existing admin webhook (`ULPF_ALERT_WEBHOOK_URL`), so there is one contact list. Check whether Grafana's built-in alerting (no Alertmanager) is enough before adding more containers.
+  - Air-gapped: webhook or internal SMTP only, no cloud notification channels.
+- **Design Considerations**:
+  - Avoid duplicating alerts ULPF already sends (insert failure, drift, webhook failing); these rules must only cover what the app cannot see.
+  - Grafana's webhook payload differs from ULPF's signed payload; decide whether the receiver tolerates both.
+  - A whole-host failure cannot be alerted from the same host; document it as a known limit.
