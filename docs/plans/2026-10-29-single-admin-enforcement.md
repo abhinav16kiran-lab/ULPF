@@ -1,9 +1,9 @@
 # Plan: Single-admin enforcement (demote stale ADMIN accounts, protect ADMIN from role changes)
 
 - **Date:** 2026-10-29
-- **Status:** Draft
+- **Status:** Approved
 - **Owner:** Adarsh
-- **Approved by / on:** _(blank until approved)_
+- **Approved by / on:** Adarsh (team lead), 2026-10-31
 - **File name:** `docs/plans/2026-10-29-single-admin-enforcement.md`
 - **Blocks:** backlog item 7 (Prometheus + Grafana). Grafana access is granted to `ADMIN` only, so `ADMIN` must reliably mean "the one account defined in `.env`". This plan lands first.
 
