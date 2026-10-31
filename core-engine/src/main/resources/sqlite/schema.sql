@@ -8,7 +8,10 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('ADMIN', 'VENDOR', 'USER')),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- 1 for the one super-admin (role ADMIN). Existing databases get this column, and the
+    -- one_super_admin unique index, from SqliteSchemaMigrator, which runs after this script.
+    is_super_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_super_admin IN (0, 1))
 );
 
 -- 2. Vendors table: Vendor organizations linked 1:1 to an owner user.
@@ -229,4 +232,19 @@ CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_vendor_date ON webhook_delivery_logs(vendor_id, attempted_at);
 
-
+-- 14. Admin Links: single-use links made by the super-admin. INVITE creates a regular admin; RESET sets a new
+-- password for one admin (target_user_id). Only the SHA-256 hash of the token is stored. Times are epoch ms (UTC).
+CREATE TABLE IF NOT EXISTS admin_links (
+    link_id         TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL CHECK (kind IN ('INVITE', 'RESET')),
+    token_hash      TEXT NOT NULL UNIQUE,
+    label           TEXT,
+    target_user_id  TEXT,
+    created_by      TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    used_at         INTEGER,
+    CHECK ((kind = 'RESET') = (target_user_id IS NOT NULL)),
+    FOREIGN KEY (target_user_id) REFERENCES users(user_id),
+    FOREIGN KEY (created_by) REFERENCES users(user_id)
+);

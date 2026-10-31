@@ -24,6 +24,7 @@ credentials
 mapping_versions
 onboarding_requests
 notifications
+admin_links
 ```
 
 ### ClickHouse
@@ -56,8 +57,9 @@ Two logical databases do not provide separate CPU/RAM resources.
 | `password_hash` | TEXT | Hashed password |
 | `role` | TEXT/ENUM | `ADMIN`, `VENDOR`, `USER` |
 | `created_at` | TIMESTAMP | Account creation time |
+| `is_super_admin` | INTEGER (0/1) | 1 for the one super-admin (role `ADMIN`) created by the one-time setup |
 
-Constraints: `user_id` primary key; `username` unique.
+Constraints: `user_id` primary key; `username` unique; partial unique index `one_super_admin` on `is_super_admin` where it is 1 (at most one super-admin).
 
 ## `vendors`
 
@@ -216,6 +218,24 @@ Audit trail of recent webhook dispatches and test pings for diagnostic troublesh
 | `latency_ms` | INTEGER | Dispatch round-trip latency in milliseconds |
 | `attempted_at` | TIMESTAMP | Timestamp when webhook HTTP request was dispatched |
 
+## `admin_links`
+
+Single-use links made by the super-admin: `INVITE` creates a regular admin, `RESET` sets a new password for one admin. Valid for 12 hours and once.
+
+| Column | Type | Purpose |
+|---|---|---|
+| `link_id` | TEXT | Primary key UUID |
+| `kind` | TEXT/ENUM | `INVITE` or `RESET` |
+| `token_hash` | TEXT | SHA-256 of the link's token (unique); the raw token is never stored |
+| `label` | TEXT / NULL | Optional note, e.g. who the invite is for |
+| `target_user_id` | TEXT / NULL | FK → `users.user_id`; the admin a `RESET` link changes (NULL for `INVITE`) |
+| `created_by` | TEXT | FK → `users.user_id` (the super-admin) |
+| `created_at` | INTEGER | Epoch milliseconds (UTC) |
+| `expires_at` | INTEGER | Epoch milliseconds (UTC) |
+| `used_at` | INTEGER / NULL | Epoch milliseconds (UTC) when used; NULL while pending |
+
+Times are integers so validity is an exact `expires_at > now` comparison. A link is used with one conditional `UPDATE ... WHERE used_at IS NULL AND expires_at > now`, so of two simultaneous uses only one succeeds. Deleting a user deletes the links it made or that target it.
+
 ### SQLite hierarchy
 
 ```text
@@ -233,12 +253,13 @@ users
   │                       └── 1:N → ingestion_alert_incidents
   │
   ├── 1:N → onboarding_requests
-  └── 1:N → notifications
+  ├── 1:N → notifications
+  └── 1:N → admin_links (created_by; RESET links also target_user_id)
 ```
 
 SQLite foreign-key enforcement is enabled on all connections (`PRAGMA foreign_keys = ON`).
 
-The SQLite schema is ULPF-owned. Future ULPF-owned schema changes may use controlled migrations.
+The SQLite schema is ULPF-owned. `schema.sql` runs on every start but `CREATE TABLE IF NOT EXISTS` cannot change an existing table, so changes to existing tables go in `SqliteSchemaMigrator` (`common/db/`), which runs right after `schema.sql` and before the web server starts. Current migration: add `users.is_super_admin` and the `one_super_admin` index; on that first run only, delete legacy `ADMIN` rows and their notifications (a legacy admin still referenced by vendor data is locked instead: role `USER`, unknown password, `WARN` logged).
 
 ---
 

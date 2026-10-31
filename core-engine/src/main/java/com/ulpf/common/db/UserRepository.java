@@ -2,9 +2,14 @@ package com.ulpf.common.db;
 
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -48,7 +53,7 @@ public class UserRepository {
             VALUES (?, ?, ?, ?, ?)
             """;
 
-        jdbcTemplate.update(sql, id, user.username(), user.name(), user.passwordHash(), user.role().name());
+        insert(sql, id, user.username(), user.name(), user.passwordHash(), user.role().name());
 
         return findById(id).orElseThrow(() -> new IllegalStateException("Failed to retrieve saved user with id: " + id));
     }
@@ -90,36 +95,74 @@ public class UserRepository {
 
     /** True once the one-time setup has created the super-admin. */
     public boolean superAdminExists() {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE is_super_admin = 1)", Boolean.class));
     }
 
     public Optional<User> findSuperAdmin() {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        String sql = "SELECT user_id, username, name, password_hash, role, created_at FROM users WHERE is_super_admin = 1";
+        return jdbcTemplate.query(sql, ROW_MAPPER).stream().findFirst();
     }
 
     public boolean isSuperAdmin(String userId) {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE user_id = ? AND is_super_admin = 1)", Boolean.class, userId));
     }
 
     /**
      * Inserts the super-admin (role ADMIN, flag set). The partial unique index on the flag makes a
-     * second super-admin impossible, so a racing second call fails with a DataIntegrityViolationException.
+     * second super-admin impossible, so a racing second call fails with a {@link DuplicateKeyException}
+     * (as does a taken username).
      */
     public User createSuperAdmin(String username, String name, String passwordHash) {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        String id = UUID.randomUUID().toString();
+        String sql = """
+            INSERT INTO users (user_id, username, name, password_hash, role, is_super_admin)
+            VALUES (?, ?, ?, ?, 'ADMIN', 1)
+            """;
+        insert(sql, id, username, name, passwordHash);
+        return findById(id).orElseThrow(() -> new IllegalStateException("Failed to retrieve saved super-admin with id: " + id));
     }
 
     public void updatePassword(String userId, String passwordHash) {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        jdbcTemplate.update("UPDATE users SET password_hash = ? WHERE user_id = ?", passwordHash, userId);
     }
 
-    /** Deletes the user's notifications, then the user. */
+    /**
+     * Deletes the user with everything that only makes sense while the user exists: its notifications and the
+     * admin links it made or that target it. One transaction, so a failure (for example a vendor still owning
+     * the user, see {@link #isReferencedByVendorData}) leaves everything as it was.
+     */
+    @Transactional
     public void deleteUserWithNotifications(String userId) {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        jdbcTemplate.update("DELETE FROM admin_links WHERE target_user_id = ? OR created_by = ?", userId, userId);
+        jdbcTemplate.update("DELETE FROM notifications WHERE user_id = ?", userId);
+        jdbcTemplate.update("DELETE FROM users WHERE user_id = ?", userId);
     }
 
     /** True if a vendor or an onboarding request points at this user (deleting it would break those rows). */
     public boolean isReferencedByVendorData(String userId) {
-        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+        String sql = """
+            SELECT EXISTS (SELECT 1 FROM vendors WHERE owner_user_id = ?)
+                OR EXISTS (SELECT 1 FROM onboarding_requests WHERE user_id = ?)
+            """;
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(sql, Boolean.class, userId, userId));
+    }
+
+    /**
+     * Runs an INSERT, reporting a UNIQUE violation (taken username, second super-admin) as a
+     * {@link DuplicateKeyException}. Spring has no SQLite error codes, so it would otherwise surface as an
+     * uncategorized SQL error that callers cannot tell apart from a real failure.
+     */
+    private void insert(String sql, Object... args) {
+        try {
+            jdbcTemplate.update(sql, args);
+        } catch (UncategorizedSQLException e) {
+            if (e.getSQLException() instanceof SQLiteException sqlite
+                    && sqlite.getResultCode() == SQLiteErrorCode.SQLITE_CONSTRAINT_UNIQUE) {
+                throw new DuplicateKeyException(sqlite.getMessage(), e);
+            }
+            throw e;
+        }
     }
 }
