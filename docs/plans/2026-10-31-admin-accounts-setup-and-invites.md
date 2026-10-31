@@ -1,9 +1,9 @@
 # Plan: Admin accounts — one-time setup, super-admin, invite and reset links, revoke
 
 - **Date:** 2026-10-31
-- **Status:** Draft (rev 2, 2026-10-31: team lead's answers to §7 applied)
+- **Status:** Approved (rev 2, 2026-10-31: team lead's answers to §7 applied)
 - **Owner:** Adarsh
-- **Approved by / on:** _(blank until approved)_
+- **Approved by / on:** Adarsh (team lead), 2026-10-31
 - **File name:** `docs/plans/2026-10-31-admin-accounts-setup-and-invites.md`
 - **Supersedes:** `docs/plans/2026-10-29-single-admin-enforcement.md` (backlog item 11). Its Problem B fix (an admin must never become a vendor) is carried over unchanged; its Problem A (stale admins after an `.env` rename) disappears, because `.env` no longer defines the live admin.
 - **Blocks:** backlog item 7 (Prometheus + Grafana): Grafana trusts the `ADMIN` role, so admin accounts must be managed properly first.
@@ -40,7 +40,7 @@ ULPF today:
 - New table `admin_links` (single-use links): `link_id`, `kind` (`INVITE` or `RESET`), `token_hash` (SHA-256, unique), `label` (optional, "for Ashitha"), `target_user_id` (the admin whose password a `RESET` link changes; empty for `INVITE`), `created_by`, `created_at`, `expires_at`, `used_at`. The raw token is never stored.
 - **Migration:** a new `SqliteSchemaMigrator` (runs at startup, before anything reads users) adds the column if `PRAGMA table_info(users)` lacks it, then creates the index. The index is created there, not in `schema.sql`, because `schema.sql` runs before the migrator and would fail on an old database. `admin_links` goes in `schema.sql` (new table, `IF NOT EXISTS` works). Safe on every start: the column step only runs when the column is missing.
 - **One-time cleanup of old admins (team lead, 2026-10-31):** by design there should never have been any admin except the one from `.env`; the extra `ADMIN` rows that exist come from item 11's Problem A. So, in the same migration step that adds the column, and in one transaction, every existing `ADMIN` row and its notifications are deleted and each is logged as a `WARN`. Because that step only runs when the column is missing, the cleanup happens **exactly once per database**: on the first start after this ships. It never runs again: not on later restarts, not after setup, not on any password reset. After it, the database has no admin, so the setup screen appears and the super-admin is created fresh.
-  - *Edge case (what "an admin owns vendor data" means):* normally an admin owns nothing. The only way it could is the bug this plan fixes (Problem B): an admin token submitting the vendor onboarding form makes a vendor, a source and an API key whose owner is the admin's account. The database then refuses to delete that account, because the vendor still points at it. If that ever turns out to be the case, the migration does not delete the vendor's data and does not stop the server from starting: it removes the account's `ADMIN` role, replaces its password with one nobody knows, and logs which vendor data it owns so a person can decide. On your local database there are no users at all; the container volume was not checked.
+  - *Edge case (what "an admin owns vendor data" means):* normally an admin owns nothing. The only way it could is the bug this plan fixes (Problem B): an admin token submitting the vendor onboarding form makes a vendor, a source and an API key whose owner is the admin's account. The database then refuses to delete that account, because the vendor still points at it. Note: approving a request does not link the vendor to the approving admin (there is no approver column in `vendors` or `onboarding_requests`); only the submitter becomes the owner. If that ever turns out to be the case, the migration does not delete the vendor's data and does not stop the server from starting: it removes the account's `ADMIN` role, replaces its password with one nobody knows, and logs which vendor data it owns so a person can decide. On your local database there are no users at all; the container volume was not checked.
 - `User` record stays unchanged (it is constructed in many places and tests); the flag is read through `UserRepository.isSuperAdmin(userId)`.
 
 ### 3.2 One-time setup (the super-admin)
@@ -223,7 +223,7 @@ Each step is its own commit on this branch; the branch can be split into two PRs
 
 Decided by the team lead on 2026-10-31:
 1. `start.sh` generates a random 10-character setup password (§3.2).
-2. Password reset: regular admins through a super-admin reset link; the super-admin through a server command only (§3.4a). *Interpretation to confirm:* "reset button" = the super-admin's **Reset password** button for regular admins; the super-admin's own reset deliberately has no button.
+2. Password reset: regular admins through a super-admin reset link; the super-admin through a server command only (§3.4a). Confirmed: "reset button" = the super-admin's **Reset password** button for regular admins; the super-admin's own reset deliberately has no button. Confirmed: a reset ends that person's old sessions (`pwv`).
 3. Changing your own password while signed in: on hold (§3.9).
 4. Admin passwords: at least 12 characters.
 5. Invite and reset links: 12 hours, single use.

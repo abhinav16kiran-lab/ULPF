@@ -1,7 +1,7 @@
 # Plan: Single-admin enforcement (remove stale ADMIN accounts, protect ADMIN from role changes)
 
 - **Date:** 2026-10-29
-- **Status:** Approved (amended 2026-10-31 by the team lead: stale admins are **deleted**, not demoted; password-reset case made explicit; see §2 and §3)
+- **Status:** Superseded on 2026-10-31 by [`2026-10-31-admin-accounts-setup-and-invites.md`](2026-10-31-admin-accounts-setup-and-invites.md) (`.env` no longer defines the live admin; Problem B's fix carried over unchanged). Previously: Approved (amended 2026-10-31 by the team lead: stale admins are **deleted**, not demoted; password-reset case made explicit; see §2 and §3)
 - **Owner:** Adarsh
 - **Approved by / on:** Adarsh (team lead), 2026-10-31
 - **File name:** `docs/plans/2026-10-29-single-admin-enforcement.md`
