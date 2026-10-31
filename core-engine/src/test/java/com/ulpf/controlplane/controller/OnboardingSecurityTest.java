@@ -1,12 +1,16 @@
 package com.ulpf.controlplane.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ulpf.common.db.UserRepository;
+import com.ulpf.controlplane.model.Role;
+import com.ulpf.controlplane.model.User;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -31,16 +35,17 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * Tests the real security chain (JwtFilter + SpringSecurity rules) on the vendor onboarding endpoints.
  * Onboarding is for USER and VENDOR accounts only; the admin must be refused at the door, not just hidden in the UI.
  * Real login and real JWTs; a temporary SQLite file so every pooled connection sees the same database.
+ * Accounts are created directly in the database: this test is about the onboarding door, not about how admins are made.
  */
-@SpringBootTest(properties = {
-        "ulpf.admin.username=sec_admin",
-        "ulpf.admin.password=SecAdmin@12345"
-})
+@SpringBootTest
 @ActiveProfiles("test")
 class OnboardingSecurityTest {
 
     private static final String ADMIN = "sec_admin";
     private static final String ADMIN_PASSWORD = "SecAdmin@12345";
+    private static final String VENDOR = "sec_vendor";
+    private static final String USER = "sec_user";
+    private static final String OTHER_PASSWORD = "Other@12345";
     private static Path dbFile;
 
     @DynamicPropertySource
@@ -56,12 +61,25 @@ class OnboardingSecurityTest {
 
     @Autowired
     private WebApplicationContext context;
+    @Autowired
+    private UserRepository users;
+    @Autowired
+    private BCryptPasswordEncoder encoder;
 
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        ensureAccount(ADMIN, ADMIN_PASSWORD, Role.ADMIN);
+        ensureAccount(VENDOR, OTHER_PASSWORD, Role.VENDOR);
+        ensureAccount(USER, OTHER_PASSWORD, Role.USER);
+    }
+
+    private void ensureAccount(String username, String password, Role role) {
+        if (users.findByUsername(username).isEmpty()) {
+            users.save(new User(null, username, username, encoder.encode(password), role, null));
+        }
     }
 
     private String login(String username, String password, String role) throws Exception {
@@ -96,5 +114,16 @@ class OnboardingSecurityTest {
 
         assertTrue(statuses.values().stream().allMatch(s -> s == 403),
                 "ADMIN token must get 403 on every onboarding endpoint, got: " + statuses);
+    }
+
+    @Test
+    void userAndVendorTokensAreNotStoppedByTheOnboardingRule() throws Exception {
+        for (String[] account : new String[][]{{USER, "USER"}, {VENDOR, "VENDOR"}}) {
+            String bearer = "Bearer " + login(account[0], OTHER_PASSWORD, account[1]);
+            int myRequests = status(get("/v1/onboard/my-requests").header("Authorization", bearer));
+            int mySources = status(get("/v1/onboard/my-sources").header("Authorization", bearer));
+            assertTrue(myRequests != 403 && mySources != 403,
+                    account[1] + " must reach onboarding, got my-requests=" + myRequests + " my-sources=" + mySources);
+        }
     }
 }

@@ -1,0 +1,234 @@
+-- FROZEN TEST FIXTURE: sqlite/schema.sql as it was before the admin accounts change (2026-10-31).
+-- Used by SqliteSchemaMigratorTest to build an 'old' database. Do not update it when schema.sql changes.
+-- Enable foreign key enforcement in SQLite
+PRAGMA foreign_keys = ON;
+
+-- 1. Users table: System users with authentication details and roles.
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('ADMIN', 'VENDOR', 'USER')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. Vendors table: Vendor organizations linked 1:1 to an owner user.
+CREATE TABLE IF NOT EXISTS vendors (
+    vendor_id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL UNIQUE,
+    vendor_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_user_id) REFERENCES users(user_id)
+);
+
+-- 3. Sources table: Log sources associated with a vendor (e.g., FIREWALL, WEB_APP, DATABASE, SENSOR).
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    vendor_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('PENDING_APPROVAL', 'ACTIVE', 'SUSPENDED', 'REVOKED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id)
+);
+
+-- 4. Credentials table: Ingestion API key hashes linked to a specific log source.
+CREATE TABLE IF NOT EXISTS credentials (
+    credential_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('PENDING_APPROVAL', 'ACTIVE', 'REVOKED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES sources(source_id)
+);
+
+-- 5. Mapping Versions table: Versioned JSON schema mapping configurations for log sources.
+CREATE TABLE IF NOT EXISTS mapping_versions (
+    mapping_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    mapping_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('CANDIDATE', 'ACTIVE', 'RETIRED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES sources(source_id),
+    UNIQUE (source_id, version)
+);
+
+-- 6. Onboarding Requests table: Requests for onboarding new vendors, sources, or schema updates.
+CREATE TABLE IF NOT EXISTS onboarding_requests (
+    request_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    source_id TEXT,
+    request_type TEXT NOT NULL CHECK (request_type IN ('NEW_VENDOR', 'NEW_SOURCE', 'SCHEMA_UPDATE')),
+    sample_metadata TEXT,
+    status TEXT NOT NULL CHECK (status IN ('SUBMITTED', 'AI_ANALYSIS', 'HUMAN_REVIEW', 'APPROVED', 'REJECTED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (source_id) REFERENCES sources(source_id)
+);
+
+-- 7. Notifications table: User notifications for system events and onboarding status updates.
+CREATE TABLE IF NOT EXISTS notifications (
+    notification_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    read BOOLEAN NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+
+-- 8. To store Embedding
+CREATE TABLE IF NOT EXISTS mapping_embeddings (
+    embedding_id    TEXT PRIMARY KEY,
+    canonical_field TEXT NOT NULL,
+    model_name      TEXT NOT NULL,
+    model_version   TEXT NOT NULL,
+    embedding       BLOB NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (canonical_field, model_name, model_version)
+);
+
+-- Index for fast credential key hash lookup on /v1/events ingestion requests
+CREATE INDEX IF NOT EXISTS idx_credentials_key_hash ON credentials(key_hash);
+
+-- Index for fast active mapping resolution per log source
+CREATE INDEX IF NOT EXISTS idx_mapping_versions_source_status ON mapping_versions(source_id, status);
+
+-- Indexes for fast TTL purging of notifications and completed onboarding requests
+CREATE INDEX IF NOT EXISTS idx_notifications_ttl ON notifications(read, created_at);
+CREATE INDEX IF NOT EXISTS idx_onboarding_requests_ttl ON onboarding_requests(status, created_at);
+
+-- 9. Mapping Aliases table: Dictionary of known field aliases for Layer 1 lookup
+-- Note: This is a proposal not yet merged into docs/DATABASE_SCHEMA.md - needs team sign-off
+CREATE TABLE IF NOT EXISTS mapping_aliases (
+    alias_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_field TEXT NOT NULL,
+    alias_key       TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'seed',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Add unique constraint to prevent duplicate alias keys
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mapping_aliases_unique_key 
+ON mapping_aliases(alias_key);
+
+-- Seed standard field aliases
+INSERT OR IGNORE INTO mapping_aliases (canonical_field, alias_key, source) VALUES
+('timestamp', 'timestamp', 'seed'),
+('timestamp', 'time', 'seed'),
+('timestamp', 'datetime', 'seed'),
+('timestamp', 'eventtime', 'seed'),
+('timestamp', 'ts', 'seed'),
+('log.level', 'level', 'seed'),
+('log.level', 'loglevel', 'seed'),
+('log.level', 'severity', 'seed'),
+('service.name', 'service', 'seed'),
+('service.name', 'servicename', 'seed'),
+('service.name', 'app', 'seed'),
+('service.environment', 'environment', 'seed'),
+('service.environment', 'env', 'seed'),
+('http.request.method', 'httpmethod', 'seed'),
+('http.request.method', 'method', 'seed'),
+('url.path', 'httppath', 'seed'),
+('url.path', 'path', 'seed'),
+('url.path', 'uri', 'seed'),
+('url.path', 'url', 'seed'),
+('http.response.status_code', 'httpstatuscode', 'seed'),
+('http.response.status_code', 'httpstatus', 'seed'),
+('http.response.status_code', 'statuscode', 'seed'),
+('http.response.status_code', 'status', 'seed'),
+('event.duration', 'httplatencyms', 'seed'),
+('event.duration', 'latencyms', 'seed'),
+('event.duration', 'duration', 'seed'),
+('user_agent.original', 'httpuseragent', 'seed'),
+('user_agent.original', 'useragent', 'seed'),
+('source.ip', 'networkclientip', 'seed'),
+('source.ip', 'clientip', 'seed'),
+('source.ip', 'srcip', 'seed'),
+('source.ip', 'srcipaddr', 'seed'),
+('destination.ip', 'networkserverip', 'seed'),
+('destination.ip', 'serverip', 'seed'),
+('destination.ip', 'dstip', 'seed'),
+('destination.port', 'dstprt', 'seed'),
+('destination.port', 'destport', 'seed'),
+('destination.port', 'dstport', 'seed'),
+('user.name', 'userusername', 'seed'),
+('user.name', 'username', 'seed'),
+('user.name', 'user', 'seed'),
+('user.email', 'usrprincnm', 'seed'),
+('user.email', 'useremail', 'seed'),
+('user.attempt_count', 'userattemptcount', 'seed'),
+('event.action', 'evtypeid', 'seed'),
+('event.action', 'action', 'seed'),
+('message', 'message', 'seed'),
+('message', 'msg', 'seed');
+
+-- 10. Batch Integrity Blocks table: Merkle-tree batch roots and hash chain blocks for log tamper-evidence.
+CREATE TABLE IF NOT EXISTS batch_integrity_blocks (
+    block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL,
+    event_count INTEGER NOT NULL,
+    first_event_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    merkle_root TEXT NOT NULL,
+    previous_block_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_integrity_source_created ON batch_integrity_blocks(source_id, created_at);
+
+-- 11. Ingestion Alert Incidents table: Tracks operational failures, affected counts, and recovery replay windows.
+CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
+    incident_id     TEXT PRIMARY KEY,
+    source_id       TEXT NOT NULL,
+    failure_type    TEXT NOT NULL,
+    table_name      TEXT,
+    started_at      TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    resolved_at     TEXT,
+    affected_count  INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'OPEN',
+    details         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_incidents_source_status ON ingestion_alert_incidents(source_id, status);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON ingestion_alert_incidents(status);
+
+-- 12. Vendor Webhook Configurations (1 active endpoint per vendor organization)
+CREATE TABLE IF NOT EXISTS vendor_webhooks (
+    webhook_id          TEXT PRIMARY KEY,
+    vendor_id           TEXT NOT NULL UNIQUE,
+    webhook_url         TEXT NOT NULL,
+    secret_key          TEXT,
+    is_active           BOOLEAN NOT NULL DEFAULT 1,
+    status              TEXT NOT NULL DEFAULT 'UNTESTED' CHECK (status IN ('UNTESTED', 'HEALTHY', 'FAILING')),
+    last_status_code    INTEGER,
+    last_attempt_at     TIMESTAMP,
+    consecutive_fails   INTEGER NOT NULL DEFAULT 0,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(vendor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendor_webhooks_vendor ON vendor_webhooks(vendor_id);
+
+-- 13. Webhook Delivery Logs (Audit trail of recent deliveries & test pings)
+CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
+    delivery_id         TEXT PRIMARY KEY,
+    vendor_id           TEXT,               -- NULL for global admin .env webhook
+    target_url          TEXT NOT NULL,
+    alert_type          TEXT NOT NULL,
+    status_code         INTEGER,
+    success             BOOLEAN NOT NULL,
+    error_message       TEXT,
+    latency_ms          INTEGER,
+    attempted_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_logs_vendor_date ON webhook_delivery_logs(vendor_id, attempted_at);
+
+

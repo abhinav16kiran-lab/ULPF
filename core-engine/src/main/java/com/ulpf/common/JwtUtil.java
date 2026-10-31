@@ -26,6 +26,20 @@ public class JwtUtil {
         return generateToken(userId, username, null);
     }
 
+    /**
+     * Login token that also carries {@code pwv}, a fingerprint of the account's password hash
+     * ({@link AccountLookup#fingerprint(String)}); {@link JwtFilter} rejects the token once the password changes.
+     */
+    public String generateToken(String userId, String username, String role, String passwordFingerprint) {
+        // not implemented yet (admin accounts plan, step 4): pwv is not added yet
+        return generateToken(userId, username, role);
+    }
+
+    public String extractPasswordFingerprint(String token) {
+        // not implemented yet (admin accounts plan, step 4)
+        return null;
+    }
+
     public String generateToken(String userId, String username, String role) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("id", userId);

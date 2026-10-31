@@ -32,9 +32,11 @@ public class JwtFilter extends OncePerRequestFilter {
     );
 
     private final JwtUtil jwtUtil;
+    private final AccountLookup accountLookup;
 
-    public JwtFilter(JwtUtil jwtUtil) {
+    public JwtFilter(JwtUtil jwtUtil, AccountLookup accountLookup) {
         this.jwtUtil = jwtUtil;
+        this.accountLookup = accountLookup; // live account check: admin accounts plan, step 4
     }
 
     @Override

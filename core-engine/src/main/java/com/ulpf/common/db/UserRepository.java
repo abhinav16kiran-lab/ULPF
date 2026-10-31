@@ -85,4 +85,41 @@ public class UserRepository {
         String sql = "UPDATE users SET role = ? WHERE user_id = ?";
         jdbcTemplate.update(sql, role.name(), userId);
     }
+
+    // ---- Admin accounts (docs/plans/2026-10-31-admin-accounts-setup-and-invites.md) ----
+
+    /** True once the one-time setup has created the super-admin. */
+    public boolean superAdminExists() {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    public Optional<User> findSuperAdmin() {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    public boolean isSuperAdmin(String userId) {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    /**
+     * Inserts the super-admin (role ADMIN, flag set). The partial unique index on the flag makes a
+     * second super-admin impossible, so a racing second call fails with a DataIntegrityViolationException.
+     */
+    public User createSuperAdmin(String username, String name, String passwordHash) {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    public void updatePassword(String userId, String passwordHash) {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    /** Deletes the user's notifications, then the user. */
+    public void deleteUserWithNotifications(String userId) {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
+
+    /** True if a vendor or an onboarding request points at this user (deleting it would break those rows). */
+    public boolean isReferencedByVendorData(String userId) {
+        throw new UnsupportedOperationException("not implemented yet (admin accounts plan, step 2)");
+    }
 }
