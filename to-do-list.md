@@ -77,6 +77,8 @@
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
+- **Out of scope**: alerting. This item delivers dashboards only; metric-based alerts are tracked in item 12.
+- **Prerequisite**: item 11 (single-admin enforcement) must be completed before the Grafana integration starts. Grafana access is granted to `ADMIN` only, so `ADMIN` has to reliably mean "the one account defined in `.env`".
 - **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
 - **Requirement**:
   - ~~Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.~~ **[DONE]**
@@ -87,7 +89,7 @@
     - *ClickHouse Analytical Pipeline*: Batch flush frequency, batch size distribution, flush duration/latency, and insert error counts.
     - *Alerting & Webhook Metrics*: Schema drift rates, incident counts, and webhook delivery latency/success ratios.
   - Provide pre-configured Grafana dashboards (provisioned via code/JSON) with datasources automatically wired to Prometheus and ClickHouse (via ClickHouse Grafana plugin), giving administrators immediate visibility into log spikes, system health, and pipeline errors.
-  - Recreate the removed full-text search and log-volume/error-spike histogram as Grafana panels over `ulpf_raw.raw_events` (e.g. `positionCaseInsensitive` / `match()` filters and `toStartOfInterval` bucketing), so no feature is lost with the removal of `/v1/analytics/search` and `/v1/analytics/timeseries`.
+  - Recreate the removed full-text search and log-volume/error-spike histogram as Grafana panels over `ulpf_raw.raw_events` (a case-insensitive `positionCaseInsensitive` search scoped by Vendor/Source dropdowns and the time range, plus `toStartOfInterval` bucketing; regex search is intentionally dropped, see the plan), so no feature is lost with the removal of `/v1/analytics/search` and `/v1/analytics/timeseries`.
   - Restrict Grafana's ClickHouse access with a dedicated **read-only** ClickHouse user (limited to `ulpf_raw` / `ulpf_events`, with `max_execution_time`, `max_memory_usage`, and `max_result_rows` profile limits).
   - Tighten `/actuator/**` security: it is currently `permitAll()` in `SpringSecurity.java` and `JwtFilter.java`; only `/actuator/health` may stay open, and `/actuator/prometheus` must be restricted.
 - **Design Considerations**:
@@ -159,3 +161,35 @@
   - Prompt injection via vendor sample logs; LLM confidence is not calibrated, so nothing is auto-approved.
   - Interacts with item 5 (domain-level tables) through the target-table recommendation, and supersedes part of item 8.
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
+
+### 11. Single-Admin Enforcement: Remove Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
+- **Plan**: [`docs/plans/2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Status: Approved 2026-10-31).
+- **Priority**: Must be completed **before item 7** (Prometheus + Grafana).
+- **Problem**: ULPF supports one admin, defined by `ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`, but nothing enforces it:
+  - `AdminUserSeeder` only creates or updates the configured account. After changing `ULPF_ADMIN_USERNAME`, the previous admin stays `ADMIN` with its old password and keeps receiving system alerts.
+  - `/v1/onboard/**` has no role check (any logged-in user passes; the UI only hides the page from admins). An admin token can file a request for its own account (reproduced: 201), and `OnboardingService.processAdminDecision` then sets the owner to `VENDOR` without checking their current role, turning the admin into a `VENDOR` until the next restart. `AuthService` has the right guard (`role == USER`); this call does not.
+- **Requirement**:
+  - After the configured admin is created or confirmed at startup, delete every other `ADMIN` account together with its notifications (one transaction) and log a `WARN` per removal. Exception: if the old account owns vendor data, lock it instead (role `USER`, unusable password) so no vendor data is lost. Blank `.env` values change nobody.
+  - Same username with a new password (password reset) keeps the account and only updates the hash; this already works and gets a regression test. The admin webhook is the global `ULPF_ALERT_WEBHOOK_URL` in `.env`, not stored on the account, so nothing webhook-related is left behind.
+  - Reject `ADMIN` on `/v1/onboard/**` in `SpringSecurity` (`hasAnyRole("USER","VENDOR")`), and promote to `VENDOR` during onboarding approval only when the owner is currently `USER` (backup). Note this changes the documented API (`API_SPECIFICATION.md` lists these endpoints as `VENDOR`/`ADMIN`); to be confirmed in the plan, §7.
+  - Tests first: new `AdminUserSeederTest` (real in-memory SQLite), a security-chain test `OnboardingSecurityTest`, and two additions to `OnboardingServiceTest`.
+- **Design Considerations**:
+  - Ensure the configured admin first, remove last: there is never a moment without an admin, and the step is idempotent.
+  - Databases that already hold several admins will remove (or lock) the extra ones on the first start after upgrade. Deletion is not reversible.
+  - Not covered here: a removed admin's existing login token stays valid as admin for up to 24 h (`JwtFilter` trusts the token's role claim). The fix is a short-lived cached role check in `JwtFilter`, which the Grafana plan's `validate-grafana` also needs; proposed as a separate follow-up item.
+
+### 12. Metric-Based Alerts for Gaps ULPF Cannot Raise Itself (follow-up to item 7)
+- **Depends on**: item 7 (Prometheus + Grafana) being live.
+- **Problem**: ULPF alerts on events it sees (`AlertDispatcher`: in-app, `ULPF_ALERT_WEBHOOK_URL`, vendor webhooks), but four situations are invisible from inside the app:
+  - *ULPF is down or hung*: the app's own alerting dies with it.
+  - *A source goes silent*: no code detects "no events from this source for N minutes".
+  - *Buffer queues keep growing*: the raw and canonical queues in `ClickHouseIngestionRepository` are unbounded, with no alert on their size.
+  - *Webhook sender drops alerts* when its pool is full (only a counter exists).
+- **Requirement**:
+  - Alert rules for the four cases above, evaluated outside core-engine (Prometheus `up == 0` for the first; the metrics from item 7 for the rest).
+  - Deliver to the existing admin webhook (`ULPF_ALERT_WEBHOOK_URL`), so there is one contact list. Check whether Grafana's built-in alerting (no Alertmanager) is enough before adding more containers.
+  - Air-gapped: webhook or internal SMTP only, no cloud notification channels.
+- **Design Considerations**:
+  - Avoid duplicating alerts ULPF already sends (insert failure, drift, webhook failing); these rules must only cover what the app cannot see.
+  - Grafana's webhook payload differs from ULPF's signed payload; decide whether the receiver tolerates both.
+  - A whole-host failure cannot be alerted from the same host; document it as a known limit.
