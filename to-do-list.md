@@ -162,20 +162,21 @@
   - Interacts with item 5 (domain-level tables) through the target-table recommendation, and supersedes part of item 8.
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
 
-### 11. Single-Admin Enforcement: Demote Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
+### 11. Single-Admin Enforcement: Remove Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
 - **Plan**: [`docs/plans/2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Status: Approved 2026-10-31).
 - **Priority**: Must be completed **before item 7** (Prometheus + Grafana).
 - **Problem**: ULPF supports one admin, defined by `ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`, but nothing enforces it:
   - `AdminUserSeeder` only creates or updates the configured account. After changing `ULPF_ADMIN_USERNAME`, the previous admin stays `ADMIN` with its old password and keeps receiving system alerts.
   - `/v1/onboard/**` has no role check (any logged-in user passes; the UI only hides the page from admins). An admin token can file a request for its own account (reproduced: 201), and `OnboardingService.processAdminDecision` then sets the owner to `VENDOR` without checking their current role, turning the admin into a `VENDOR` until the next restart. `AuthService` has the right guard (`role == USER`); this call does not.
 - **Requirement**:
-  - After the configured admin is created or confirmed at startup, demote every other `ADMIN` row to `USER` (never delete: other tables reference users) and log a `WARN` per demotion. Blank `.env` values demote nobody.
+  - After the configured admin is created or confirmed at startup, delete every other `ADMIN` account together with its notifications (one transaction) and log a `WARN` per removal. Exception: if the old account owns vendor data, lock it instead (role `USER`, unusable password) so no vendor data is lost. Blank `.env` values change nobody.
+  - Same username with a new password (password reset) keeps the account and only updates the hash; this already works and gets a regression test. The admin webhook is the global `ULPF_ALERT_WEBHOOK_URL` in `.env`, not stored on the account, so nothing webhook-related is left behind.
   - Reject `ADMIN` on `/v1/onboard/**` in `SpringSecurity` (`hasAnyRole("USER","VENDOR")`), and promote to `VENDOR` during onboarding approval only when the owner is currently `USER` (backup). Note this changes the documented API (`API_SPECIFICATION.md` lists these endpoints as `VENDOR`/`ADMIN`); to be confirmed in the plan, §7.
   - Tests first: new `AdminUserSeederTest` (real in-memory SQLite), a security-chain test `OnboardingSecurityTest`, and two additions to `OnboardingServiceTest`.
 - **Design Considerations**:
-  - Ensure the configured admin first, demote last: there is never a moment without an admin, and the step is idempotent.
-  - Databases that already hold several admins will demote the extra ones on the first start after upgrade.
-  - Not covered here: a demoted admin's existing login token stays valid as admin for up to 24 h (`JwtFilter` trusts the token's role claim). The fix is a short-lived cached role check in `JwtFilter`, which the Grafana plan's `validate-grafana` also needs; proposed as a separate follow-up item.
+  - Ensure the configured admin first, remove last: there is never a moment without an admin, and the step is idempotent.
+  - Databases that already hold several admins will remove (or lock) the extra ones on the first start after upgrade. Deletion is not reversible.
+  - Not covered here: a removed admin's existing login token stays valid as admin for up to 24 h (`JwtFilter` trusts the token's role claim). The fix is a short-lived cached role check in `JwtFilter`, which the Grafana plan's `validate-grafana` also needs; proposed as a separate follow-up item.
 
 ### 12. Metric-Based Alerts for Gaps ULPF Cannot Raise Itself (follow-up to item 7)
 - **Depends on**: item 7 (Prometheus + Grafana) being live.
