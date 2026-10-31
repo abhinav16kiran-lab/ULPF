@@ -163,7 +163,7 @@
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
 
 ### 11. Single-Admin Enforcement: Demote Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
-- **Plan**: [`docs/plans/2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Status: Draft, awaiting approval).
+- **Plan**: [`docs/plans/2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Status: Approved 2026-10-31).
 - **Priority**: Must be completed **before item 7** (Prometheus + Grafana).
 - **Problem**: ULPF supports one admin, defined by `ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`, but nothing enforces it:
   - `AdminUserSeeder` only creates or updates the configured account. After changing `ULPF_ADMIN_USERNAME`, the previous admin stays `ADMIN` with its old password and keeps receiving system alerts.
