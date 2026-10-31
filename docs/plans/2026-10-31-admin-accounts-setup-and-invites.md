@@ -206,7 +206,7 @@ Config and docs:
 
 ## 6. Steps
 
-- [ ] 0. Frontend test framework (Vitest + RTL + jsdom, pinned dev dependencies, `npm test` in CI), own commit
+- [x] 0. Frontend test framework (2026-10-31): Vitest 3.2.7 (last line supporting Vite 5), jsdom 26.1.0 and @testing-library/react 16.3.3 + dom 10.4.2, exact-pinned dev dependencies; config in `vite.config.js`; `npm test` added to CI. jest-dom and user-event left out (jest-dom 6.10+ needs Node 22, CI and the build image use Node 20; RTL's built-ins are enough). First test `ProtectedRoute.test.jsx` (3 passing; a deliberately broken copy failed as expected). Production bundle unchanged
 - [ ] 1. Backend red tests (§4); confirm each fails for the stated reason
 - [ ] 2. Migration + repositories
 - [ ] 3. Setup service and endpoints; remove `AdminUserSeeder`

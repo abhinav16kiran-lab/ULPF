@@ -82,8 +82,8 @@ Rules:
 - Baseline when this file was written: **320 tests, 0 failures** (~30 s).
 
 ### Frontend
-- **There is currently no test framework** in `frontend/` (no Vitest/Jest, no linter). Today the only check is `npm run build`.
-- For frontend work under TDD, the first step of the plan must be to propose adding Vitest + React Testing Library (get approval, then do it as its own change). Don't silently add dependencies.
+- **Vitest + React Testing Library + jsdom** (exact-pinned dev dependencies; config in `vite.config.js`). Tests live next to the code as `X.test.jsx`. Run `npm test`; CI runs it before `npm run build`. No linter yet.
+- Use RTL's built-in queries and `fireEvent` (no jest-dom/user-event yet). Don't silently add dependencies.
 
 ## 5. Commands
 
@@ -99,7 +99,8 @@ Frontend (run from `frontend/`):
 ```bash
 npm ci
 npm run dev       # Vite dev server
-npm run build     # production build; currently the only automated frontend check
+npm test          # Vitest, single run
+npm run build     # production build
 ```
 
 Whole platform (repo root):
