@@ -1,15 +1,17 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import client from "../api/client";
+import { getSetupStatus } from "../api/admins";
 import UlpfLogo from "../components/UlpfLogo";
 import "./AuthLayout.css";
 
 function LoginPage() {
   const navigate = useNavigate();
+  const notice = useLocation().state?.notice;
 
   // Form & Role State
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("Admin@12345");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState("ADMIN");
   const [rememberMe, setRememberMe] = useState(true);
 
@@ -19,6 +21,19 @@ function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const ROLES = ["ADMIN", "VENDOR", "USER"];
+
+  // A fresh install has no super-admin yet: send the operator to the one-time setup screen.
+  useEffect(() => {
+    let active = true;
+    getSetupStatus()
+      .then((status) => {
+        if (active && status.setupRequired) navigate("/setup", { replace: true });
+      })
+      .catch(() => {}); // the login form still works; a real outage shows when signing in
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -56,6 +71,7 @@ function LoginPage() {
       localStorage.setItem("token", response.data.token);
       localStorage.setItem("username", response.data.username);
       localStorage.setItem("role", response.data.role);
+      localStorage.setItem("superAdmin", String(response.data.superAdmin === true));
 
       // Navigate based on assigned role
       if (response.data.role === "ADMIN") {
@@ -123,6 +139,8 @@ function LoginPage() {
             </svg>
             Note: Platform is currently in active development phase.
           </div>
+
+          {notice && <div className="auth-inline-notice">{notice}</div>}
 
           {/* Error Notice if any */}
           {error && (

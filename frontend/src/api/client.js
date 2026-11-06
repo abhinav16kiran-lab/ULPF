@@ -4,10 +4,13 @@ const client = axios.create({
   baseURL: import.meta.env.VITE_CORE_ENGINE_API_URL,
 });
 
+// Endpoints that need no session: no token is sent, and a 401 from them (wrong setup credentials) keeps the session.
+const PUBLIC_ENDPOINTS = ["/v1/login", "/v1/signup", "/v1/setup", "/v1/links/"];
+const isPublicEndpoint = (url) => Boolean(url) && PUBLIC_ENDPOINTS.some((p) => url.includes(p));
+
 // Attach JWT from localStorage on protected outgoing requests
 client.interceptors.request.use((config) => {
-  const isAuthEndpoint =
-    config.url && (config.url.includes("/v1/login") || config.url.includes("/v1/signup"));
+  const isAuthEndpoint = isPublicEndpoint(config.url);
 
   const token = localStorage.getItem("token");
   if (token && token !== "undefined" && token !== "null" && !isAuthEndpoint) {
@@ -25,13 +28,12 @@ client.interceptors.response.use(
       const data = error.response.data;
 
       // Clear stale credentials if a protected request fails with 401 Unauthorized
-      const isAuthEndpoint =
-        error.config?.url &&
-        (error.config.url.includes("/v1/login") || error.config.url.includes("/v1/signup"));
+      const isAuthEndpoint = isPublicEndpoint(error.config?.url);
       if (status === 401 && !isAuthEndpoint) {
         localStorage.removeItem("token");
         localStorage.removeItem("username");
         localStorage.removeItem("role");
+        localStorage.removeItem("superAdmin");
       }
 
       // Check if response data is an HTML page (like Nginx 502/504 error page)

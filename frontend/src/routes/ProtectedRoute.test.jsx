@@ -17,6 +17,14 @@ function renderAt(path, allowedRoles) {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/admin/admins"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]} requireSuperAdmin>
+              <p>admins page</p>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </MemoryRouter>
   );
@@ -42,5 +50,20 @@ describe("ProtectedRoute", () => {
     localStorage.setItem("role", "ADMIN");
     renderAt("/admin", ["ADMIN"]);
     expect(screen.getByText("admin page")).toBeTruthy();
+  });
+
+  it("sends a regular admin away from super-admin pages", () => {
+    localStorage.setItem("token", "t");
+    localStorage.setItem("role", "ADMIN");
+    renderAt("/admin/admins");
+    expect(screen.getByText("admin page")).toBeTruthy();
+  });
+
+  it("shows super-admin pages to the super-admin", () => {
+    localStorage.setItem("token", "t");
+    localStorage.setItem("role", "ADMIN");
+    localStorage.setItem("superAdmin", "true");
+    renderAt("/admin/admins");
+    expect(screen.getByText("admins page")).toBeTruthy();
   });
 });
