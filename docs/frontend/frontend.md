@@ -82,6 +82,7 @@ Client-side authorization is enforced by `ProtectedRoute.jsx`:
 * Checks user role against `allowedRoles`. If unauthorized, redirects user safely.
 * With `requireSuperAdmin`, also needs `localStorage.superAdmin === "true"` (set at login from the response's `superAdmin`), else redirects to `/admin`. The navbar shows **Admins** only to the super-admin. These are display decisions only; the server enforces every rule.
 * Admin account calls live in `src/api/admins.js`, together with the admin password rule (12-100 characters) mirrored from the server so forms can say it before sending. Screens reuse `AuthLayout.css` (setup, link) and `AdminDashboardPage.css` (Admins), with small additions at the end of each file.
+* `components/AuthShowcase.jsx` is the animated falling-log panel on the right of every auth screen (login, sign-up, setup, link). Why one component: the panel was copied line for line into Login and Sign-up, and the first version of Setup and Link left it out. They looked like a different product, and on a fresh install the login page redirects straight to Setup, so the panel seemed to have disappeared. Each of those pages has a test that the panel is shown. Below 1024 px it is hidden on purpose (`AuthLayout.css`).
 * **Axios Request Interceptor (`src/api/client.js`)**:
   * Automatically injects `Authorization: Bearer <token>` on protected API endpoints.
   * Explicitly bypasses public endpoints (`/v1/login`, `/v1/signup`, `/v1/setup`, `/v1/links/`) so stale credentials from prior sessions are never transmitted.

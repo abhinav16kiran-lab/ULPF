@@ -78,6 +78,12 @@ describe("SetupPage", () => {
     });
   });
 
+  it("shows the same falling-log showcase as login", async () => {
+    renderSetup();
+    await screen.findByLabelText(/setup username/i);
+    expect(screen.getByText("ULPF Real-Time Ingestion")).toBeTruthy();
+  });
+
   it("goes to login when setup is already done", async () => {
     vi.mocked(api.getSetupStatus).mockResolvedValue({ setupRequired: false });
     renderSetup();

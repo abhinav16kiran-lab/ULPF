@@ -54,6 +54,12 @@ describe("LoginPage", () => {
     expect(localStorage.getItem("superAdmin")).toBe("true");
   });
 
+  it("keeps the falling-log showcase panel", async () => {
+    vi.mocked(client.get).mockResolvedValue({ data: { setupRequired: false } });
+    renderLogin();
+    expect(screen.getByText("ULPF Real-Time Ingestion")).toBeTruthy();
+  });
+
   it("shows the notice it was sent with", async () => {
     vi.mocked(client.get).mockResolvedValue({ data: { setupRequired: false } });
     renderLogin({ notice: "Super-admin created. Sign in with your new account." });

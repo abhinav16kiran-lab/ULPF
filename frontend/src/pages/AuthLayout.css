@@ -683,12 +683,7 @@ body, html {
   }
 }
 
-/* ---- Single-card pages: one-time setup and admin links (no showcase panel) ---- */
-.auth-single-card {
-  max-width: 440px;
-  width: 100%;
-}
-
+/* ---- One-time setup and admin link pages (same split layout as login) ---- */
 .auth-step-label {
   font-size: 12px;
   font-weight: 700;

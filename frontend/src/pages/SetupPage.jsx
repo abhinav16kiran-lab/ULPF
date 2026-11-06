@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { getSetupStatus, completeSetup, adminPasswordProblem, errorMessage, ADMIN_PASSWORD_MIN } from "../api/admins";
 import AuthField from "../components/AuthField";
 import UlpfLogo from "../components/UlpfLogo";
+import AuthShowcase from "../components/AuthShowcase";
 import "./AuthLayout.css";
 
 /**
@@ -69,47 +70,50 @@ function SetupPage() {
 
   return (
     <div className="auth-page-wrapper">
-      <div className="auth-card auth-single-card">
-        <div className="auth-brand-header">
-          <UlpfLogo className="h-9 w-auto" />
-        </div>
+      <div className="auth-split-container">
+        <div className="auth-card">
+          <div className="auth-brand-header">
+            <UlpfLogo className="h-9 w-auto" />
+          </div>
 
-        {step === 1 ? (
-          <form className="auth-form" onSubmit={continueToAccount}>
-            <div className="auth-header-text">
-              <p className="auth-step-label">Step 1 of 2</p>
-              <h2>Set up ULPF</h2>
-              <p>Enter the setup credentials from the server's .env file. You need them only once.</p>
-            </div>
-            {error && <div className="auth-inline-error">{error}</div>}
-            <AuthField id="setup-username" label="Setup username" value={setupUsername} onChange={setSetupUsername}
-              autoComplete="off" autoFocus />
-            <AuthField id="setup-password" label="Setup password" type="password" value={setupPassword}
-              onChange={setSetupPassword} autoComplete="off" />
-            <button type="submit" className="btn-primary-action">Continue</button>
-          </form>
-        ) : (
-          <form className="auth-form" onSubmit={createSuperAdmin}>
-            <div className="auth-header-text">
-              <p className="auth-step-label">Step 2 of 2</p>
-              <h2>Create your super-admin</h2>
-              <p>You'll sign in with this account from now on. Only the super-admin can add or remove admins.</p>
-            </div>
-            {error && <div className="auth-inline-error">{error}</div>}
-            <AuthField id="setup-new-username" label="Username" value={username} onChange={setUsername}
-              autoComplete="username" autoFocus maxLength={30} />
-            <AuthField id="setup-new-password" label="Password" type="password" value={password} onChange={setPassword}
-              autoComplete="new-password" hint={`At least ${ADMIN_PASSWORD_MIN} characters.`} />
-            <AuthField id="setup-confirm-password" label="Confirm password" type="password" value={confirmPassword}
-              onChange={setConfirmPassword} autoComplete="new-password" />
-            <button type="submit" className="btn-primary-action" disabled={saving}>
-              {saving ? "Creating…" : "Create super-admin"}
-            </button>
-            <button type="button" className="auth-text-button" onClick={() => { setError(null); setStep(1); }}>
-              Back
-            </button>
-          </form>
-        )}
+          {step === 1 ? (
+            <form className="auth-form" onSubmit={continueToAccount}>
+              <div className="auth-header-text">
+                <p className="auth-step-label">Step 1 of 2</p>
+                <h2>Set up ULPF</h2>
+                <p>Enter the setup credentials from the server's .env file. You need them only once.</p>
+              </div>
+              {error && <div className="auth-inline-error">{error}</div>}
+              <AuthField id="setup-username" label="Setup username" value={setupUsername} onChange={setSetupUsername}
+                autoComplete="off" autoFocus />
+              <AuthField id="setup-password" label="Setup password" type="password" value={setupPassword}
+                onChange={setSetupPassword} autoComplete="off" />
+              <button type="submit" className="btn-primary-action">Continue</button>
+            </form>
+          ) : (
+            <form className="auth-form" onSubmit={createSuperAdmin}>
+              <div className="auth-header-text">
+                <p className="auth-step-label">Step 2 of 2</p>
+                <h2>Create your super-admin</h2>
+                <p>You'll sign in with this account from now on. Only the super-admin can add or remove admins.</p>
+              </div>
+              {error && <div className="auth-inline-error">{error}</div>}
+              <AuthField id="setup-new-username" label="Username" value={username} onChange={setUsername}
+                autoComplete="username" autoFocus maxLength={30} />
+              <AuthField id="setup-new-password" label="Password" type="password" value={password} onChange={setPassword}
+                autoComplete="new-password" hint={`At least ${ADMIN_PASSWORD_MIN} characters.`} />
+              <AuthField id="setup-confirm-password" label="Confirm password" type="password" value={confirmPassword}
+                onChange={setConfirmPassword} autoComplete="new-password" />
+              <button type="submit" className="btn-primary-action" disabled={saving}>
+                {saving ? "Creating…" : "Create super-admin"}
+              </button>
+              <button type="button" className="auth-text-button" onClick={() => { setError(null); setStep(1); }}>
+                Back
+              </button>
+            </form>
+          )}
+        </div>
+        <AuthShowcase />
       </div>
     </div>
   );
