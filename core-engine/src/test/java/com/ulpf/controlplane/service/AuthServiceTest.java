@@ -47,7 +47,7 @@ class AuthServiceTest {
         User user = new User("10", "johndoe", "John Doe", "hashedpass", Role.USER, null);
         when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("pass123", "hashedpass")).thenReturn(true);
-        when(jwtUtil.generateToken("10", "johndoe", "USER")).thenReturn("jwt-token-user");
+        when(jwtUtil.generateToken(eq("10"), eq("johndoe"), eq("USER"), anyString())).thenReturn("jwt-token-user");
 
         AuthService.LoginResult result = authService.login("johndoe", "pass123", "USER");
 
@@ -63,7 +63,7 @@ class AuthServiceTest {
         User vendorUser = new User("11", "promotedvendor", "Vendor One", "hashedpass", Role.VENDOR, null);
         when(userRepository.findByUsername("promotedvendor")).thenReturn(Optional.of(vendorUser));
         when(passwordEncoder.matches("pass123", "hashedpass")).thenReturn(true);
-        when(jwtUtil.generateToken("11", "promotedvendor", "VENDOR")).thenReturn("jwt-token-vendor");
+        when(jwtUtil.generateToken(eq("11"), eq("promotedvendor"), eq("VENDOR"), anyString())).thenReturn("jwt-token-vendor");
 
         AuthService.LoginResult result = authService.login("promotedvendor", "pass123", "USER");
 
@@ -78,7 +78,7 @@ class AuthServiceTest {
         User adminUser = new User("1", "admin", "System Admin", "hashedpass", Role.ADMIN, null);
         when(userRepository.findByUsername("admin")).thenReturn(Optional.of(adminUser));
         when(passwordEncoder.matches("pass123", "hashedpass")).thenReturn(true);
-        when(jwtUtil.generateToken("1", "admin", "ADMIN")).thenReturn("jwt-token-admin");
+        when(jwtUtil.generateToken(eq("1"), eq("admin"), eq("ADMIN"), anyString())).thenReturn("jwt-token-admin");
 
         AuthService.LoginResult result = authService.login("admin", "pass123", "USER");
 

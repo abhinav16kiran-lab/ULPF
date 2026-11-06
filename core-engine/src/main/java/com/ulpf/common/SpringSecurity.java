@@ -37,7 +37,12 @@ public class SpringSecurity {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers("/v1/login", "/v1/signup", "/v1/events", "/v1/health", "/error", "/actuator/**").permitAll()
+                .requestMatchers("/v1/setup", "/v1/setup/**", "/v1/links/**").permitAll()
+                // Order matters: the first matching rule wins, so the narrower super-admin rule comes first.
+                .requestMatchers("/v1/admin/admins", "/v1/admin/admins/**").hasRole("SUPER_ADMIN")
                 .requestMatchers("/v1/admin/**", "/v1/analytics/**").hasRole("ADMIN")
+                // Onboarding is for USER and VENDOR accounts only: an admin must never become a vendor.
+                .requestMatchers("/v1/onboard/**").hasAnyRole("USER", "VENDOR")
                 .anyRequest().authenticated()
             );
 

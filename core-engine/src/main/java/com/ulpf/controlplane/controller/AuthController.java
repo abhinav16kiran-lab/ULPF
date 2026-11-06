@@ -35,7 +35,8 @@ public class AuthController {
             return ResponseEntity.ok(Map.of(
                     "username", result.username(),
                     "role", result.role(),
-                    "token", result.token()
+                    "token", result.token(),
+                    "superAdmin", result.superAdmin()
             ));
         } catch (IllegalArgumentException e) {
             return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);

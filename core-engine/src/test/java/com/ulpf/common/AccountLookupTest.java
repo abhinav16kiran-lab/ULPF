@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -49,6 +50,7 @@ class AccountLookupTest {
     @Test
     void repeatedLookupsReadTheDatabaseOnce() {
         User user = users.save(new User(null, "plain_user", "plain", encoder.encode("plain-pass"), Role.USER, null));
+        clearInvocations(users); // save() reads the row back once; count only the lookups' reads
 
         lookup.find(user.userId());
         lookup.find(user.userId());
