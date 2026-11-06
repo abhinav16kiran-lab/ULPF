@@ -12,6 +12,11 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 
+/**
+ * Creates and verifies the HMAC-signed login tokens (24 h): subject = username, claims {@code id}, {@code role}
+ * and {@code pwv} (password fingerprint). {@link JwtFilter} trusts only the id and {@code pwv}; role and
+ * super-admin status are read from the database.
+ */
 @Component
 public class JwtUtil {
 

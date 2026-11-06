@@ -9,7 +9,6 @@ import com.ulpf.testsupport.TestSqlite;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -118,11 +117,15 @@ class SetupServiceTest {
         assertEquals(hashBefore, superAdmin.passwordHash());
     }
 
+    // "Only one super-admin, even when two setups race" is a database guarantee, tested in UserRepositoryTest.
+
     @Test
-    void theDatabaseAllowsOnlyOneSuperAdmin() {
-        users.createSuperAdmin("first_root", "Super-admin", encoder.encode(NEW_PASS));
-        assertThrows(DataIntegrityViolationException.class,
-                () -> users.createSuperAdmin("second_root", "Super-admin", encoder.encode(NEW_PASS)),
-                "two setups racing must not both succeed");
+    void aUsernameThatBelongsToAnotherAccountIsRefused() {
+        users.save(new User(null, NEW_USER, "Someone", encoder.encode("user-pass"), Role.USER, null));
+
+        assertRefused(HttpStatus.CONFLICT, () -> setup.completeSetup(valid()));
+
+        assertTrue(setup.isSetupRequired(), "setup must still be possible with another username");
+        assertEquals(Role.USER, users.findByUsername(NEW_USER).orElseThrow().role(), "the other account is untouched");
     }
 }

@@ -13,6 +13,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * Public {@code POST /v1/login} (returns token, username, role and the {@code superAdmin} display hint) and
+ * {@code POST /v1/signup} (creates a USER account).
+ */
 @RestController
 @RequestMapping("/v1")
 public class AuthController {

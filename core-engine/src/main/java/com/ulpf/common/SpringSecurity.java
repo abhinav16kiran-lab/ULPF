@@ -17,6 +17,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 
+/**
+ * HTTP security: stateless JWT sessions ({@link JwtFilter}) and the access rules for every endpoint. Public:
+ * login, sign-up, event ingestion (API key), health, one-time setup and admin links. {@code /v1/admin/admins/**}
+ * is for the super-admin, the rest of {@code /v1/admin/**} and analytics for admins, onboarding for USER and VENDOR.
+ */
 @Configuration
 @EnableMethodSecurity
 public class SpringSecurity {

@@ -11,6 +11,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 
+/**
+ * Sign-in and public sign-up. Login checks the BCrypt password, promotes a USER with an approved onboarding request
+ * to VENDOR, and issues a 24 h JWT carrying the password fingerprint ({@code pwv}). Sign-up creates USER accounts
+ * only; admins come from the one-time setup ({@link SetupService}) and invite links ({@link AdminLinkService}).
+ */
 @Service
 public class AuthService {
 

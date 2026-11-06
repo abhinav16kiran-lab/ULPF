@@ -40,6 +40,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Vendor onboarding: USER/VENDOR accounts submit vendor, source and sample logs; the mapping engine proposes field
+ * mappings; an admin reviews and approves or rejects. Approval provisions the ClickHouse table, activates the
+ * source and API key, and promotes the submitter from USER to VENDOR (never changes an admin's role).
+ */
 @Service
 public class OnboardingService {
 

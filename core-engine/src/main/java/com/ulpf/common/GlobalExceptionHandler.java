@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
+/**
+ * Maps exceptions thrown by controllers to JSON error responses ({@code {"error": "..."}}) with a fitting status.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
