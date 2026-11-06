@@ -121,7 +121,8 @@ CI (`.github/workflows/`) runs backend tests and the frontend build on push/PR; 
 - `docs/plans/` — approved implementation plans (see [§3](#3-plan-first-workflow))
 - `to-do-list.md` — backlog
 
-When you change behaviour, endpoints, schema or config, update the matching doc in the same change. If you find a doc that contradicts the code, fix it or flag it; don't repeat the wrong claim.
+When you change behaviour, endpoints, schema or config, update the matching doc in the same change.
+Docs record the **why**, not only the what: for every design decision, write the reason and the alternative you rejected, in the lasting doc (usually `docs/ARCH/ARCHITECTURE.md`) as well as in the plan. A plan is a dated work log; nobody reads it to understand the system later. If you find a doc that contradicts the code, fix it or flag it; don't repeat the wrong claim.
 
 ## 7. Conventions
 
