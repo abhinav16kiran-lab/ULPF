@@ -52,7 +52,8 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 ## 3. Core Architectural Modules
 
 ### 3.1 Control Plane
-* **User Authentication & Role Governance**: Enforces JWT Bearer token authentication supporting `ADMIN`, `VENDOR`, and `USER` roles.
+* **User Authentication & Role Governance**: Enforces JWT Bearer token authentication supporting `ADMIN`, `VENDOR`, and `USER` roles. `JwtFilter` checks every token against the live account (cached 60 s, `AccountLookup`): role and super-admin status come from SQLite, and a password change (`pwv` fingerprint claim) or revoke ends sessions on the next request.
+* **Admin Accounts**: No account is created from `.env`. The first visit to `/setup` asks for the one-time setup credentials (`ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`) and creates the single **super-admin** (`users.is_super_admin`, unique index). The super-admin invites regular admins and resets their passwords with single-use 12 h links (`admin_links`, SHA-256 hashed), and revokes them (account deleted). A lost super-admin password is reset only on the server (`startup/reset-super-admin.sh`, `ResetSuperAdminCommand`). Admin passwords are 12-100 characters. Onboarding is closed to admins, so an admin can never become a vendor. Plan: `docs/plans/2026-10-31-admin-accounts-setup-and-invites.md`.
 * **Vendor & Log Source Management**: Manages vendor identities, log sources, and active API key credentials with microsecond RAM caching and 5-minute idle eviction.
 * **Onboarding Workflow**: Accepts sample log payloads and schema files, runs AI field discovery, and queues candidate mappings for admin review.
 

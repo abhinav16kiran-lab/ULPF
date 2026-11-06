@@ -163,6 +163,7 @@
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
 
 ### 11. Single-Admin Enforcement: Remove Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
+- **Status**: Implemented on branch `feature/single-admin-enforcement` (2026-11-06); waiting for the browser check on the real stack, then a PR.
 - **Plan**: [`docs/plans/2026-10-31-admin-accounts-setup-and-invites.md`](docs/plans/2026-10-31-admin-accounts-setup-and-invites.md) (Approved 2026-10-31). It replaces the earlier `.env`-based plan [`2026-10-29-single-admin-enforcement.md`](docs/plans/2026-10-29-single-admin-enforcement.md) (Superseded): `.env` holds one-time setup credentials; a super-admin is created on a setup screen and manages other admins through invite links, reset links and revoke. The requirement and design notes below describe the superseded approach; the plan is authoritative.
 - **Priority**: Must be completed **before item 7** (Prometheus + Grafana).
 - **Problem**: ULPF supports one admin, defined by `ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`, but nothing enforces it:
