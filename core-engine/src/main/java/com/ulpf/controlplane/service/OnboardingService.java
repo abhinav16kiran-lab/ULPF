@@ -40,6 +40,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Vendor onboarding: USER/VENDOR accounts submit vendor, source and sample logs; the mapping engine proposes field
+ * mappings; an admin reviews and approves or rejects. Approval provisions the ClickHouse table, activates the
+ * source and API key, and promotes the submitter from USER to VENDOR (never changes an admin's role).
+ */
 @Service
 public class OnboardingService {
 
@@ -379,7 +384,11 @@ public class OnboardingService {
                 // 2. Activate source, API key credentials, and upgrade user role ONLY after ClickHouse schema succeeds
                 sourceRepository.activateSource(req.sourceId());
                 credentialRepository.activateCredentialForSource(req.sourceId());
-                userRepository.updateUserRole(req.userId(), com.ulpf.controlplane.model.Role.VENDOR);
+                // Promote only a USER: an admin (or an existing vendor) keeps its role.
+                if (userRepository.findById(req.userId())
+                        .map(u -> u.role() == com.ulpf.controlplane.model.Role.USER).orElse(false)) {
+                    userRepository.updateUserRole(req.userId(), com.ulpf.controlplane.model.Role.VENDOR);
+                }
 
                 // 3. Mark request as APPROVED only after all credentials, roles, and schemas are active
                 onboardingRepository.updateRequestStatus(requestId, "APPROVED");

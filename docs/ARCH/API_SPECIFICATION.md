@@ -19,8 +19,21 @@
 | :--- | :--- | :--- | :--- |
 | `/v1/signup` | `POST` | Public | Register a new user account |
 | `/v1/login` | `POST` | Public | Authenticate user and issue JWT Bearer token |
-| `/v1/onboard/{username}` | `POST` | `VENDOR`/`ADMIN` | Submit sample log file and schema for AI field mapping |
-| `/v1/onboard/update` | `POST` | `VENDOR`/`ADMIN` | Update an existing log source mapping schema |
+| `/v1/setup/status` | `GET` | Public | `{"setupRequired": true}` until the super-admin exists |
+| `/v1/setup` | `POST` | Public (once) | One-time setup: `.env` setup credentials + new super-admin account |
+| `/v1/links/{token}` | `GET` | Public (token) | What an admin invite or reset link is for; `410` if unusable |
+| `/v1/links/{token}` | `POST` | Public (token) | Use the link: create a regular admin (invite) or set a new password (reset) |
+| `/v1/admin/admins` | `GET` | `SUPER_ADMIN` | List admin accounts (super-admin first) |
+| `/v1/admin/admins/invites` | `POST` | `SUPER_ADMIN` | Create an invite link (12 h, single use) |
+| `/v1/admin/admins/{userId}/reset-link` | `POST` | `SUPER_ADMIN` | Create a password reset link for a regular admin |
+| `/v1/admin/admins/{userId}` | `DELETE` | `SUPER_ADMIN` | Revoke (delete) a regular admin; their sessions end at once |
+| `/v1/admin/admins/links` | `GET` | `SUPER_ADMIN` | List pending invite and reset links |
+| `/v1/admin/admins/links/{linkId}` | `DELETE` | `SUPER_ADMIN` | Cancel a pending link |
+| `/v1/onboard/{username}` | `POST` | `USER`/`VENDOR` | Submit sample log file and schema for AI field mapping |
+| `/v1/onboard/update/{username}` | `POST` | `USER`/`VENDOR` | Update an existing log source mapping schema |
+| `/v1/onboard/withdraw/{requestId}` | `POST` | `USER`/`VENDOR` | Withdraw one of your onboarding requests |
+| `/v1/onboard/my-requests` | `GET` | `USER`/`VENDOR` | Your onboarding requests |
+| `/v1/onboard/my-sources` | `GET` | `USER`/`VENDOR` | Your log sources |
 | `/v1/admin/onboard` | `GET` | `ADMIN` | List all pending vendor onboarding requests |
 | `/v1/admin/onboard/{id}`| `PUT` | `ADMIN` | Approve or reject onboarding request candidate mapping |
 | `/v1/admin/clickhouse/schemas` | `GET` | `ADMIN` | Inspect active ClickHouse database and table schemas |
@@ -84,13 +97,58 @@ Authenticates credentials and returns a signed JWT token.
   {
     "token": "eyJhbGciOiJIUzI1NiJ9...",
     "username": "crowdstrike_admin",
-    "role": "ADMIN"
+    "role": "ADMIN",
+    "superAdmin": false
   }
   ```
+* `superAdmin` is a display hint for the UI. The server never trusts token claims for roles: on every request
+  `JwtFilter` looks the account up (cached 60 s) and takes the role and super-admin status from the database.
+  The token carries `pwv`, a fingerprint of the password hash, so a password reset or a revoke ends existing
+  sessions. Tokens without `pwv` (issued before this change) are rejected: sign in again once.
+
+---
+
+### 3.1a Admin Accounts (one-time setup, invite and reset links)
+
+There is exactly one **super-admin** (an `ADMIN` with `users.is_super_admin = 1`), created once through setup.
+Only the super-admin manages admins. Regular admins join through invite links. Links are 32 random bytes
+(base64url), valid for 12 hours and usable once. Only their SHA-256 hash is stored, and the raw token is returned
+once at creation. All refusals are `{"error": "..."}` with the status below.
+
+#### `POST /v1/setup`
+```json
+{ "setupUsername": "setup", "setupPassword": "<ULPF_ADMIN_PASSWORD from .env>",
+  "username": "root_admin", "password": "at-least-12-chars", "confirmPassword": "at-least-12-chars" }
+```
+`201 {"username": "root_admin"}`. Refused: `409` already done, or `.env` setup credentials blank (setup disabled);
+`401` wrong setup credentials; `400` invalid username, admin password not 12-100 characters, or passwords differ.
+
+#### `POST /v1/admin/admins/invites`
+Body `{"label": "for Ashitha"}` (optional, at most 100 characters) →
+`201 {"linkId": "...", "kind": "INVITE", "token": "...", "expiresAt": "..."}`. The UI shares `<origin>/link/<token>`.
+
+#### `POST /v1/admin/admins/{userId}/reset-link`
+`201`, same shape with `"kind": "RESET"`. `409` for the super-admin, whose password is reset only on the server
+with `./startup/reset-super-admin.sh`; `404` if the account is not an admin.
+
+#### `GET /v1/links/{token}` / `POST /v1/links/{token}`
+`GET` → `{"kind": "INVITE"|"RESET", "label": ..., "targetUsername": ..., "expiresAt": ...}`.
+`POST` body `{"username", "password", "confirmPassword"}` (`username` is used by invites only) → `204`.
+Unknown, expired, used and cancelled links all give `410`. A rejected form (`400`, or `409` for a taken
+username) does not use up the link.
+
+#### `DELETE /v1/admin/admins/{userId}`
+`204`: the account, its notifications and its links are deleted, and its sessions end on the next request.
+`409` for the super-admin, or for a legacy admin that vendor data still references; `404` if the account is not an admin.
+
+Non-super-admin callers get `403` on every `/v1/admin/admins/**` endpoint.
 
 ---
 
 ### 3.2 Vendor Log Source Onboarding
+
+Onboarding is for `USER` and `VENDOR` accounts only (`403` for admins). Approval promotes a `USER` to `VENDOR`
+and never changes an admin's role.
 
 #### `POST /v1/onboard/{username}`
 Uploads sample logs and schema files for AI field mapping discovery.

@@ -1,15 +1,18 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import client from "../api/client";
+import { getSetupStatus } from "../api/admins";
 import UlpfLogo from "../components/UlpfLogo";
+import AuthShowcase from "../components/AuthShowcase";
 import "./AuthLayout.css";
 
 function LoginPage() {
   const navigate = useNavigate();
+  const notice = useLocation().state?.notice;
 
   // Form & Role State
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("Admin@12345");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState("ADMIN");
   const [rememberMe, setRememberMe] = useState(true);
 
@@ -19,6 +22,19 @@ function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const ROLES = ["ADMIN", "VENDOR", "USER"];
+
+  // A fresh install has no super-admin yet: send the operator to the one-time setup screen.
+  useEffect(() => {
+    let active = true;
+    getSetupStatus()
+      .then((status) => {
+        if (active && status.setupRequired) navigate("/setup", { replace: true });
+      })
+      .catch(() => {}); // the login form still works; a real outage shows when signing in
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -56,6 +72,7 @@ function LoginPage() {
       localStorage.setItem("token", response.data.token);
       localStorage.setItem("username", response.data.username);
       localStorage.setItem("role", response.data.role);
+      localStorage.setItem("superAdmin", String(response.data.superAdmin === true));
 
       // Navigate based on assigned role
       if (response.data.role === "ADMIN") {
@@ -123,6 +140,8 @@ function LoginPage() {
             </svg>
             Note: Platform is currently in active development phase.
           </div>
+
+          {notice && <div className="auth-inline-notice">{notice}</div>}
 
           {/* Error Notice if any */}
           {error && (
@@ -299,70 +318,7 @@ function LoginPage() {
 
         </div>
 
-        {/* RIGHT COLUMN: CONTINUOUS WATERFALL LOG STREAM SHOWCASE */}
-        <div className="auth-visual-panel">
-          
-          {/* Top Pipeline Header */}
-          <div className="pipeline-header-bar">
-            <div className="pipeline-title">
-              <span className="pipeline-dot-active"></span>
-              ULPF Real-Time Ingestion
-            </div>
-            <div className="pipeline-status-badge">
-              LIVE PIPELINE
-            </div>
-          </div>
-
-          {/* Continuous Falling Log Stream Canvas */}
-          <div className="log-stream-canvas">
-            <div className="pipeline-guide-lines"></div>
-
-            <div className="falling-log-pill pill-green">
-              • GET /api/v1/health 200
-            </div>
-
-            <div className="falling-log-pill pill-cyan">
-              ⚡ CACHE_HIT edge-eu
-            </div>
-
-            <div className="falling-log-pill pill-amber">
-              TOPIC::orders.placed
-            </div>
-
-            <div className="falling-log-pill pill-rose">
-              ! AUTH_FAIL 401 · <span style={{ opacity: 0.7 }}>src: 192.168.4.12</span>
-            </div>
-
-            <div className="falling-log-pill pill-slate">
-              SQL_INDEX_HIT (0.4ms)
-            </div>
-
-            {/* Mascot Widget Ingestion Point */}
-            <div className="mascot-widget-card">
-              <div className="mascot-face">
-                <span className="mascot-eye"></span>
-                <span className="mascot-cheeks"></span>
-                <span className="mascot-eye"></span>
-              </div>
-              <div className="mascot-status-row">
-                <span className="mascot-label">ULPF.INGEST</span>
-                <span className="mascot-buffer">• Lossless Buffer</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Bottom Showcase Text */}
-          <div className="showcase-text-group">
-            <div className="showcase-heading">
-              Catching & organizing all your logs in real-time
-              <span className="star-accent">✪</span>
-            </div>
-            <p className="showcase-description">
-              Drop any unstructured payload, syslog, or trace. ULPF categorizes every single event with joyful zero-friction clarity.
-            </p>
-          </div>
-
-        </div>
+        <AuthShowcase />
 
       </div>
     </div>

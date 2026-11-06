@@ -487,3 +487,161 @@
   background-color: #0f766e;
   transform: translateY(-1px);
 }
+
+/* ---- Admins screen (AdminsPage.jsx): plain list rows, one teal primary action, 8px spacing grid ---- */
+.admins-section {
+  margin-bottom: 24px;
+}
+
+.admins-section-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 16px 0;
+}
+
+.admins-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.admins-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid #eef2f7;
+  flex-wrap: wrap;
+}
+
+.admins-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.admins-row-name {
+  font-weight: 600;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admins-row-meta {
+  font-size: 0.8125rem;
+  color: #64748b;
+  margin-top: 4px;
+}
+
+.admins-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admins-btn-primary,
+.admins-btn-secondary,
+.admins-btn-danger {
+  border-radius: 9999px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.admins-btn-primary {
+  background-color: #0d9488;
+  color: white;
+  border: 1px solid #0d9488;
+}
+
+.admins-btn-primary:hover:not(:disabled) {
+  background-color: #0f766e;
+}
+
+.admins-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.admins-btn-secondary {
+  background-color: white;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+
+.admins-btn-secondary:hover {
+  background-color: #f8fafc;
+}
+
+.admins-btn-danger {
+  background-color: white;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+}
+
+.admins-btn-danger:hover {
+  background-color: #fff1f2;
+}
+
+.admins-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.admins-input {
+  flex: 1;
+  min-width: 200px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  font-family: inherit;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.admins-input:focus {
+  border-color: #0d9488;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+}
+
+.admins-link-box {
+  background-color: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.admins-link-box-title {
+  font-weight: 700;
+  color: #115e59;
+  margin: 0 0 8px 0;
+}
+
+.admins-link-box .admins-inline-form {
+  margin-bottom: 8px;
+}
+
+.admins-hint {
+  font-size: 0.8125rem;
+  color: #64748b;
+  margin: 0;
+}
+
+.admins-error {
+  background-color: #ffe4e6;
+  color: #be123c;
+  border-radius: 12px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  margin-bottom: 16px;
+}

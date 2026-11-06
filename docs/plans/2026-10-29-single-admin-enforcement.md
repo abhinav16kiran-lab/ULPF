@@ -1,7 +1,7 @@
 # Plan: Single-admin enforcement (remove stale ADMIN accounts, protect ADMIN from role changes)
 
 - **Date:** 2026-10-29
-- **Status:** Approved (amended 2026-10-31 by the team lead: stale admins are **deleted**, not demoted; password-reset case made explicit; see §2 and §3)
+- **Status:** Superseded on 2026-10-31 by [`2026-10-31-admin-accounts-setup-and-invites.md`](2026-10-31-admin-accounts-setup-and-invites.md) (`.env` no longer defines the live admin; Problem B's fix carried over unchanged). Previously: Approved (amended 2026-10-31 by the team lead: stale admins are **deleted**, not demoted; password-reset case made explicit; see §2 and §3)
 - **Owner:** Adarsh
 - **Approved by / on:** Adarsh (team lead), 2026-10-31
 - **File name:** `docs/plans/2026-10-29-single-admin-enforcement.md`
@@ -114,7 +114,8 @@ Expected red tests: 7 (5 seeder rows: rename, exactly-one, two stale, vendor-own
 
 ## 6. Steps
 
-- [ ] 1. Write the tests above; run them; confirm the seven expected failures fail for the stated reason and the guard tests pass
+- [x] 1a. (2026-10-31) The 7 red tests written and run: all 7 fail by assertion for the stated reason (`AdminUserSeederTest` x5, `OnboardingServiceTest` x1, `OnboardingSecurityTest` x1; the admin's onboarding submit returned 201 again); the 9 existing `OnboardingServiceTest` tests still pass
+- [ ] 1b. Guard tests (green before the fix) and `UserRepositoryTest` tests for the new repository methods
 - [ ] 2. Repository methods (delete with notifications, ownership check, lock), then seeder: remove other admins after the configured admin is ensured
 - [ ] 3. `SpringSecurity`: `/v1/onboard/**` requires `USER` or `VENDOR`
 - [ ] 4. `OnboardingService`: promote to `VENDOR` only from `USER`

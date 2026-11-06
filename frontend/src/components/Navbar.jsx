@@ -6,6 +6,7 @@ function Navbar() {
   const location = useLocation();
   const role = localStorage.getItem("role") || "USER";
   const username = localStorage.getItem("username") || "";
+  const superAdmin = localStorage.getItem("superAdmin") === "true";
 
   function handleLogout() {
     localStorage.clear();
@@ -46,6 +47,11 @@ function Navbar() {
             {role === "ADMIN" && (
               <Link to="/analytics" className={navItemClass("/analytics")}>
                 <span>Analytics Console</span>
+              </Link>
+            )}
+            {superAdmin && (
+              <Link to="/admin/admins" className={navItemClass("/admin/admins")}>
+                <span>Admins</span>
               </Link>
             )}
             <Link to="/integrity" className={navItemClass("/integrity")}>

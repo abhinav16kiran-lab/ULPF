@@ -82,8 +82,8 @@ Rules:
 - Baseline when this file was written: **320 tests, 0 failures** (~30 s).
 
 ### Frontend
-- **There is currently no test framework** in `frontend/` (no Vitest/Jest, no linter). Today the only check is `npm run build`.
-- For frontend work under TDD, the first step of the plan must be to propose adding Vitest + React Testing Library (get approval, then do it as its own change). Don't silently add dependencies.
+- **Vitest + React Testing Library + jsdom** (exact-pinned dev dependencies; config in `vite.config.js`). Tests live next to the code as `X.test.jsx`. Run `npm test`; CI runs it before `npm run build`. No linter yet.
+- Use RTL's built-in queries and `fireEvent` (no jest-dom/user-event yet). Don't silently add dependencies.
 
 ## 5. Commands
 
@@ -99,7 +99,8 @@ Frontend (run from `frontend/`):
 ```bash
 npm ci
 npm run dev       # Vite dev server
-npm run build     # production build; currently the only automated frontend check
+npm test          # Vitest, single run
+npm run build     # production build
 ```
 
 Whole platform (repo root):
@@ -120,7 +121,8 @@ CI (`.github/workflows/`) runs backend tests and the frontend build on push/PR; 
 - `docs/plans/` — approved implementation plans (see [§3](#3-plan-first-workflow))
 - `to-do-list.md` — backlog
 
-When you change behaviour, endpoints, schema or config, update the matching doc in the same change. If you find a doc that contradicts the code, fix it or flag it; don't repeat the wrong claim.
+When you change behaviour, endpoints, schema or config, update the matching doc in the same change.
+Docs record the **why**, not only the what: for every design decision, write the reason and the alternative you rejected, in the lasting doc (usually `docs/ARCH/ARCHITECTURE.md`) as well as in the plan. A plan is a dated work log; nobody reads it to understand the system later. If you find a doc that contradicts the code, fix it or flag it; don't repeat the wrong claim.
 
 ## 7. Conventions
 

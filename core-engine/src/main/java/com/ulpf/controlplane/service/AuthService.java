@@ -1,5 +1,6 @@
 package com.ulpf.controlplane.service;
 
+import com.ulpf.common.AccountLookup;
 import com.ulpf.common.JwtUtil;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
@@ -10,6 +11,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 
+/**
+ * Sign-in and public sign-up. Login checks the BCrypt password, promotes a USER with an approved onboarding request
+ * to VENDOR, and issues a 24 h JWT carrying the password fingerprint ({@code pwv}). Sign-up creates USER accounts
+ * only; admins come from the one-time setup ({@link SetupService}) and invite links ({@link AdminLinkService}).
+ */
 @Service
 public class AuthService {
 
@@ -32,7 +38,8 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
     }
 
-    public record LoginResult(String username, String role, String token) {}
+    /** {@code superAdmin} is a display hint for the UI; the server checks the database flag on every request. */
+    public record LoginResult(String username, String role, String token, boolean superAdmin) {}
 
     public LoginResult login(String username, String password, String requestedRole) {
         if (username == null || username.trim().length() < 3 || username.trim().length() > 30) {
@@ -74,9 +81,9 @@ public class AuthService {
         }
 
         String userRoleStr = user.role().name();
-        String token = jwtUtil.generateToken(user.userId(), user.username(), userRoleStr);
+        String token = jwtUtil.generateToken(user.userId(), user.username(), userRoleStr, AccountLookup.fingerprint(user.passwordHash()));
 
-        return new LoginResult(user.username(), userRoleStr, token);
+        return new LoginResult(user.username(), userRoleStr, token, userRepository.isSuperAdmin(user.userId()));
     }
 
     public void signUp(String name, String username, String password, String confirmPassword) {

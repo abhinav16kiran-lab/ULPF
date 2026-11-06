@@ -13,6 +13,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * Public {@code POST /v1/login} (returns token, username, role and the {@code superAdmin} display hint) and
+ * {@code POST /v1/signup} (creates a USER account).
+ */
 @RestController
 @RequestMapping("/v1")
 public class AuthController {
@@ -35,7 +39,8 @@ public class AuthController {
             return ResponseEntity.ok(Map.of(
                     "username", result.username(),
                     "role", result.role(),
-                    "token", result.token()
+                    "token", result.token(),
+                    "superAdmin", result.superAdmin()
             ));
         } catch (IllegalArgumentException e) {
             return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);

@@ -10,47 +10,33 @@ echo "Starting ULPF Platform Environment..."
 echo "Checking storage directories..."
 mkdir -p core-engine/data core-engine/storage
 
+SETUP_PASSWORD_GENERATED=""
 if [ ! -f .env ]; then
     echo "No .env file found. Creating .env from .env.example..."
     cp .env.example .env
+    # One-time setup password: entered once on the setup screen, then never used again. Letters and digits
+    # without look-alikes (0/O, 1/l/I), because it is typed by hand.
+    SETUP_PASSWORD_GENERATED=$(LC_ALL=C tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789' < /dev/urandom | head -c 10)
+    sed -i "s/^ULPF_ADMIN_PASSWORD=.*/ULPF_ADMIN_PASSWORD=$SETUP_PASSWORD_GENERATED/" .env
     if [ -t 0 ]; then
         echo ""
-        read -p "Would you like to customize Admin & DB credentials now? [y/N]: " custom_env
+        read -p "Would you like to customize the ClickHouse credentials now? [y/N]: " custom_env
         if [[ "$custom_env" =~ ^[Yy]$ ]]; then
-            read -p "Enter Admin Username [admin]: " input_admin_user
-            read -sp "Enter Admin Password [Admin@12345]: " input_admin_pass
-            echo ""
             read -p "Enter ClickHouse Username [default]: " input_ch_user
             read -sp "Enter ClickHouse Password [Clickhouse123!]: " input_ch_pass
             echo ""
 
-            [ -n "$input_admin_user" ] && sed -i "s/ULPF_ADMIN_USERNAME=.*/ULPF_ADMIN_USERNAME=$input_admin_user/" .env
-            [ -n "$input_admin_pass" ] && sed -i "s/ULPF_ADMIN_PASSWORD=.*/ULPF_ADMIN_PASSWORD=$input_admin_pass/" .env
             [ -n "$input_ch_user" ] && sed -i "s/CLICKHOUSE_USER=.*/CLICKHOUSE_USER=$input_ch_user/" .env
             [ -n "$input_ch_pass" ] && sed -i "s/CLICKHOUSE_PASSWORD=.*/CLICKHOUSE_PASSWORD=$input_ch_pass/" .env
             echo "Updated .env with your custom credentials!"
         fi
     fi
+elif grep -q '^ULPF_ADMIN_PASSWORD=Admin@12345$' .env; then
+    echo "WARNING: .env still has the old public default ULPF_ADMIN_PASSWORD=Admin@12345."
+    echo "         It is now the one-time setup password: replace it with a private value before the first setup."
 fi
 
-if command -v podman-compose &> /dev/null; then
-    COMPOSE_CMD="podman-compose"
-elif podman compose version &> /dev/null; then
-    COMPOSE_CMD="podman compose"
-elif docker compose version &> /dev/null; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
-else
-    echo "=========================================================================="
-    echo "ERROR: Neither Podman nor Docker container orchestrator was found!"
-    echo "--------------------------------------------------------------------------"
-    echo "Please install one of the following to run ULPF:"
-    echo "  - Docker Engine / Desktop: https://docs.docker.com/get-docker/"
-    echo "  - Podman / Podman Desktop: https://podman.io/"
-    echo "=========================================================================="
-    exit 1
-fi
+source startup/compose-cmd.sh
 
 echo "Using container orchestrator: $COMPOSE_CMD"
 
@@ -124,6 +110,13 @@ if [ $ENGINE_READY -eq 1 ] && [ $FRONTEND_READY -eq 1 ]; then
     echo "Core Engine API:  http://localhost:8080/v1"
     echo "ClickHouse DB:    http://localhost:8123"
     echo "============================================================"
+    if [ -n "$SETUP_PASSWORD_GENERATED" ]; then
+        echo "First-time setup: open http://localhost:3000/setup and enter these setup"
+        echo "credentials once, then create your super-admin account:"
+        echo "  Setup username: $(grep '^ULPF_ADMIN_USERNAME=' .env | cut -d= -f2-)"
+        echo "  Setup password: $SETUP_PASSWORD_GENERATED   (also stored in .env)"
+        echo "============================================================"
+    fi
 else
     echo "============================================================"
     echo "WARNING: One or more services took longer than expected to start."

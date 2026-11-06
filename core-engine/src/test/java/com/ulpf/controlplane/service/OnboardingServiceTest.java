@@ -310,6 +310,22 @@ class OnboardingServiceTest {
                 assertTrue(ex.getMessage().contains("only withdraw your own"));
         }
 
+        @Test
+        void testApprovingRequestOwnedByAdminKeepsAdminRole() {
+                // The admin is hidden from the onboarding page only in the UI; the service must not
+                // turn an ADMIN into a VENDOR if such a request ever gets approved.
+                userRepository.save(new User(null, "root_admin", "Admin", "pass_hash", Role.ADMIN, null));
+                MockMultipartFile sampleFile = new MockMultipartFile(
+                                "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
+
+                var result = onboardingService.submitRequest(
+                                "root_admin", "Admin Corp", "Test Source", "FIREWALL", sampleFile, null);
+                onboardingService.processAdminDecision(result.requestId(), "APPROVED");
+
+                assertEquals(Role.ADMIN, userRepository.findByUsername("root_admin").get().role(),
+                                "approval must never change an ADMIN's role");
+        }
+
         @AfterAll
         static void tearDownAll() {
                 File dir = new File("storage/onboarding-samples");

@@ -12,6 +12,11 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 
+/**
+ * Creates and verifies the HMAC-signed login tokens (24 h): subject = username, claims {@code id}, {@code role}
+ * and {@code pwv} (password fingerprint). {@link JwtFilter} trusts only the id and {@code pwv}; role and
+ * super-admin status are read from the database.
+ */
 @Component
 public class JwtUtil {
 
@@ -27,10 +32,21 @@ public class JwtUtil {
     }
 
     public String generateToken(String userId, String username, String role) {
+        return generateToken(userId, username, role, null);
+    }
+
+    /**
+     * Login token. {@code pwv} is a fingerprint of the account's password hash
+     * ({@link AccountLookup#fingerprint(String)}); {@link JwtFilter} rejects the token once the password changes.
+     */
+    public String generateToken(String userId, String username, String role, String passwordFingerprint) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("id", userId);
         if (role != null) {
             claims.put("role", role);
+        }
+        if (passwordFingerprint != null) {
+            claims.put("pwv", passwordFingerprint);
         }
 
         return Jwts.builder()
@@ -40,6 +56,18 @@ public class JwtUtil {
                 .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 24))
                 .signWith(getSigningKey())
                 .compact();
+    }
+
+    public String extractPasswordFingerprint(String token) {
+        return extractAllClaims(token).get("pwv", String.class);
+    }
+
+    /**
+     * Verifies the signature and expiry once and returns every claim; throws a {@code JwtException} otherwise.
+     * Callers that need several claims use this instead of one {@code extract*} call (one parse) per claim.
+     */
+    public Claims parseClaims(String token) {
+        return extractAllClaims(token);
     }
 
     public String extractUsername(String token) {

@@ -50,10 +50,13 @@ All application views utilize the tokens established in the team's official **Wa
 
 | Path | View Component | Protected Role(s) | Key Capabilities |
 | :--- | :--- | :--- | :--- |
-| `/login` | `LoginPage.jsx` | Public | Authentication & JWT token acquisition |
-| `/signup` | `SignupPage.jsx` | Public | User registration (`ADMIN`, `VENDOR`, `USER`) |
-| `/onboard` | `OnboardingPage.jsx` | `VENDOR`, `ADMIN` | 50/50 split workspace for log sample upload & live payload parsing |
+| `/login` | `LoginPage.jsx` | Public | Authentication & JWT token acquisition; sends you to `/setup` while no super-admin exists; no pre-filled credentials |
+| `/signup` | `SignupPage.jsx` | Public | User registration (always `USER`) |
+| `/setup` | `SetupPage.jsx` | Public (once) | One-time setup: step 1 `.env` setup credentials, step 2 the super-admin account |
+| `/link/:token` | `LinkPage.jsx` | Public (link token) | Use an admin invite link (username + password) or reset link (new password) |
+| `/onboard` | `OnboardingPage.jsx` | Authenticated (server: `USER`, `VENDOR`) | 50/50 split workspace for log sample upload & live payload parsing |
 | `/admin` | `AdminDashboardPage.jsx` | `ADMIN` | Schema governance, AI mapping review & one-click ClickHouse activation |
+| `/admin/admins` | `AdminsPage.jsx` | Super-admin | Invite admins, reset passwords and revoke admins by single-use links; pending links |
 | `/notifications` | `NotificationsPage.jsx` | Authenticated | User notification feed, unread toggles & API key delivery |
 | `/integrity` | `IntegrityConsolePage.jsx` | `ADMIN`, `VENDOR`, `USER` | Cryptographic Merkle tree forensic audit console |
 | `/analytics` | `AnalyticsPage.jsx` | `ADMIN` | ClickHouse query builder (Builder Mode, Direct SQL, Lineage) |
@@ -77,10 +80,13 @@ Client-side authorization is enforced by `ProtectedRoute.jsx`:
 
 * Checks `localStorage.getItem("token")`. If missing, redirects immediately to `/login`.
 * Checks user role against `allowedRoles`. If unauthorized, redirects user safely.
+* With `requireSuperAdmin`, also needs `localStorage.superAdmin === "true"` (set at login from the response's `superAdmin`), else redirects to `/admin`. The navbar shows **Admins** only to the super-admin. These are display decisions only; the server enforces every rule.
+* Admin account calls live in `src/api/admins.js`, together with the admin password rule (12-100 characters) mirrored from the server so forms can say it before sending. Screens reuse `AuthLayout.css` (setup, link) and `AdminDashboardPage.css` (Admins), with small additions at the end of each file.
+* `components/AuthShowcase.jsx` is the animated falling-log panel on the right of every auth screen (login, sign-up, setup, link). Why one component: the panel was copied line for line into Login and Sign-up, and the first version of Setup and Link left it out. They looked like a different product, and on a fresh install the login page redirects straight to Setup, so the panel seemed to have disappeared. Each of those pages has a test that the panel is shown. Below 1024 px it is hidden on purpose (`AuthLayout.css`).
 * **Axios Request Interceptor (`src/api/client.js`)**:
   * Automatically injects `Authorization: Bearer <token>` on protected API endpoints.
-  * Explicitly bypasses public auth endpoints (`/v1/login`, `/v1/signup`) so stale credentials from prior sessions are never transmitted.
+  * Explicitly bypasses public endpoints (`/v1/login`, `/v1/signup`, `/v1/setup`, `/v1/links/`) so stale credentials from prior sessions are never transmitted.
   * Discards malformed or `"undefined"` token values.
 * **Axios Response Interceptor (`src/api/client.js`)**:
-  * Automatically purges invalid or expired tokens (`token`, `username`, `role`) from `localStorage` upon receiving a `401 Unauthorized` on protected endpoints, ensuring clean session recovery.
+  * Automatically purges invalid or expired tokens (`token`, `username`, `role`, `superAdmin`) from `localStorage` upon receiving a `401 Unauthorized` on protected endpoints, ensuring clean session recovery.
   * Sanitizes raw 5xx HTML error pages (e.g. Nginx 502/504) into structured user-facing JSON messages.

@@ -7,6 +7,9 @@ import AdminDashboardPage from "./pages/AdminDashboardPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import IntegrityConsolePage from "./pages/IntegrityConsolePage";
+import SetupPage from "./pages/SetupPage";
+import LinkPage from "./pages/LinkPage";
+import AdminsPage from "./pages/AdminsPage";
 
 function App() {
   return (
@@ -18,6 +21,8 @@ function App() {
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
+        <Route path="/setup" element={<SetupPage />} />
+        <Route path="/link/:token" element={<LinkPage />} />
 
         {/* Protected routes */}
         <Route
@@ -33,6 +38,14 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={["ADMIN"]}>
               <AdminDashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/admins"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]} requireSuperAdmin>
+              <AdminsPage />
             </ProtectedRoute>
           }
         />

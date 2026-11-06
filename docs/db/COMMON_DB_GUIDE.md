@@ -96,6 +96,15 @@ The `com.ulpf.common.db` package provides a centralized, dual-database access la
 * **Parameters:** `String username`
 * **Returns:** `true` if username exists, `false` otherwise.
 
+##### Admin accounts (super-admin and account removal)
+* `boolean superAdminExists()`, `Optional<User> findSuperAdmin()`, `boolean isSuperAdmin(String userId)`: read the `is_super_admin` flag. The `User` record itself does not carry the flag.
+* `User createSuperAdmin(String username, String name, String passwordHash)`: inserts an `ADMIN` with the flag set. Throws `DuplicateKeyException` if a super-admin already exists (unique index `one_super_admin`) or the username is taken.
+* `void updatePassword(String userId, String passwordHash)`.
+* `void deleteUserWithNotifications(String userId)`: in one transaction, deletes the admin links the user made or that target it, its notifications, then the user.
+* `boolean isReferencedByVendorData(String userId)`: true if a vendor or an onboarding request points at the user (deleting it would violate their foreign keys).
+
+SQLite `UNIQUE` violations on insert are reported as `DuplicateKeyException`; Spring has no SQLite error codes, so without that translation they would surface as `UncategorizedSQLException`.
+
 ---
 
 ### 3.2 `CredentialRepository`
@@ -297,6 +306,24 @@ POST /v1/events ──► enqueue(RawEventRecord) ──► [ ConcurrentLinkedQu
 
 ---
 
+### 3.10 `AdminLinkRepository`
+
+* **File Location:** `com/ulpf/common/db/AdminLinkRepository.java`
+* **Purpose:** Single-use `INVITE` / `RESET` admin links in `admin_links`. Stores only the SHA-256 hash of a token; times are epoch milliseconds.
+* `AdminLink save(AdminLink link)`: assigns a UUID if `linkId` is blank.
+* `Optional<AdminLink> findByTokenHash(String tokenHash)`.
+* `List<AdminLink> findPending(Instant now)`: unused, unexpired links, oldest first.
+* `boolean markUsed(String linkId, Instant now)`: one conditional `UPDATE` (`used_at IS NULL AND expires_at > now`); returns false if the link was already used or has expired, so of two simultaneous uses exactly one wins.
+* `void delete(String linkId)`: cancels a link.
+
+### 3.11 `SqliteSchemaMigrator`
+
+* **File Location:** `com/ulpf/common/db/SqliteSchemaMigrator.java`
+* **Purpose:** Changes to existing tables that `schema.sql` (`CREATE TABLE IF NOT EXISTS`) cannot make. Runs after `schema.sql` and before the web server starts; safe on every start.
+* Current migration (admin accounts): if `users.is_super_admin` is missing, then in one transaction it adds the column and removes the legacy `ADMIN` rows with their notifications. A legacy admin still referenced by vendor data is locked instead (role `USER`, unknown password, `WARN` logged). It then always ensures the `one_super_admin` unique index.
+
+---
+
 ## 4. How to Use in Application Services
 
 ### 4.1 Authenticating Users & Sign-Up (`AuthService.java`)
@@ -362,7 +389,9 @@ The database and engine package is verified by dedicated unit & integration test
 
 | Test Class | Test Target | What It Verifies |
 | :--- | :--- | :--- |
-| **`UserRepositoryTest`** | `UserRepository` | Verifies user creation (`save`), username uniqueness checks, SQL timestamp parsing, and `findByUsername` queries against in-memory SQLite. |
+| **`UserRepositoryTest`** | `UserRepository` | Verifies user creation (`save`), `findByUsername`, the super-admin flag and its one-super-admin index, password update, account deletion with notifications and links, and vendor-data references, against the real schema in in-memory SQLite. |
+| **`AdminLinkRepositoryTest`** | `AdminLinkRepository` | Verifies link storage round trip (millisecond times), single use, no use after expiry, pending list, and cancel. |
+| **`SqliteSchemaMigratorTest`** | `SqliteSchemaMigrator` | Upgrades a frozen pre-change schema: adds the column, removes legacy admins once (later admins survive restarts), and locks a legacy admin that owns vendor data. |
 | **`CredentialRepositoryTest`** | `CredentialRepository` | Verifies early-exit subquery resolving active API key hashes against linked `credentials`, `sources`, and `vendors` tables, and suspension handling. |
 | **`MappingRepositoryTest`** | `MappingRepository` | Verifies active mapping lazy-loading into RAM cache, cache invalidation, version numbering (`getNextVersionNumber`), and version activation. |
 | **`VendorWebhookRepositoryTest`**| `VendorWebhookRepository` | Verifies upsert secret preservation (`COALESCE`), status flapping transitions (`FAILING` at $\ge 3$), delivery log persistence, and deletion cascades. |

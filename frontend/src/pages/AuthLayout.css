@@ -682,3 +682,52 @@ body, html {
     display: none; /* Hide visual panel on smaller screens to focus on signup */
   }
 }
+
+/* ---- One-time setup and admin link pages (same split layout as login) ---- */
+.auth-step-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--primary-teal);
+  margin: 0 0 8px 0;
+}
+
+.auth-field-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.auth-inline-error {
+  background: var(--accent-rose-bg);
+  color: var(--accent-rose-text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.auth-inline-notice {
+  background: var(--primary-teal-light);
+  color: var(--primary-teal-dark);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.auth-text-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  align-self: center;
+}
+
+.auth-text-button:hover {
+  color: var(--text-dark);
+}

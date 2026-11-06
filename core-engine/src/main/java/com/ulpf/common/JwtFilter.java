@@ -1,5 +1,7 @@
 package com.ulpf.common;
 
+import com.ulpf.common.AccountLookup.Account;
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -15,9 +17,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.util.AntPathMatcher;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
+/**
+ * Authenticates {@code Authorization: Bearer} requests. The token proves who the caller was when they signed in;
+ * {@link AccountLookup} (cached 60 s) says who they are now: a revoked account or a changed password ends the
+ * session on the next request, and role and {@code ROLE_SUPER_ADMIN} are taken from the database, not the token.
+ * Requests without a token pass through untouched, for {@link SpringSecurity}'s rules to accept or refuse.
+ */
 @Component
 public class JwtFilter extends OncePerRequestFilter {
 
@@ -27,14 +36,18 @@ public class JwtFilter extends OncePerRequestFilter {
             "/v1/signup",
             "/v1/events",
             "/v1/health",
+            "/v1/setup/**",   // public; a stale token in the browser must not turn these into 401s
+            "/v1/links/**",
             "/error",
             "/actuator/**"
     );
 
     private final JwtUtil jwtUtil;
+    private final AccountLookup accountLookup;
 
-    public JwtFilter(JwtUtil jwtUtil) {
+    public JwtFilter(JwtUtil jwtUtil, AccountLookup accountLookup) {
         this.jwtUtil = jwtUtil;
+        this.accountLookup = accountLookup;
     }
 
     @Override
@@ -70,41 +83,41 @@ public class JwtFilter extends OncePerRequestFilter {
         String token = authorizationHeader.substring(7);
 
         try {
-            String username = jwtUtil.extractUsername(token);
-            String id = jwtUtil.extractId(token);
-            String role = jwtUtil.extractRole(token);
+            // One parse verifies the signature and expiry and yields every claim we need.
+            Claims claims = jwtUtil.parseClaims(token);
+            Optional<Account> account = accountLookup.find(claims.get("id", String.class));
 
-            if (!jwtUtil.validateToken(token)) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("Invalid or expired token");
+            // The database decides: the account must still exist and its password must not have changed since
+            // the token was issued. Role and super-admin come from the database, never from the token's claims.
+            if (account.isEmpty() || !account.get().passwordFingerprint().equals(claims.get("pwv", String.class))) {
+                reject(response);
                 return;
             }
 
-            UlpfPrincipal principal = new UlpfPrincipal(id, username, role);
+            Account live = account.get();
+            String role = live.role().name();
+            List<SimpleGrantedAuthority> authorities = new ArrayList<>(List.of(
+                    new SimpleGrantedAuthority("ROLE_" + role),
+                    new SimpleGrantedAuthority(role)));
+            if (live.superAdmin()) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"));
+            }
 
-            List<SimpleGrantedAuthority> authorities = (role != null)
-                    ? List.of(
-                            new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()),
-                            new SimpleGrantedAuthority(role.toUpperCase()))
-                    : Collections.emptyList();
-
-            UsernamePasswordAuthenticationToken authentication =
-                    new UsernamePasswordAuthenticationToken(
-                            principal,
-                            null,
-                            authorities);
-
-            authentication.setDetails(
-                    new WebAuthenticationDetailsSource().buildDetails(request));
-
+            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                    new UlpfPrincipal(live.userId(), live.username(), role), null, authorities);
+            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        } catch (JwtException e) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.getWriter().write("Invalid or expired token");
+        } catch (JwtException | IllegalArgumentException e) {
+            reject(response);
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private static void reject(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.getWriter().write("Invalid or expired token");
     }
 }
