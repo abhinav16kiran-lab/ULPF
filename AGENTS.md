@@ -10,6 +10,7 @@ Humans: this is also a fair summary of how we work.
 3. **Be honest.** If the user's idea is flawed, or a bug report's stated cause is wrong, say so and explain why. Verify claims in bug reports before trusting them.
 4. **Think long term.** Prefer maintainable, evolvable code over the quickest patch.
 5. **Don't guess; check.** Verify file names, method names and commands exist before relying on them. Docs in this repo can lag the code.
+6. **Write in STE-80.** Follow [`STE80.md`](STE80.md) for all prose you write: chat answers, plans, docs, Javadoc, code comments, and commit messages. Read the file at the start of each session. Do not apply it to code, commands, or error messages.
 
 ## 2. Project at a glance
 
@@ -123,6 +124,7 @@ CI (`.github/workflows/`) runs backend tests and the frontend build on push/PR; 
 
 When you change behaviour, endpoints, schema or config, update the matching doc in the same change.
 Docs record the **why**, not only the what: for every design decision, write the reason and the alternative you rejected, in the lasting doc (usually `docs/ARCH/ARCHITECTURE.md`) as well as in the plan. A plan is a dated work log; nobody reads it to understand the system later. If you find a doc that contradicts the code, fix it or flag it; don't repeat the wrong claim.
+Write docs and plans in the STE-80 style ([`STE80.md`](STE80.md)). The style must not remove the *why* or the rejected alternative.
 
 ## 7. Conventions
 
