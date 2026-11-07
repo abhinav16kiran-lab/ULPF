@@ -1,5 +1,22 @@
 # ULPF Engineering Backlog & To-Do List
 
+## North Star: Events Ingested per Day
+
+The SIH requirement is a framework for "Big Data environments handling billions of events per day" (`docs/ARCH/REQUIREMENTS_DIRECTLY_FROM_SIH_PORTAL.txt`). Our target is at least **1 billion events per day**. That is about **11,600 events per second**, sustained for 24 hours.
+
+The last recorded benchmark is **995.4 events per second** (`README.md` §11). That is about **86 million events per day**, so we are about **11.6 times** below the target. The date and the hardware of that benchmark are not recorded.
+
+**Targets (team lead, 2026-11-07):**
+- **Minimum (worst case): 11,600 events per second at P99.** Measure the throughput in 1-second windows during a sustained test. At least 99% of the windows must reach 11,600 events per second. The plan for item 13 sets the test length.
+- **Peak: 12,000 events per second**, or a little higher.
+- No event loss at these rates.
+
+These are the first milestone. Real log traffic often comes in bursts larger than 12,000 / 11,600 (about 3% above the average), so review the peak target after the item 13 baseline.
+
+Every change must keep these numbers in mind. Order of work agreed on 2026-11-07:
+1. Item 7 (Prometheus + Grafana), this week. Its metrics show where ingestion is slow.
+2. Item 13 (profile and speed up `POST /v1/events`), with the item 7 metrics.
+
 ## High Priority: Data Plane & Replay Pipeline
 
 ### 1. Raw-to-Dynamic Backfill / Replay Worker [COMPLETED]
@@ -78,7 +95,8 @@
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
 - **Out of scope**: alerting. This item delivers dashboards only; metric-based alerts are tracked in item 12.
-- **Prerequisite**: item 11 (single-admin enforcement) must be completed before the Grafana integration starts. Grafana access is granted to `ADMIN` only, so `ADMIN` has to reliably mean "the one account defined in `.env`".
+- **Priority**: first, this week (2026-11-07). Its metrics are the measurement tool for item 13.
+- **Prerequisite**: item 11 (admin accounts) is done (2026-11-07). Grafana access is granted to admins only. Each admin gets their own Grafana login, and a revoke or a password reset ends their Grafana sessions (plan A2).
 - **Problem**: The frontend currently contains a custom, ad-hoc "Grafana" view that is brittle, unstable, and lacks real observability capabilities. Admins cannot reliably monitor pipeline throughput, log volume spikes, ClickHouse insert latency, buffer backpressure, or error rates across the ingestion cluster.
 - **Requirement**:
   - ~~Completely strip out the legacy pseudo-Grafana frontend component and its associated mock routes and assets from the frontend codebase.~~ **[DONE]**
@@ -133,14 +151,23 @@
   - The frontend currently has no test runner; add Vitest + React Testing Library alongside this work so the extracted components are covered.
 
 ### 10. Replace the 4-Layer Mapping Engine with a Single LLM Mapping Agent [Adarsh has assumed the ownership]
-- **Plan**: [`docs/plans/2026-10-28-llm-mapping-agent.md`](docs/plans/2026-10-28-llm-mapping-agent.md) (Status: Draft, awaiting approval).
+- **Plan**: [`docs/plans/2026-10-28-llm-mapping-agent.md`](docs/plans/2026-10-28-llm-mapping-agent.md) (Status: Draft, awaiting approval). The plan must be revised for the mixture-of-experts direction below before approval.
+- **Change of direction (2026-11-07, team lead)**: the agent uses a **mixture-of-experts (MoE)** model. An MoE model activates only a few of its expert sub-networks for each token, so it can be large but cheap to run. The work has three stages:
+  1. **Select:** shortlist MoE models that can run on our hardware, and measure them on the labelled eval set (Phase 0).
+  2. **Profile:** run the eval set and real onboarding samples many times, and record which experts activate for our mapping task. Keep this testing running as the eval set grows.
+  3. **Prune:** remove the experts that our task does not use. This makes the model smaller and faster. Run the full eval again after pruning, and keep the pruned model only if its accuracy does not drop.
+- **Risks of the new direction (not verified yet)**:
+  - RAM: the host has 15 GB and no GPU. All the experts must be in memory, so a large MoE model can be too big even when quantized. Measure this in Phase 0.
+  - Tooling: expert pruning and the local inference runtime (for example, quantized model files) must work with the chosen model. I did not check which models and tools support this.
+  - Pruning removes rare experts. A vendor format that we did not test can need one of those experts. The eval set must cover many formats, and the validator and the human review stay in place.
+- **Unchanged by the new direction**: the deterministic validator, human approval of every mapping, the audit record, async onboarding, and no change to the ingestion hot path.
 - **Problem**: The alias → TF-IDF → Levenshtein → ONNX cascade decides each field from its name alone, with no sample values or context and no explanation. In practice it is weaker than it looks:
   - Layer 4 uses a placeholder hash tokenizer instead of MiniLM's real one, and `mapping_embeddings` is never populated, so it cannot produce meaningful matches.
   - TF-IDF is trained on 10 examples.
   - The alias seeds (`source.ip`) and the TF-IDF and description data (`src_ip`) use different canonical vocabularies.
   - The admin review UI fabricates layer names and confidence scores.
 - **Requirement**:
-  - One decision layer: a locally hosted, instruction-tuned Qwen or Gemma model (chosen by measurement on a labelled eval set), running as a sidecar behind an OpenAI-compatible API.
+  - One decision layer: a locally hosted model, chosen by measurement on a labelled eval set, running as a sidecar behind an OpenAI-compatible API. Since 2026-11-07, this is an MoE model, pruned for our task (see above). The draft plan named a Qwen or Gemma model.
   - Simple in-house vector store (SQLite plus in-memory cosine) holding embeddings of canonical fields, existing tables and their schemas, mapping rules, and human-approved mappings. The agent gets a read-only search handle only.
   - RAG over versioned rule files, plus a versioned system prompt.
   - The agent has no tools and no DB or network access. Context is assembled in Java; output is strict JSON checked by a deterministic validator (closed vocabulary, reserved columns, DDL-safe names); a human still approves.
@@ -194,3 +221,36 @@
   - Avoid duplicating alerts ULPF already sends (insert failure, drift, webhook failing); these rules must only cover what the app cannot see.
   - Grafana's webhook payload differs from ULPF's signed payload; decide whether the receiver tolerates both.
   - A whole-host failure cannot be alerted from the same host; document it as a known limit.
+
+### 13. Ingestion Throughput: Profile and Speed Up `POST /v1/events` (North Star) [NEW 2026-11-07]
+- **Priority**: highest after item 7. See the North Star section at the top.
+- **Depends on**: item 7 metrics (events per second, queue depth, flush time, batch size, insert errors).
+- **Problem**: the last benchmark gave 995.4 events per second (about 86 million per day). The target is at least 1 billion per day: 11,600 events per second at P99 (1-second windows) and a peak of 12,000 events per second. See the North Star section. ClickHouse alone can take far more, so the bottleneck is probably in ULPF, not in the database. This is not measured yet.
+- **Scope**: the ingestion path only. This includes the HTTP request, the API key check, format autodetect, the in-memory queue, the raw batch insert, `MappingTransformer`, the canonical insert and the Merkle hashing. The mapping engine that proposes mappings at onboarding is out of scope (item 10).
+- **Requirement**:
+  1. **Baseline (from `prompt.txt` point 2):** create the same tables in a plain ClickHouse. Send random logs to them at the highest rate one generator can reach, and record events per second. Then send the same logs through ULPF to the same tables. Record both numbers and the flow of each. Use the same hardware for both, and record the hardware.
+  2. **Profile:** use the item 7 metrics and Java Flight Recorder (built into the JDK, so no new dependency) to find where the time goes.
+  3. **Fix one bottleneck at a time.** Measure after each change, and record the before and after numbers.
+  4. Keep the benchmark script and its payload mix in the repo, so anyone can run the same test again.
+- **Design Considerations**:
+  - Logs come in bursts. Test both targets: 11,600 events per second at P99 for the whole test, and short bursts at 12,000 events per second.
+  - No event loss. The raw event must always be preserved (SIH requirement a). A faster path must not drop events under load.
+  - The raw and canonical queues in `ClickHouseIngestionRepository` have no size limit (see item 12). At high rates they can use all the memory. Backpressure must be part of the design.
+  - The load generator uses CPU too. Record where it runs, because on the same host it reduces the CPU that ULPF can use.
+  - The stack must still run air-gapped.
+  - Each change gets a plan and tests first, as for any other change (`AGENTS.md`).
+
+### 14. UI and Code Simplicity Review (from `prompt.txt` point 1) [NEW 2026-11-07]
+- **Problem**: the UI must be simple enough for anyone to use: clear, warm and informative. Today some parts look random or "AI-generated", and some controls do nothing. Examples found on 2026-11-07:
+  - Emojis in the navigation, for example "🔐 Integrity Audit".
+  - Login page: the "LDAP / SSO" badge, "Remember me" and "Forgot password?" do nothing.
+  - Login page: inline styles for the notices, and copy such as "Takes under 30 seconds · Enterprise ready".
+  - Gradients on the primary buttons, while the newer screens use flat teal.
+- **Requirement**:
+  - Review every screen. Remove random emojis, fake controls and filler copy. Use one design language: the current fonts and colours, an 8 px spacing grid, and one primary button style.
+  - Keep what works: the falling-log animation on the auth screens (`AuthShowcase`).
+  - Review the code for the same simplicity: dead code, duplicated markup, and components that are too large. `AnalyticsPage.jsx` (item 9) is the largest example.
+- **Design Considerations**:
+  - Write a plan first, with a before and after screenshot of each screen.
+  - Change one screen in each PR, with frontend tests, so each change is small to review.
+  - Overlaps item 9 (split `AnalyticsPage.jsx`) and item 8 (mapping code structure).
