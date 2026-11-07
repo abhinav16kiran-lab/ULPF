@@ -67,6 +67,13 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 - **Status (on hold)**: Parked until the infrastructure can support it. Trace IDs are not persisted or queryable today (no `trace_id` in the ClickHouse schema or analytics queries; they only live in the request context, response header and logging), so source-scoped tracing has nothing to scope yet. Also, most vendors will not send a trace ID at all, so the notification behaviour needs a configurable design (per-vendor/source opt-in, what counts as "expected" vs. "non-compliant") and likely some redesign outside this item. Revisit once trace storage and per-source configuration exist, and start with a plan.
 
 ### 5. Decouple Dynamic Table Provisioning from Source Names (Domain-Level Canonical Tables)
+- **Depends on**: item 10 (the new mapping engine). Do item 10 first.
+- **Change of direction (2026-11-07, team lead)**: the mapping model decides the table name, instead of a fixed `source_type` → table list.
+  - **Why**: the name `events_<source>` comes from the first source that creates the table. `DynamicSchemaProvisioningService` reuses any table that has at least 60% of the proposed fields (`matchRatio >= 0.60`). So other sources, with other names, can write into that table, and the name no longer describes what is in it. Example: a "Firewall Beta" stream writes into `events_firewall_alpha`.
+  - **How**: the item 10 agent already returns a target-table recommendation. Extend that recommendation so that the agent proposes a name that describes the data (for example `network_events`), or picks an existing table. The name must come from the content of the logs, not from the source name.
+  - **Why it waits for item 10**: the current 4-layer engine maps one field name at a time. It does not see the whole source, so it cannot name a table well. The item 10 agent sees the sample values and the existing tables.
+  - **Rules that do not change**: the deterministic validator checks the name (DDL-safe characters, length, no reserved names), and a human approves it, as for every mapping. Two different kinds of data must not share one name.
+  - **Open question**: how the model avoids creating many near-duplicate names (for example `network_events` and `net_events`). One option: the model must reuse an existing table unless the validator agrees that the data is different.
 - **Problem**: Dynamic schema provisioning currently defaults table names to `ulpf_events.events_{sourceName}` (e.g. `events_firewall_alpha`). This creates a table-per-source anti-pattern, violates the canonical domain model outlined in `DATABASE_SCHEMA.md` Section 4 (`network_events`, `web_events`, `sensor_events`, `database_events`), and leads to ClickHouse table sprawl. Even with the 60% column similarity re-use heuristic, subsequent sources end up writing to a table named after whichever source was approved first (e.g., a "Firewall Beta" stream writing into `events_firewall_alpha`).
 - **Requirement**:
   - Decouple table naming from source names and map directly to canonical domain/category tables based on `source_type` or `log_type` (e.g., `FIREWALL` $\rightarrow$ `ulpf_events.network_events`, `WEB_APP` $\rightarrow$ `ulpf_events.web_events`, `SENSOR` $\rightarrow$ `ulpf_events.sensor_events`, `DATABASE` $\rightarrow$ `ulpf_events.database_events`).
@@ -186,7 +193,7 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 - **Design Considerations**:
   - CPU-only inference latency and RAM on the current host (16 cores, 15 GB, no GPU); measure before choosing the model size.
   - Prompt injection via vendor sample logs; LLM confidence is not calibrated, so nothing is auto-approved.
-  - Interacts with item 5 (domain-level tables) through the target-table recommendation, and supersedes part of item 8.
+  - Item 5 depends on this item: the target-table recommendation must also propose the table name (see item 5, change of direction 2026-11-07). This item also supersedes part of item 8.
   - Open questions (naming convention, runtime, hardware, fallback policy, PII in prompts, `NEW_FIELD`, eval thresholds) are listed in the plan, §7.
 
 ### 11. Single-Admin Enforcement: Remove Stale ADMIN Accounts and Protect ADMIN from Role Changes [Adarsh has assumed the ownership]
