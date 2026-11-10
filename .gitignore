@@ -36,3 +36,8 @@ grafana-plan-meeting-questions.txt
 prompt.txt
 # Team walkthrough material (local only)
 docs/walkthrough/
+
+# Personal agent files: each developer's own scripts, instructions and hook settings
+agent-scripts/
+CLAUDE.local.md
+.claude/settings.local.json

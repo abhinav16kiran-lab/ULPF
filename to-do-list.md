@@ -14,7 +14,7 @@ The last recorded benchmark is **995.4 events per second** (`README.md` §11). T
 These are the first milestone. Real log traffic often comes in bursts larger than 12,000 / 11,600 (about 3% above the average), so review the peak target after the item 13 baseline.
 
 Every change must keep these numbers in mind. Order of work agreed on 2026-11-07:
-1. Item 7 (Prometheus + Grafana), this week. Its metrics show where ingestion is slow.
+1. Item 7 (Prometheus + Grafana), this week. Its metrics show where ingestion is slow. From 2026-11-11, other team members own item 7.
 2. Item 13 (profile and speed up `POST /v1/events`), with the item 7 metrics.
 
 ## High Priority: Data Plane & Replay Pipeline
@@ -101,6 +101,7 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - Keep ClickHouse memory pressure throttling active regardless of chunk size.
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
+- **Owner**: other team members, from 2026-11-11.
 - **Out of scope**: alerting. This item delivers dashboards only; metric-based alerts are tracked in item 12.
 - **Priority**: first, this week (2026-11-07). Its metrics are the measurement tool for item 13.
 - **Prerequisite**: item 11 (admin accounts) is done (2026-11-07). Grafana access is granted to admins only. Each admin gets their own Grafana login, and a revoke or a password reset ends their Grafana sessions (plan A2).

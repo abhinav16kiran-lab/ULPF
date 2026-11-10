@@ -24,7 +24,9 @@ agent-scripts/
   .out/                     large outputs (git-ignored)
 ```
 
-If the folder does not exist, create it with an `INDEX.md` when you write the first script. Add `.out/` to `.gitignore`.
+The folder is personal to each developer. The repo `.gitignore` ignores `agent-scripts/`, so git never commits or pushes your scripts. Other developers do not have your scripts. Do not refer to them in shared files.
+
+If the folder does not exist, create it with an `INDEX.md` when you write the first script. To keep a history of your scripts, run `git init` inside the folder. A local repo with no remote keeps them private.
 
 ## The loop
 

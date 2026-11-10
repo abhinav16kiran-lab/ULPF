@@ -11,7 +11,7 @@ Humans: this is also a fair summary of how we work.
 4. **Think long term.** Prefer maintainable, evolvable code over the quickest patch.
 5. **Don't guess; check.** Verify file names, method names and commands exist before relying on them. Docs in this repo can lag the code.
 6. **Write in STE-80.** Follow [`STE80.md`](STE80.md) for all prose you write: chat answers, plans, docs, Javadoc, code comments, and commit messages. Read the file at the start of each session. Do not apply it to code, commands, or error messages.
-7. **Reuse scripts.** For multi-step tool work, follow [`REUSABLE_SCRIPTS.md`](REUSABLE_SCRIPTS.md). Read `agent-scripts/INDEX.md` before you start.
+7. **Reuse scripts.** For multi-step tool work, follow [`REUSABLE_SCRIPTS.md`](REUSABLE_SCRIPTS.md). If `agent-scripts/INDEX.md` exists, read it before you start. The folder is personal to each developer and git-ignored.
 
 ## 2. Project at a glance
 

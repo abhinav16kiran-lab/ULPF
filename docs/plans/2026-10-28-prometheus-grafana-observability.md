@@ -3,6 +3,7 @@
 - **Date:** 2026-10-28
 - **Status:** Approved (rev 3 — rev 2 plus the team lead's decisions of 2026-10-29 to 2026-10-31, rows 15-31)
 - **Approved by / on:** Adarsh (team lead), 2026-10-31
+- **Owner:** other team members, from 2026-11-11.
 - **File name:** `docs/plans/2026-10-28-prometheus-grafana-observability.md`
 
 ## 0. Review changes (rev 2)
