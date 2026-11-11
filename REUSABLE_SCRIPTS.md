@@ -21,19 +21,35 @@ agent-scripts/
   INDEX.md                  one line for each script
   check_service_health.py   one script for one task
   _lib/                     shared helpers (optional)
+  tests/                    tests for the scripts
+  plans/                    one approved plan for each change to the scripts
+  handoff/                  local session notes (git-ignored)
   .out/                     large outputs (git-ignored)
 ```
 
-The folder is personal to each developer. The repo `.gitignore` ignores `agent-scripts/`, so git never commits or pushes your scripts. Other developers do not have your scripts. Do not refer to them in shared files.
+The folder is shared. Git tracks it, and the whole team uses the same scripts. Only `handoff/` and `.out/` stay on each machine.
 
-If the folder does not exist, create it with an `INDEX.md` when you write the first script. To keep a history of your scripts, run `git init` inside the folder. A local repo with no remote keeps them private.
+## Changing the scripts
+
+Other people's agents depend on these scripts. Change a script only when it is necessary: a bug, a tool that changed, or a task that the team repeats and that no script covers.
+
+Before you create, change or delete a script, follow these steps:
+
+1. Write a plan in `agent-scripts/plans/YYYY-MM-DD-<slug>.md`. Use the template in `docs/plans/TEMPLATE.md`.
+2. Create a branch named `scripts/<slug>`. Commit only the plan on it.
+3. Push the branch and open a pull request.
+4. Wait for the team lead to approve the plan in the pull request. Do not write code before the approval.
+5. Write the tests and the script on the same branch, test first.
+6. The team lead merges the pull request.
+
+Do not change a script on `main`, and do not change a script without an approved plan. An agent that needs a new script or a change must propose the plan and stop. It must not write the script during another task.
 
 ## The loop
 
 1. **Look.** Before a multi-step tool task, read `agent-scripts/INDEX.md`. Do not read the scripts yet.
 2. **Reuse.** If a script matches, run it with `--help`, then run it. Use its result. Do not redo its steps by hand.
-3. **Extend.** If a script nearly matches, add an option to it. Do not copy it to a new file.
-4. **Build.** If no script matches and the task will repeat, write one. Follow the rules below.
+3. **Extend.** If a script nearly matches, propose an option for it. Do not copy it to a new file. Follow [Changing the scripts](#changing-the-scripts).
+4. **Build.** If no script matches and the task will repeat, propose a new script. Follow [Changing the scripts](#changing-the-scripts) and the rules below.
 5. **Run.** Run the script. Read the small result. Decide the next step yourself.
 6. **Report.** Tell me which script ran, with which options, and what it found. Say so when you create or change a script.
 
@@ -47,7 +63,7 @@ Build a script when any of these is true:
 - The tool is slow, flaky, or needs retries.
 - I say the task repeats.
 
-When you are unsure, do the task by hand once and note the steps. Build the script the second time.
+When you are unsure, do the task by hand once and note the steps. Propose the script the second time.
 
 Do not build a script when:
 
@@ -191,7 +207,7 @@ Keep one row for each script. Update the row in the same change as the script. T
 ## Keep scripts healthy
 
 1. After a run, check that the result makes sense. Check more closely when the stakes are high.
-2. If a script fails because a tool changed, fix the script. Do not work around it by hand each time.
+2. If a script fails because a tool changed, propose a fix for the script. Do not work around it by hand each time.
 3. Update `LAST VERIFIED` when you confirm that a script works.
 4. Delete a script that nobody uses. Remove its row from `INDEX.md` in the same change.
 5. Do not keep two scripts that do the same task. Merge them.
