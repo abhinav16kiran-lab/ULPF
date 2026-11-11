@@ -37,7 +37,8 @@ prompt.txt
 # Team walkthrough material (local only)
 docs/walkthrough/
 
-# Personal agent files: each developer's own scripts, instructions and hook settings
-agent-scripts/
+# Agent scripts: handoff notes and large outputs stay on each machine; personal agent settings
+agent-scripts/handoff/
+agent-scripts/.out/
 CLAUDE.local.md
 .claude/settings.local.json
