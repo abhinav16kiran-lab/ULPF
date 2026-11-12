@@ -33,12 +33,13 @@
 | `/v1/onboard/update/{username}` | `POST` | `USER`/`VENDOR` | Update an existing log source mapping schema |
 | `/v1/onboard/withdraw/{requestId}` | `POST` | `USER`/`VENDOR` | Withdraw one of your onboarding requests |
 | `/v1/onboard/my-requests` | `GET` | `USER`/`VENDOR` | Your onboarding requests |
-| `/v1/onboard/my-sources` | `GET` | `USER`/`VENDOR` | Your log sources |
+| `/v1/onboard/my-sources` | `GET` | `USER`/`VENDOR` | Your log sources, each with `apiKeyCreatedAt` (`null`: no key yet) |
+| `/v1/onboard/sources/{sourceId}/api-key` | `POST` | `USER`/`VENDOR` (source owner) | Create or regenerate the API key of an approved source; the key is in this response only |
 | `/v1/admin/onboard` | `GET` | `ADMIN` | List all pending vendor onboarding requests |
 | `/v1/admin/onboard/{id}`| `PUT` | `ADMIN` | Approve or reject onboarding request candidate mapping |
 | `/v1/admin/clickhouse/schemas` | `GET` | `ADMIN` | Inspect active ClickHouse database and table schemas |
 | `/v1/events` | `POST` | `VENDOR`/`ADMIN` | Primary plug-and-play high-throughput log event ingestion |
-| `/v1/notifications` | `GET` | Authenticated | Fetch notifications and issued API keys for logged-in user |
+| `/v1/notifications` | `GET` | Authenticated | Fetch notifications for the logged-in user (never contains an API key) |
 | `/v1/notifications/{id}/read` | `PUT` | Authenticated | Mark a notification item as read |
 | `/v1/analytics` | `GET` | `ADMIN` | Read-only ClickHouse metrics aggregation query execution |
 | `/v1/analytics/tables` | `GET` | `ADMIN` | Fetch list of accessible ClickHouse table names |
@@ -148,7 +149,8 @@ Non-super-admin callers get `403` on every `/v1/admin/admins/**` endpoint.
 ### 3.2 Vendor Log Source Onboarding
 
 Onboarding is for `USER` and `VENDOR` accounts only (`403` for admins). Approval promotes a `USER` to `VENDOR`
-and never changes an admin's role.
+and never changes an admin's role. No API key exists before approval: after approval the vendor creates it with
+`POST /v1/onboard/sources/{sourceId}/api-key`.
 
 #### `POST /v1/onboard/{username}`
 Uploads sample logs and schema files for AI field mapping discovery.
@@ -164,10 +166,37 @@ Uploads sample logs and schema files for AI field mapping discovery.
   ```json
   {
     "requestId": "req_89a12c4b",
+    "sourceId": "src_5d1e...",
+    "vendorId": "ven_2a7c...",
     "status": "SUBMITTED",
-    "message": "Onboarding request submitted successfully. AI candidate mapping generated."
+    "message": "Onboarding request submitted successfully. After an administrator approves it, create your API key under Active Sources."
   }
   ```
+  The response contains no API key.
+
+#### `POST /v1/onboard/sources/{sourceId}/api-key`
+Creates the API key of an approved log source, or replaces it. Only the owner of the source can call it.
+
+* **Request Body** (optional; default `false`):
+  ```json
+  { "replaceExisting": false }
+  ```
+  Set `replaceExisting` to `true` to regenerate. The old key stops working at once.
+* **Response (201 Created)**, with `Cache-Control: no-store`:
+  ```json
+  {
+    "sourceId": "src_5d1e...",
+    "apiKey": "ulpf_live_9f82a1b73e4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e",
+    "createdAt": "2026-11-12T10:42:00",
+    "replacedPreviousKey": false
+  }
+  ```
+  The key is shown in this response only. ULPF stores its SHA-256 hash, and cannot show it again.
+* **Errors** (`{"error": "...", "code": "..."}`):
+  - `403 NOT_OWNER`: the source belongs to another vendor.
+  - `404 SOURCE_NOT_FOUND`: no such source.
+  - `409 SOURCE_NOT_ACTIVE`: the source or the vendor is not active (for example, not approved yet).
+  - `409 KEY_EXISTS`: the source has a key and `replaceExisting` is not `true`.
 
 ---
 
@@ -195,7 +224,7 @@ Lists all pending and historical vendor onboarding requests.
   ```
 
 #### `PUT /v1/admin/onboard/{requestId}`
-Approves or rejects an AI-proposed schema mapping candidate.
+Approves or rejects an AI-proposed schema mapping candidate. Approval provisions the ClickHouse table and activates the source. It creates no API key and starts no replay.
 
 * **Request Body**:
   ```json
@@ -207,9 +236,7 @@ Approves or rejects an AI-proposed schema mapping candidate.
   ```json
   {
     "requestId": "req_89a12c4b",
-    "status": "APPROVED",
-    "apiKey": "ulpf_live_9f82a1b73e4c5d6e7f8a9b0c1d2e3f4a",
-    "message": "Onboarding request approved. Dynamic ClickHouse table provisioned."
+    "status": "APPROVED"
   }
   ```
 

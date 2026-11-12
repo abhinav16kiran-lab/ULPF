@@ -115,7 +115,8 @@ SQLite `UNIQUE` violations on insert are reported as `DuplicateKeyException`; Sp
 #### Design & Memory Characteristics:
 * **In-Memory Cache (`activeCredentialCache`):** Checks RAM cache first for `keyHash` lookup. Resolves active keys in **< 1 microsecond** with 0 SQLite disk I/O.
 * **Idle Eviction (5 Minutes):** A background `@Scheduled(fixedDelay = 60000)` task evicts any API key credential from RAM if inactive for **> 300,000 ms (5 mins)**.
-* **Instant Revocation:** Calling `revokeCredential()` or saving updates invalidates the cache entry immediately.
+* **Instant Revocation:** `revokeActiveForSource()` evicts the cache entry before the update and again after the commit, so a revoked key cannot survive in RAM. Saving a credential also evicts its cache entry.
+* **One active key per source:** the partial unique index `idx_credentials_one_active_per_source` allows at most one `ACTIVE` row per `source_id`. `ApiKeyService` creates and replaces keys; only the SHA-256 hash is stored.
 
 #### Data Models:
 * **`CredentialRecord`**: Immutable record holding `credentialId`, `sourceId`, `vendorId`, `keyHash`, `status`, and `createdAt`.
@@ -142,11 +143,11 @@ SQLite `UNIQUE` violations on insert are reported as `DuplicateKeyException`; Sp
 * **Description:** Persists a new ingestion API key credential into SQLite and invalidates stale cache entries.
 * **Exceptions Thrown:** `org.springframework.dao.DataAccessException` if foreign key `source_id` is invalid.
 
-##### `void activateCredentialForSource(String sourceId)`
-* **Description:** Activates credential record associated with `sourceId` once onboarding request is approved by Admin.
+##### `Optional<CredentialRecord> findActiveBySourceId(String sourceId)`
+* **Description:** Returns the working key of a source, if it has one. Reads SQLite, not the cache. `ApiKeyService` uses it to decide between create and regenerate, and `my-sources` uses its `createdAt`.
 
-##### `void revokeCredential(String credentialId)`
-* **Description:** Updates credential status to `'REVOKED'` and clears cache immediately.
+##### `void revokeActiveForSource(String sourceId)`
+* **Description:** Sets the source's `ACTIVE` key to `'REVOKED'`. Evicts the cache entry first, and again after the transaction commits: before the commit, an ingest request on another connection can still read the key as `ACTIVE` and cache it again.
 
 ##### `@Scheduled evictIdleCredentials()`
 * **Description:** Background task evicting idle API key credentials from RAM after 5 minutes of inactivity.

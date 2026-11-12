@@ -43,7 +43,8 @@ import java.util.UUID;
 /**
  * Vendor onboarding: USER/VENDOR accounts submit vendor, source and sample logs; the mapping engine proposes field
  * mappings; an admin reviews and approves or rejects. Approval provisions the ClickHouse table, activates the
- * source and API key, and promotes the submitter from USER to VENDOR (never changes an admin's role).
+ * source, and promotes the submitter from USER to VENDOR (never changes an admin's role). No API key exists before
+ * approval: the vendor then creates it through {@link ApiKeyService}.
  */
 @Service
 public class OnboardingService {
@@ -61,7 +62,6 @@ public class OnboardingService {
     private final LogFormatDetector logFormatDetector;
     private final MappingEngineOrchestrator mappingEngineOrchestrator;
     private final com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
-    private com.ulpf.replay.service.ReplayBackfillService replayBackfillService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public record AdminStats(int pendingReviewCount, int activeVendorsCount) {}
@@ -103,23 +103,6 @@ public class OnboardingService {
                 mappingRepository, mappingProposalService, mappingLearningService, new LogFormatDetector(), null, null);
     }
 
-    public OnboardingService(
-            UserRepository userRepository,
-            VendorRepository vendorRepository,
-            SourceRepository sourceRepository,
-            CredentialRepository credentialRepository,
-            OnboardingRepository onboardingRepository,
-            MappingRepository mappingRepository,
-            MappingProposalService mappingProposalService,
-            MappingLearningService mappingLearningService,
-            LogFormatDetector logFormatDetector,
-            MappingEngineOrchestrator mappingEngineOrchestrator,
-            com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
-        this(userRepository, vendorRepository, sourceRepository, credentialRepository, onboardingRepository,
-                mappingRepository, mappingProposalService, mappingLearningService, logFormatDetector,
-                mappingEngineOrchestrator, dynamicSchemaProvisioningService, null);
-    }
-
     @Autowired
     public OnboardingService(
             UserRepository userRepository,
@@ -132,8 +115,7 @@ public class OnboardingService {
             MappingLearningService mappingLearningService,
             LogFormatDetector logFormatDetector,
             @Autowired(required = false) MappingEngineOrchestrator mappingEngineOrchestrator,
-            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService,
-            @Autowired(required = false) com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
+            @Autowired(required = false) com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService) {
         this.userRepository = userRepository;
         this.vendorRepository = vendorRepository;
         this.sourceRepository = sourceRepository;
@@ -145,19 +127,12 @@ public class OnboardingService {
         this.logFormatDetector = logFormatDetector;
         this.mappingEngineOrchestrator = mappingEngineOrchestrator;
         this.dynamicSchemaProvisioningService = dynamicSchemaProvisioningService;
-        this.replayBackfillService = replayBackfillService;
-    }
-
-    @Autowired(required = false)
-    public void setReplayBackfillService(com.ulpf.replay.service.ReplayBackfillService replayBackfillService) {
-        this.replayBackfillService = replayBackfillService;
     }
 
     public record OnboardingSubmissionResult(
             String requestId,
             String sourceId,
             String vendorId,
-            String rawApiKey,
             String status,
             String message) {
     }
@@ -202,43 +177,34 @@ public class OnboardingService {
         SourceRecord source = sourceRepository.save(new SourceRecord(
                 null, vendor.vendorId(), sourceName, sourceType, "PENDING_APPROVAL", null));
 
-        // 3. Generate raw API Key (e.g., ulpf_live_...) & SHA-256 key hash
-        String rawApiKey = "ulpf_live_" + UUID.randomUUID().toString().replace("-", "")
-                + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-        String keyHash = hashSha256(rawApiKey);
+        // 3. No API key yet: the vendor creates it after approval (ApiKeyService).
 
-        // 4. Save credential record with status PENDING_APPROVAL
-        credentialRepository.save(new CredentialRecord(
-                null, source.sourceId(), vendor.vendorId(), keyHash, "PENDING_APPROVAL", null));
-
-        // 5. Generate candidate mapping version via AI mapping engine using format autodetector on sample snippet
+        // 4. Generate candidate mapping version via AI mapping engine using format autodetector on sample snippet
         List<MappingProposal> proposals = generateProposalsFromSample(sampleLogFile);
         mappingProposalService.saveMappingVersion(source.sourceId(), proposals);
 
         // Inject metadata block into candidate mapping_json
         injectMetadataIntoCandidateMapping(source.sourceId(), effectiveLogType, delta, maxIntervalMs, sensorField);
 
-        // 6. Extract sample snippet, include candidate mappings & save files to disk
+        // 5. Extract sample snippet, include candidate mappings & save files to disk
         String requestId = UUID.randomUUID().toString();
         String sampleMetadataJson = processAndStoreSampleFiles(requestId, sampleLogFile, schemaFile, effectiveLogType,
                 delta, maxIntervalMs, sensorField, proposals);
 
-        // 7. Save onboarding request record
+        // 6. Save onboarding request record
         OnboardingRequestRecord req = onboardingRepository.saveRequest(new OnboardingRequestRecord(
                 requestId, user.userId(), source.sourceId(), "NEW_SOURCE", sampleMetadataJson, "SUBMITTED",
                 LocalDateTime.now()));
 
         invalidateAdminStatsCache();
-        log.info("Onboarding request {} submitted for source {} with raw API key generated and metadata injected",
-                requestId, source.sourceId());
+        log.info("Onboarding request {} submitted for source {} with metadata injected", requestId, source.sourceId());
 
         return new OnboardingSubmissionResult(
                 req.requestId(),
                 source.sourceId(),
                 vendor.vendorId(),
-                rawApiKey,
                 req.status(),
-                "Onboarding request submitted successfully. Please save your API key now — for security reasons, it will not be displayed again. The key will become ACTIVE once approved by an administrator.");
+                "Onboarding request submitted successfully. After an administrator approves it, create your API key under Active Sources.");
     }
 
     @Transactional
@@ -299,7 +265,6 @@ public class OnboardingService {
                 req.requestId(),
                 source.sourceId(),
                 source.vendorId(),
-                null,
                 req.status(),
                 "Schema update request submitted successfully. Your existing API key remains active. The proposed candidate mapping version will take effect once approved by an administrator.");
     }
@@ -343,14 +308,23 @@ public class OnboardingService {
         return onboardingRepository.findRequestsByUserId(user.userId());
     }
 
-    public List<SourceRecord> getUserSources(String username) {
+    /** A source of the user's vendor, with the creation time of its active API key ({@code null}: no key yet). */
+    public record MySource(String sourceId, String vendorId, String sourceName, String sourceType, String status,
+            LocalDateTime createdAt, LocalDateTime apiKeyCreatedAt) {}
+
+    public List<MySource> getUserSources(String username) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
         Optional<VendorRecord> vendorOpt = vendorRepository.findByOwnerUserId(user.userId());
         if (vendorOpt.isEmpty()) {
             return List.of();
         }
-        return sourceRepository.findByVendorId(vendorOpt.get().vendorId());
+        return sourceRepository.findByVendorId(vendorOpt.get().vendorId()).stream()
+                .map(src -> new MySource(src.sourceId(), src.vendorId(), src.sourceName(), src.sourceType(),
+                        src.status(), src.createdAt(),
+                        credentialRepository.findActiveBySourceId(src.sourceId())
+                                .map(CredentialRecord::createdAt).orElse(null)))
+                .toList();
     }
 
     @Transactional
@@ -381,33 +355,23 @@ public class OnboardingService {
                 // If ClickHouse schema provisioning fails, an exception is thrown and approval halts cleanly here.
                 activateCandidateMappingForSource(req.sourceId());
 
-                // 2. Activate source, API key credentials, and upgrade user role ONLY after ClickHouse schema succeeds
+                // 2. Activate source and upgrade user role ONLY after ClickHouse schema succeeds.
+                // No API key is created here: the vendor creates it afterwards (ApiKeyService).
                 sourceRepository.activateSource(req.sourceId());
-                credentialRepository.activateCredentialForSource(req.sourceId());
                 // Promote only a USER: an admin (or an existing vendor) keeps its role.
                 if (userRepository.findById(req.userId())
                         .map(u -> u.role() == com.ulpf.controlplane.model.Role.USER).orElse(false)) {
                     userRepository.updateUserRole(req.userId(), com.ulpf.controlplane.model.Role.VENDOR);
                 }
 
-                // 3. Mark request as APPROVED only after all credentials, roles, and schemas are active
+                // 3. Mark request as APPROVED only after the source, role, and schema are active
                 onboardingRepository.updateRequestStatus(requestId, "APPROVED");
 
                 onboardingRepository.saveNotification(
                         req.userId(),
                         "Onboarding Request Approved",
                         "Your onboarding request (ID: " + requestId
-                                + ") for log source has been APPROVED! Your API key is now ACTIVE.");
-
-                // 4. AUTOMATIC REPLAY TRIGGER (only for new source onboarding, not schema updates per Q10/Q11):
-                if (replayBackfillService != null && !"SCHEMA_UPDATE".equalsIgnoreCase(req.requestType())) {
-                    try {
-                        log.info("Triggering automatic background replay for approved source {}", req.sourceId());
-                        replayBackfillService.triggerReplayAsync(req.sourceId(), null);
-                    } catch (Exception e) {
-                        log.warn("Automatic replay failed to start for source {}: {}", req.sourceId(), e.getMessage());
-                    }
-                }
+                                + ") has been APPROVED. To start sending logs, open Onboarding and click Create API key on the source under Active Sources.");
             } else {
                 onboardingRepository.updateRequestStatus(requestId, "APPROVED");
             }

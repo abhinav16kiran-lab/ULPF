@@ -54,10 +54,10 @@ All application views utilize the tokens established in the team's official **Wa
 | `/signup` | `SignupPage.jsx` | Public | User registration (always `USER`) |
 | `/setup` | `SetupPage.jsx` | Public (once) | One-time setup: step 1 `.env` setup credentials, step 2 the super-admin account |
 | `/link/:token` | `LinkPage.jsx` | Public (link token) | Use an admin invite link (username + password) or reset link (new password) |
-| `/onboard` | `OnboardingPage.jsx` | Authenticated (server: `USER`, `VENDOR`) | 50/50 split workspace for log sample upload & live payload parsing |
+| `/onboard` | `OnboardingPage.jsx` | Authenticated (server: `USER`, `VENDOR`) | 50/50 split workspace for log sample upload & live payload parsing; under My Active Log Sources, **Create API key** / **Regenerate** (with a confirmation) shows the key once in `ApiKeyReveal` |
 | `/admin` | `AdminDashboardPage.jsx` | `ADMIN` | Schema governance, AI mapping review & one-click ClickHouse activation |
 | `/admin/admins` | `AdminsPage.jsx` | Super-admin | Invite admins, reset passwords and revoke admins by single-use links; pending links |
-| `/notifications` | `NotificationsPage.jsx` | Authenticated | User notification feed, unread toggles & API key delivery |
+| `/notifications` | `NotificationsPage.jsx` | Authenticated | User notification feed and unread toggles (never contains an API key) |
 | `/integrity` | `IntegrityConsolePage.jsx` | `ADMIN`, `VENDOR`, `USER` | Cryptographic Merkle tree forensic audit console |
 | `/analytics` | `AnalyticsPage.jsx` | `ADMIN` | ClickHouse query builder (Builder Mode, Direct SQL, Lineage) |
 

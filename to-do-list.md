@@ -262,3 +262,33 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - Write a plan first, with a before and after screenshot of each screen.
   - Change one screen in each PR, with frontend tests, so each change is small to review.
   - Overlaps item 9 (split `AnalyticsPage.jsx`) and item 8 (mapping code structure).
+- **Dead code found on 2026-11-12** (during item 16; not fixed there, to keep that PR small):
+  - `SourceRepository.suspendSource` and `VendorRepository.suspendVendor`, `activateVendor`, `revokeVendor` are called only by tests. No endpoint uses them (see item 17).
+  - `OnboardingService.hashSha256` is used for unrelated hashes (`EventIngestionService`, `AdminLinkService`), and `MerkleTreeCalculator.hashSha256` is a second copy of the same function. One shared helper would do.
+
+### 15. Agent Scripts: Session Brief, Change Report and Handoff Notes [ON HOLD 2026-11-12, Adarsh has assumed the ownership]
+- **Problem**: a new agent session starts with no memory of the repo. It misses the state of the work, the second implementation of something, and docs that are wrong. A resumed session has old context and does not see what changed while it was paused.
+- **Plan (approved, merged in PR #24)**: `agent-scripts/plans/2026-11-11-orientation-and-handoff.md`. The rules for changing scripts are in `REUSABLE_SCRIPTS.md`, section "Changing the scripts".
+- **Next step**: step 1 of the plan, on a new branch `scripts/orient-brief`.
+  1. Write the tests first, with small fake git repos in a temp folder. Confirm they fail.
+  2. Build `agent-scripts/_lib/` and the first `orient_session.py --brief`, with sections 1 to 4: work state, recent commits, open plans and backlog, and handoff notes.
+  3. Run it once on ULPF and once with bad input. Open a PR for the team lead.
+- **After that**: steps 2 to 10 of the plan (hotspots, code map, handoff script, the Claude Code hook, the change report, related files, the change check between turns, then the planned scripts in `agent-scripts/INDEX.md`).
+
+### 16. Decide the Onboarding API Key Flow [COMPLETED 2026-11-12]
+- **Done**: [`docs/plans/2026-11-12-api-key-after-approval.md`](docs/plans/2026-11-12-api-key-after-approval.md) (Status: Done). The team lead chose option A: no key exists before approval. The vendor creates the key after approval, sees it once, and can regenerate it. The design decisions are in `docs/ARCH/ARCHITECTURE.md` §3.10. The text below is the problem as it was before the change.
+- **Problem**: `OnboardingService.submitRequest` (`core-engine/.../controlplane/service/OnboardingService.java:176-243`) generates the API key, runs the mapping engine on the sample, and only then returns the key, all in one request and one transaction. The vendor waits for the mapping engine. The vendor also gets a key that does not work until an admin approves. Events sent with it before approval are rejected, so the automatic replay after approval finds 0 events.
+- **Options**:
+  - **A. Key at approval (recommended).** The submit returns only a request id. The mapping runs in the background. When the admin approves, ULPF creates the key and shows it once to the vendor. The vendor never holds a key that does not work.
+  - **B. Key at submit, mapping in the background.** The vendor gets the inactive key at once, as today. Only the mapping moves out of the request. A smaller change.
+- **Design Considerations**:
+  - Item 10 already plans async onboarding (`AI_ANALYSIS` → `HUMAN_REVIEW`), so this decision can belong to item 10.
+  - The behaviour change needs a plan and tests first (`AGENTS.md`).
+
+### 17. Admin Can Suspend or Revoke a Vendor's Source or Key [NEW 2026-11-12]
+- **Problem**: no admin action stops one vendor's key or source. The repository methods exist (`SourceRepository.suspendSource`, `VendorRepository.suspendVendor`, `revokeVendor`), but no endpoint or screen calls them. Since item 16, a vendor can stop a leaked key by regenerating it, but an admin cannot act alone, for example when a vendor sends abusive traffic or leaves.
+- **Requirement**:
+  - Admin endpoints and buttons to suspend, reactivate and revoke a source, and to suspend a vendor (all its sources).
+  - A suspended source rejects ingest at once: evict the credential cache before the update and again after the commit, as `CredentialRepository.revokeActiveForSource` does.
+  - The vendor gets a notification. The admin still never sees or creates a key.
+- **Design Considerations**: plan and tests first. Decide if a suspend also stops a running replay of the source.

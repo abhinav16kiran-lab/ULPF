@@ -207,9 +207,17 @@ CLICKHOUSE_PASSWORD=Clickhouse123!
 1. Go to **Admin Dashboard** (`/admin`).
 2. Select the pending onboarding request.
 3. Inspect the AI proposed field mappings and confidence scores.
-4. Click **Approve Request**. The engine issues a production API Key (`ulpf_live_...`) and activates the mapping version.
+4. Click **Approve Request**. The engine provisions the ClickHouse table, activates the mapping version and the source, and notifies the vendor.
 
-### Step 4: Live Log Ingestion (`POST /v1/events`)
+### Step 4: Create the API Key (`/onboard`, as the vendor)
+1. Sign in as the vendor and open **Onboarding**.
+2. Open **My Active Log Sources** and click **Create API key** on the approved source.
+3. Copy the key (`ulpf_live_...`). It is shown once. ULPF stores only its hash.
+4. If you lose the key, or it leaks, click **Regenerate**. The old key stops working at once.
+
+No key exists before approval, and an admin cannot create or see a vendor's key.
+
+### Step 5: Live Log Ingestion (`POST /v1/events`)
 Ingest logs with 0% AI overhead using `curl`:
 ```bash
 curl -X POST http://localhost:8080/v1/events \
@@ -233,7 +241,7 @@ curl -X POST http://localhost:8080/v1/events \
 }
 ```
 
-### Step 5: Query & Analyze (`/analytics`)
+### Step 6: Query & Analyze (`/analytics`)
 1. Open **Analytics Console** (`/analytics`).
 2. Run custom ClickHouse SQL queries or use the visual Query Builder to aggregate logs by vendor, source IP, or event action.
 
@@ -315,8 +323,8 @@ Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`
 
 ## 6. Asynchronous Historical Replay & Backfill Engine
 
-When a new source is approved or an existing mapping is updated, historical events residing in `ulpf_raw.raw_events` can be replayed into target dynamic tables (`ulpf_events.events_{vendor}_{source}`) without service interruption:
-- **On-Demand & Automated**: Automatically kicks off on onboarding approval or on-demand via `POST /v1/admin/sources/{sourceId}/replay`.
+When an existing mapping is updated, historical events residing in `ulpf_raw.raw_events` can be replayed into target dynamic tables (`ulpf_events.events_{vendor}_{source}`) without service interruption:
+- **On-Demand**: An admin starts it with `POST /v1/admin/sources/{sourceId}/replay`. Approval does not start a replay: a source has no events before approval, because its API key does not exist yet.
 - **$O(1)$ Bounded Memory Cursor Streaming**: Streams raw events using composite primary index pagination `(received_at, event_id)` in configurable batches (1,000 events), preventing JVM heap exhaustion regardless of historical log volume.
 - **Idempotency & Deduplication**: Checks target ClickHouse primary keys per batch before insertion, guaranteeing zero duplicate entries on retries.
 - **Adaptive Memory Throttling**: Monitors ClickHouse `MemoryTracking` metrics and pauses replay if cluster memory pressure exceeds 80%.
@@ -364,11 +372,11 @@ Vendors can register external webhook endpoints in the self-service portal to re
 | :--- | :--- | :--- | :--- |
 | `POST` | `/v1/login` | None | Authenticate user & receive JWT token |
 | `POST` | `/v1/signup` | None | Register user account |
-| `POST` | `/v1/onboard` | Bearer Token | Submit vendor log source onboarding request |
-| `POST` | `/v1/onboard/update` | Bearer Token | Submit schema update for existing log source |
+| `POST` | `/v1/onboard/{username}` | Bearer Token | Submit vendor log source onboarding request |
+| `POST` | `/v1/onboard/update/{username}` | Bearer Token | Submit schema update for existing log source |
+| `POST` | `/v1/onboard/sources/{sourceId}/api-key` | Vendor Token (source owner) | Create or regenerate the source's API key (shown once) |
 | `GET` | `/v1/admin/onboard` | Admin Token | List pending onboarding requests |
-| `POST` | `/v1/admin/onboard/{id}/approve` | Admin Token | Approve request & issue API key |
-| `POST` | `/v1/admin/onboard/{id}/reject` | Admin Token | Reject onboarding request |
+| `PUT` | `/v1/admin/onboard/{id}` | Admin Token | Approve or reject an onboarding request (`{"decision": "APPROVED"}` or `"REJECTED"`) |
 | `POST` | `/v1/admin/sources/{id}/replay` | Admin Token | Trigger historical raw-to-dynamic table replay |
 | `GET` | `/v1/admin/sources/{id}/replay/status` | Admin Token | Check progress of active/past replay job |
 | `DELETE` | `/v1/admin/sources/{id}/replay` | Admin Token | Cancel running replay backfill job |

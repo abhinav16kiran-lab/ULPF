@@ -7,6 +7,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -19,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Repository for API Key credential validation and resolution against SQLite credentials, sources, and vendors tables.
  * Features an in-memory active credential cache with 5-minute idle eviction for microsecond lookup performance.
+ * A source has at most one {@code ACTIVE} key (a partial unique index enforces this); {@code ApiKeyService} creates
+ * and replaces keys, and only the SHA-256 hash of a key is stored.
  */
 @Repository
 public class CredentialRepository {
@@ -122,32 +126,34 @@ public class CredentialRepository {
             .orElseGet(() -> new CredentialRecord(id, cred.sourceId(), cred.vendorId(), cred.keyHash(), cred.status(), LocalDateTime.now()));
     }
 
-    public void revokeCredential(String credentialId) {
-        // Synchronously evict target credential from RAM first to guarantee zero microsecond stale access window
-        evictByCredentialId(credentialId);
-
-        String sql = "UPDATE credentials SET status = 'REVOKED' WHERE credential_id = ?";
-        jdbcTemplate.update(sql, credentialId);
+    /** The working key of a source, if it has one. Reads the database, not the cache. */
+    public Optional<CredentialRecord> findActiveBySourceId(String sourceId) {
+        String sql = """
+            SELECT c.credential_id, c.source_id, s.vendor_id, c.key_hash, c.status, c.created_at
+            FROM credentials c
+            JOIN sources s ON c.source_id = s.source_id
+            WHERE c.source_id = ? AND c.status = 'ACTIVE'
+            """;
+        return jdbcTemplate.query(sql, ROW_MAPPER, sourceId).stream().findFirst();
     }
 
-    public void suspendCredential(String credentialId) {
-        // Synchronously evict target credential from RAM first
-        evictByCredentialId(credentialId);
-
-        String sql = "UPDATE credentials SET status = 'SUSPENDED' WHERE credential_id = ?";
-        jdbcTemplate.update(sql, credentialId);
-    }
-
-    public void activateCredentialForSource(String sourceId) {
+    /**
+     * Stops the working key of a source. The cache entry goes first, so the key fails at once in this thread.
+     * Inside a transaction, an ingest request on another connection still sees the key as ACTIVE until the commit,
+     * and can put it back in the cache. Cache hits refresh the idle timer, so a busy client could keep a revoked key
+     * alive. For that reason the cache entry is evicted again after the commit.
+     */
+    public void revokeActiveForSource(String sourceId) {
         evictBySourceId(sourceId);
-
-        String sql = "UPDATE credentials SET status = 'ACTIVE' WHERE source_id = ?";
-        jdbcTemplate.update(sql, sourceId);
-    }
-
-    public void evictByCredentialId(String credentialId) {
-        if (credentialId == null) return;
-        activeCredentialCache.values().removeIf(cached -> credentialId.equals(cached.record().credentialId()));
+        jdbcTemplate.update("UPDATE credentials SET status = 'REVOKED' WHERE source_id = ? AND status = 'ACTIVE'", sourceId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    evictBySourceId(sourceId);
+                }
+            });
+        }
     }
 
     public void evictBySourceId(String sourceId) {

@@ -54,8 +54,8 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 ### 3.1 Control Plane
 * **User Authentication & Role Governance**: Enforces JWT Bearer token authentication supporting `ADMIN`, `VENDOR`, and `USER` roles. `JwtFilter` checks every token against the live account (cached 60 s, `AccountLookup`): role and super-admin status come from SQLite, and a password change (`pwv` fingerprint claim) or revoke ends sessions on the next request.
 * **Admin Accounts**: No account is created from `.env`. The first visit to `/setup` asks for the one-time setup credentials (`ULPF_ADMIN_USERNAME` / `ULPF_ADMIN_PASSWORD`) and creates the single **super-admin** (`users.is_super_admin`, unique index). The super-admin invites regular admins and resets their passwords with single-use 12 h links (`admin_links`, SHA-256 hashed), and revokes them (account deleted). A lost super-admin password is reset only on the server (`startup/reset-super-admin.sh`, `ResetSuperAdminCommand`). Admin passwords are 12-100 characters. Onboarding is closed to admins, so an admin can never become a vendor. Why each choice was made: §3.9.
-* **Vendor & Log Source Management**: Manages vendor identities, log sources, and active API key credentials with microsecond RAM caching and 5-minute idle eviction.
-* **Onboarding Workflow**: Accepts sample log payloads and schema files, runs AI field discovery, and queues candidate mappings for admin review.
+* **Vendor & Log Source Management**: Manages vendor identities, log sources, and active API key credentials with microsecond RAM caching and 5-minute idle eviction. A source has at most one active key. The vendor creates it after approval and can regenerate it (`ApiKeyService`, see §3.10).
+* **Onboarding Workflow**: Accepts sample log payloads and schema files, runs AI field discovery, and queues candidate mappings for admin review. Submit creates no API key; approval activates the source and tells the vendor to create one.
 
 ### 3.2 AI Mapping Engine (Layers 1 – 4)
 * **Layer 1 (Exact Match)**: Instant SQLite dictionary lookup.
@@ -82,7 +82,7 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 
 ![Replay Backfill Pipeline Architecture](../../Architecture_Diagram/Replay%20Backfill%20Pipeline%20Architecture.png)
 
-* **Automated & On-Demand Execution**: Automatically triggers when an onboarding request is approved in `OnboardingService`, or runs on-demand via Admin REST API (`POST /v1/admin/sources/{sourceId}/replay`).
+* **On-Demand Execution**: Runs on demand via the Admin REST API (`POST /v1/admin/sources/{sourceId}/replay`). Approval no longer starts a replay (removed on 2026-11-12): before approval no API key exists, so the source has no raw events to replay.
 * **Non-Blocking Background Worker**: Runs asynchronously via dedicated `CompletableFuture` thread pool with thread-safe cancellation tokens and in-memory job state tracking (`ReplayJobStatus`).
 * **Bounded Cursor Streaming ($O(1)$ Memory)**: Reads raw historical logs from `ulpf_raw.raw_events` using composite primary index cursor pagination `(received_at, event_id)` in configurable chunks (default: 1,000), preventing JVM heap exhaustion regardless of historical dataset size.
 * **Dynamic Schema Verification**: Automatically verifies the destination dynamic table exists prior to streaming, invoking `DynamicSchemaProvisioningService` to provision or migrate columns if needed.
@@ -136,6 +136,20 @@ What the feature does is summarised under 3.1. This section records **why** it i
 | Generated setup password: 10 characters, no look-alikes (0/O, 1/l/I) | It is typed by hand once and then never works again. About 58 bits is far beyond online guessing for a one-time value | A long random string: hard to type for no real gain |
 | Onboarding endpoints closed to admins; approval promotes only a `USER` | An admin who submitted an onboarding request was turned into a `VENDOR` on approval (backlog item 11, Problem B). Two independent guards: the security rule, and the role check in `OnboardingService` | UI-only hiding: the API stayed open |
 | One-time cleanup of legacy admins, keyed on the missing `is_super_admin` column | The column is created in the same transaction, so the cleanup runs exactly once per database, and admins created later survive every restart. A legacy admin that vendor data references is locked, not deleted, so startup never fails and no vendor data is lost | Clean up on every start: would delete invited admins |
+
+### 3.10 API Keys: Design Decisions and Why
+
+| Decision | Why | Rejected alternative (and why) |
+| :--- | :--- | :--- |
+| No key exists before approval. After approval, the vendor clicks **Create API key** and sees the key once | A key handed out at submit could not be used: ingest accepts only `ACTIVE` keys, so the vendor held a key that was rejected until an admin acted. Nobody should hold a credential before a human has reviewed them | A key at submit (the old flow): a key that does not work, and the replay at approval always found 0 events. Accept raw events while pending: anyone who signs up could write to ClickHouse before review, which needs quotas and cleanup on reject |
+| The key is generated when the vendor clicks, not when the admin approves | The raw key then exists only in that one HTTP response (`Cache-Control: no-store`). Only the SHA-256 hash is stored, as before | Create it at approval and keep it until the vendor fetches it: a raw key stored at rest |
+| Delivery in the vendor's own session, no other channel | The stack runs air-gapped and has no mail server. Only the vendor sees the key | Email: not available. Vendor webhook: sends a secret to an outside URL. An admin hands it over: the admin would know the vendor's key |
+| Regenerate is the same action, with `replaceExisting: true` and a confirmation; the old key is revoked in the same transaction | One code path for the first key and every replacement. The two reasons to regenerate are a lost key (nobody uses the old one) and a leaked key (it must stop at once) | A grace period with two valid keys: keeps a leaked key alive. A separate rotate endpoint: duplicate logic |
+| A partial unique index allows one `ACTIVE` key per source | Two requests that arrive together cannot both leave a working key | A check in code only: two transactions can both pass it |
+| The revoke evicts the cache entry before the update and again after the commit | Until the commit, an ingest request on another connection still reads the old key as `ACTIVE` and can put it back in the cache. Cache hits refresh the idle timer, so a busy client could keep a revoked key alive | Evict only before the update: leaves that window open |
+| Only the source owner can create or regenerate a key; admins cannot | A key that an admin has seen is a key two people know. `/v1/onboard/**` admits `USER` and `VENDOR` only, and the service checks ownership | Admin-created keys: see the previous row |
+| Every key creation notifies the vendor, without the key | If someone else used the vendor's account, the vendor sees it | No notification: a stolen session could replace the key silently |
+| `PENDING_APPROVAL` removed from `credentials.status`, with no migration | No code writes it any more. There were no users, so existing dev databases were recreated instead | A table-rebuild migration in `SqliteSchemaMigrator`: code kept forever for nobody |
 
 ## 4. Technology Stack & Packaging
 

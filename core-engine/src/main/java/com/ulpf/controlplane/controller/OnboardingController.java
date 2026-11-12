@@ -2,27 +2,38 @@ package com.ulpf.controlplane.controller;
 
 import java.util.Map;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.ulpf.common.UlpfPrincipal;
+import com.ulpf.controlplane.service.ApiKeyService;
+import com.ulpf.controlplane.service.ApiKeyService.IssuedApiKey;
 import com.ulpf.controlplane.service.OnboardingService;
 
+/**
+ * Vendor onboarding endpoints for USER and VENDOR accounts (admins are refused by the security rules): submit a new
+ * source or a schema update, withdraw a request, list the user's requests and sources, and create or regenerate the
+ * API key of an approved source. The key is in the response of that last call only.
+ */
 @RestController
 @RequestMapping("/v1")
 public class OnboardingController {
 
     private final OnboardingService onboardingService;
+    private final ApiKeyService apiKeyService;
 
-    OnboardingController(OnboardingService onboardingService) {
+    OnboardingController(OnboardingService onboardingService, ApiKeyService apiKeyService) {
         this.onboardingService = onboardingService;
+        this.apiKeyService = apiKeyService;
     }
 
     @PostMapping(value = "/onboard/{username}", consumes = "multipart/form-data")
@@ -72,7 +83,6 @@ public class OnboardingController {
                 "requestId", saved.requestId(),
                 "sourceId", saved.sourceId(),
                 "vendorId", saved.vendorId(),
-                "apiKey", saved.rawApiKey(),
                 "status", saved.status(),
                 "message", saved.message()
         ));
@@ -172,6 +182,25 @@ public class OnboardingController {
     public ResponseEntity<?> getMySources(@AuthenticationPrincipal UlpfPrincipal principal) {
         var sources = onboardingService.getUserSources(principal.username());
         return ResponseEntity.ok(Map.of("sources", sources));
+    }
+
+    /** Body of the key request. {@code replaceExisting} must be true to regenerate a key that exists. */
+    public record ApiKeyRequest(Boolean replaceExisting) {}
+
+    @PostMapping("/onboard/sources/{sourceId}/api-key")
+    public ResponseEntity<?> createApiKey(
+            @AuthenticationPrincipal UlpfPrincipal principal,
+            @PathVariable String sourceId,
+            @RequestBody(required = false) ApiKeyRequest request) {
+        boolean replace = request != null && Boolean.TRUE.equals(request.replaceExisting());
+        IssuedApiKey issued = apiKeyService.issueKey(principal.username(), sourceId, replace);
+        return ResponseEntity.status(201)
+                .cacheControl(CacheControl.noStore())
+                .body(Map.of(
+                        "sourceId", issued.sourceId(),
+                        "apiKey", issued.apiKey(),
+                        "createdAt", issued.createdAt(),
+                        "replacedPreviousKey", issued.replacedPreviousKey()));
     }
 
     private boolean isBlank(String s) {
