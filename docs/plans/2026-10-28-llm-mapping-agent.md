@@ -129,10 +129,12 @@ sample file ─► LogFormatDetector (50 lines as ONE payload) ─► keys[]
 
 **New (one decision for the whole source, with context):**
 
+> Changed on 2026-11-12 (backlog item 16, [`2026-11-12-api-key-after-approval.md`](2026-11-12-api-key-after-approval.md)): submit creates no API key. The vendor creates the key after approval, so the async submit returns only the request id.
+
 ```
                          ┌──────────────────────── submit (HTTP, fast) ─────────────────────────┐
-vendor ─► POST onboard ─►│ create source + creds (PENDING) ; request status = AI_ANALYSIS        │
-                         │ store sample snippet ; enqueue analysis job ; return API key          │
+vendor ─► POST onboard ─►│ create source (PENDING) ; request status = AI_ANALYSIS                │
+                         │ store sample snippet ; enqueue analysis job ; return request id       │
                          └──────────────────────────────────┬────────────────────────────────────┘
                                                             │ MappingAnalysisWorker (async, bounded queue)
                                                             ▼

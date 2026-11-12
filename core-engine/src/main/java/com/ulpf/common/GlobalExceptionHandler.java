@@ -3,6 +3,7 @@ package com.ulpf.common;
 import java.util.Map;
 
 import com.ulpf.controlplane.service.AccountActionException;
+import com.ulpf.controlplane.service.ApiKeyException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,6 +29,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<?> handleAccountAction(AccountActionException e) {
         return ResponseEntity.status(e.status()).body(Map.of(
                 "error", e.getMessage()
+        ));
+    }
+
+    /** Refused API key requests carry their own status and a stable code for the frontend. */
+    @ExceptionHandler(ApiKeyException.class)
+    public ResponseEntity<?> handleApiKey(ApiKeyException e) {
+        return ResponseEntity.status(e.status()).body(Map.of(
+                "error", e.getMessage(),
+                "code", e.code()
         ));
     }
 

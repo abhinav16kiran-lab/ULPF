@@ -97,6 +97,7 @@ Relationship: `vendors 1 : N sources`.
 | `created_at` | TIMESTAMP | Creation time |
 
 Relationship: `sources 1 : N credentials`.
+Constraints: index on `key_hash`; partial unique index `idx_credentials_one_active_per_source` on `source_id` where `status = 'ACTIVE'` (at most one working key per source). A key is created only after approval, by the source owner, so there is no pending status.
 
 ## `mapping_versions`
 

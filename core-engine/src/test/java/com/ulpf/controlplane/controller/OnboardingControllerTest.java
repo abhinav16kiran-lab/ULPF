@@ -2,7 +2,11 @@ package com.ulpf.controlplane.controller;
 
 import com.ulpf.common.GlobalExceptionHandler;
 import com.ulpf.common.UlpfPrincipal;
+import com.ulpf.controlplane.service.ApiKeyException;
+import com.ulpf.controlplane.service.ApiKeyService;
+import com.ulpf.controlplane.service.ApiKeyService.IssuedApiKey;
 import com.ulpf.controlplane.service.OnboardingService;
+import com.ulpf.controlplane.service.OnboardingService.MySource;
 import com.ulpf.controlplane.service.OnboardingService.OnboardingSubmissionResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +14,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -21,7 +27,10 @@ import org.springframework.web.method.support.ModelAndViewContainer;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -30,6 +39,9 @@ class OnboardingControllerTest {
 
         @Mock
         private OnboardingService onboardingService;
+
+        @Mock
+        private ApiKeyService apiKeyService;
 
         private MockMvc mockMvc;
         private UlpfPrincipal currentPrincipal;
@@ -51,7 +63,7 @@ class OnboardingControllerTest {
                         }
                 };
 
-                OnboardingController controller = new OnboardingController(onboardingService);
+                OnboardingController controller = new OnboardingController(onboardingService, apiKeyService);
                 mockMvc = MockMvcBuilders.standaloneSetup(controller)
                                 .setCustomArgumentResolvers(principalResolver)
                                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -64,7 +76,7 @@ class OnboardingControllerTest {
                                 eq("alice"), eq("source-1"), eq("FIREWALL"), eq("REG_LOG"), any(), any(), any(), any(),
                                 any()))
                                 .thenReturn(new OnboardingSubmissionResult(
-                                                "req-123", "source-1", "vendor-1", null, "SUBMITTED",
+                                                "req-123", "source-1", "vendor-1", "SUBMITTED",
                                                 "Update submitted successfully."));
 
                 MockMultipartFile sampleFile = new MockMultipartFile(
@@ -187,5 +199,96 @@ class OnboardingControllerTest {
                                 .andExpect(status().isBadRequest())
                                 .andExpect(jsonPath("$.error")
                                                 .value(org.hamcrest.Matchers.containsString("only withdraw your own")));
+        }
+
+        // --- Submit returns no key; the vendor creates it after approval ---
+
+        @Test
+        void testSubmitResponseContainsNoApiKey() throws Exception {
+                when(onboardingService.submitRequest(eq("alice"), eq("Alice Corp"), eq("Firewall Alpha"), eq("FIREWALL"),
+                                any(), any(), any(), any(), any(), any()))
+                                .thenReturn(new OnboardingSubmissionResult(
+                                                "req-1", "source-1", "vendor-1", "SUBMITTED", "Submitted."));
+
+                mockMvc.perform(multipart("/v1/onboard/alice")
+                                .param("vendorName", "Alice Corp")
+                                .param("sourceName", "Firewall Alpha")
+                                .param("sourceType", "FIREWALL"))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.requestId").value("req-1"))
+                                .andExpect(jsonPath("$.apiKey").doesNotExist());
+        }
+
+        @Test
+        void testCreateApiKeyReturns201AndIsNeverCached() throws Exception {
+                when(apiKeyService.issueKey("alice", "source-1", false)).thenReturn(new IssuedApiKey(
+                                "source-1", "ulpf_live_0123456789abcdef0123456789abcdef01234567",
+                                java.time.LocalDateTime.of(2026, 11, 12, 10, 42), false));
+
+                mockMvc.perform(post("/v1/onboard/sources/source-1/api-key")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"replaceExisting\": false}"))
+                                .andExpect(status().isCreated())
+                                .andExpect(header().string("Cache-Control", "no-store"))
+                                .andExpect(jsonPath("$.sourceId").value("source-1"))
+                                .andExpect(jsonPath("$.apiKey").value("ulpf_live_0123456789abcdef0123456789abcdef01234567"))
+                                .andExpect(jsonPath("$.createdAt").exists())
+                                .andExpect(jsonPath("$.replacedPreviousKey").value(false));
+        }
+
+        @Test
+        void testCreateApiKeyWithoutBodyDoesNotReplace() throws Exception {
+                when(apiKeyService.issueKey("alice", "source-1", false)).thenReturn(new IssuedApiKey(
+                                "source-1", "ulpf_live_x", java.time.LocalDateTime.of(2026, 11, 12, 10, 42), false));
+
+                mockMvc.perform(post("/v1/onboard/sources/source-1/api-key"))
+                                .andExpect(status().isCreated());
+        }
+
+        @Test
+        void testRegenerateApiKeyPassesTheReplaceFlag() throws Exception {
+                when(apiKeyService.issueKey("alice", "source-1", true)).thenReturn(new IssuedApiKey(
+                                "source-1", "ulpf_live_y", java.time.LocalDateTime.of(2026, 11, 12, 10, 42), true));
+
+                mockMvc.perform(post("/v1/onboard/sources/source-1/api-key")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"replaceExisting\": true}"))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.replacedPreviousKey").value(true));
+        }
+
+        @Test
+        void testCreateApiKeyRefusalsKeepTheirStatusAndCode() throws Exception {
+                Object[][] cases = {
+                                {HttpStatus.FORBIDDEN, "NOT_OWNER"},
+                                {HttpStatus.NOT_FOUND, "SOURCE_NOT_FOUND"},
+                                {HttpStatus.CONFLICT, "SOURCE_NOT_ACTIVE"},
+                                {HttpStatus.CONFLICT, "KEY_EXISTS"}};
+                for (Object[] c : cases) {
+                        HttpStatus httpStatus = (HttpStatus) c[0];
+                        String code = (String) c[1];
+                        org.mockito.Mockito.doThrow(new ApiKeyException(httpStatus, code, "refused: " + code))
+                                        .when(apiKeyService).issueKey("alice", "source-1", false);
+
+                        mockMvc.perform(post("/v1/onboard/sources/source-1/api-key"))
+                                        .andExpect(status().is(httpStatus.value()))
+                                        .andExpect(jsonPath("$.code").value(code))
+                                        .andExpect(jsonPath("$.error").value("refused: " + code));
+                }
+        }
+
+        @Test
+        void testMySourcesTellsWhetherEachSourceHasAKey() throws Exception {
+                java.time.LocalDateTime created = java.time.LocalDateTime.of(2026, 11, 1, 9, 0);
+                when(onboardingService.getUserSources("alice")).thenReturn(java.util.List.of(
+                                new MySource("s-with-key", "vendor-1", "Firewall", "FIREWALL", "ACTIVE", created,
+                                                java.time.LocalDateTime.of(2026, 11, 12, 10, 42)),
+                                new MySource("s-without-key", "vendor-1", "Web", "WEB_APP", "ACTIVE", created, null)));
+
+                mockMvc.perform(get("/v1/onboard/my-sources"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.sources[0].sourceId").value("s-with-key"))
+                                .andExpect(jsonPath("$.sources[0].apiKeyCreatedAt").exists())
+                                .andExpect(jsonPath("$.sources[1].apiKeyCreatedAt").value(org.hamcrest.Matchers.nullValue()));
         }
 }

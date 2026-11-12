@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS credentials (
     credential_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
     key_hash TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('PENDING_APPROVAL', 'ACTIVE', 'REVOKED')),
+    -- A key is created only for an approved source, by its owner, so it is never pending.
+    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'REVOKED')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES sources(source_id)
 );
@@ -95,6 +96,10 @@ CREATE TABLE IF NOT EXISTS mapping_embeddings (
 
 -- Index for fast credential key hash lookup on /v1/events ingestion requests
 CREATE INDEX IF NOT EXISTS idx_credentials_key_hash ON credentials(key_hash);
+
+-- At most one working key per source: a regenerate revokes the old key in the same transaction,
+-- and two requests that arrive together cannot both leave an ACTIVE key.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_one_active_per_source ON credentials(source_id) WHERE status = 'ACTIVE';
 
 -- Index for fast active mapping resolution per log source
 CREATE INDEX IF NOT EXISTS idx_mapping_versions_source_status ON mapping_versions(source_id, status);

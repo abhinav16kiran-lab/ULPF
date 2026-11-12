@@ -111,6 +111,8 @@ class OnboardingSecurityTest {
                 .header("Authorization", bearer)));
         statuses.put("GET /v1/onboard/my-sources", status(get("/v1/onboard/my-sources")
                 .header("Authorization", bearer)));
+        statuses.put("POST /v1/onboard/sources/{id}/api-key", status(post("/v1/onboard/sources/{id}/api-key", "no-such-source")
+                .header("Authorization", bearer)));
 
         assertTrue(statuses.values().stream().allMatch(s -> s == 403),
                 "ADMIN token must get 403 on every onboarding endpoint, got: " + statuses);

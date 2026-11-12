@@ -140,4 +140,4 @@ Write docs and plans in the STE-80 style ([`STE80.md`](STE80.md)). The style mus
 
 - `dev-tools/` and `GEMINI.md` are listed in `.gitignore` (the former is still referenced by docs).
 - Local JDK may be newer than 21 (tests passed on JDK 25), but write code that compiles on 21.
-- `core-engine/src/main/resources/` contains both `schema.sql` and `sqlite/schema.sql`; check which one is actually loaded before editing either.
+- The SQLite schema is `core-engine/src/main/resources/sqlite/schema.sql` (set by `spring.sql.init.schema-locations`). A stale second copy at `src/main/resources/schema.sql` was deleted on 2026-11-12.

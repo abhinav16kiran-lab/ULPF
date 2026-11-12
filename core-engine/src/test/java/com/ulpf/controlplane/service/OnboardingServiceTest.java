@@ -2,7 +2,6 @@ package com.ulpf.controlplane.service;
 
 // import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ulpf.common.db.CredentialRepository;
-import com.ulpf.common.db.CredentialRepository.CredentialRecord;
 import com.ulpf.common.db.MappingRepository;
 import com.ulpf.common.db.OnboardingRepository;
 import com.ulpf.common.db.OnboardingRepository.NotificationRecord;
@@ -13,6 +12,7 @@ import com.ulpf.common.db.VendorRepository;
 import com.ulpf.controlplane.model.Role;
 import com.ulpf.controlplane.model.User;
 import com.ulpf.mapping.service.MappingProposalService;
+import com.ulpf.testsupport.TestSqlite;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,7 +24,6 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.File;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -41,6 +40,8 @@ class OnboardingServiceTest {
         private CredentialRepository credentialRepository;
         private OnboardingRepository onboardingRepository;
         private MappingRepository mappingRepository;
+        private JdbcTemplate jdbcTemplate;
+        private ApiKeyService apiKeyService;
 
         @BeforeEach
         void setUp() {
@@ -53,7 +54,7 @@ class OnboardingServiceTest {
                                 new ClassPathResource("sqlite/schema.sql"));
                 populator.execute(dataSource);
 
-                JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+                jdbcTemplate = new JdbcTemplate(dataSource);
 
                 userRepository = new UserRepository(jdbcTemplate);
                 credentialRepository = new CredentialRepository(jdbcTemplate);
@@ -81,10 +82,16 @@ class OnboardingServiceTest {
                                 mappingRepository,
                                 mappingProposalService,
                                 mappingLearningService);
+                apiKeyService = new ApiKeyService(userRepository, vendorRepository, sourceRepository,
+                                credentialRepository, onboardingRepository);
+        }
+
+        private int credentialCount(String sourceId) {
+                return TestSqlite.count(jdbcTemplate, "SELECT COUNT(*) FROM credentials WHERE source_id = ?", sourceId);
         }
 
         @Test
-        void testSubmitOnboardingRequestGeneratesPendingKeyAndFiles() {
+        void testSubmitOnboardingRequestCreatesNoKey() {
                 MockMultipartFile sampleFile = new MockMultipartFile(
                                 "sampleLogFile", "sample.log", "text/plain",
                                 "src_ip=192.168.1.1 action=ALLOW\nsrc_ip=192.168.1.2 action=DENY".getBytes());
@@ -93,61 +100,52 @@ class OnboardingServiceTest {
                                 "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
 
                 assertNotNull(result.requestId());
-                assertNotNull(result.rawApiKey());
-                assertTrue(result.rawApiKey().startsWith("ulpf_live_"));
                 assertEquals("SUBMITTED", result.status());
-
-                // Verify source status is PENDING_APPROVAL
                 assertEquals("PENDING_APPROVAL", sourceRepository.findById(result.sourceId()).get().status());
-
-                // Verify key hash is generated and lookup fails while PENDING_APPROVAL
-                String keyHash = OnboardingService.hashSha256(result.rawApiKey());
-                Optional<CredentialRecord> credOpt = credentialRepository.findActiveByKeyHash(keyHash);
-                assertFalse(credOpt.isPresent(), "Key lookup must fail when status is PENDING_APPROVAL");
+                assertEquals(0, credentialCount(result.sourceId()), "no key may exist before approval");
+                assertFalse(result.message().contains("API key is"), "the message must not promise a key: " + result.message());
         }
 
         @Test
-        void testAdminApproveActivatesKeyAndPushesNotification() {
+        void testAdminApproveActivatesSourceWithoutKeyAndTellsVendorToCreateOne() {
                 MockMultipartFile sampleFile = new MockMultipartFile(
                                 "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
 
                 var result = onboardingService.submitRequest(
                                 "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
 
-                String keyHash = OnboardingService.hashSha256(result.rawApiKey());
-
-                // Process Admin Approval
                 OnboardingRequestRecord approved = onboardingService.processAdminDecision(result.requestId(),
                                 "APPROVED");
                 assertEquals("APPROVED", approved.status());
 
-                // Verify source and credential are now ACTIVE
                 assertEquals("ACTIVE", sourceRepository.findById(result.sourceId()).get().status());
-                Optional<CredentialRecord> activeCred = credentialRepository.findActiveByKeyHash(keyHash);
-                assertTrue(activeCred.isPresent(), "Key lookup must succeed once APPROVED");
+                assertEquals(0, credentialCount(result.sourceId()), "approval must not create a key");
 
-                // Verify Notification was sent
                 User user = userRepository.findByUsername("vendor_alice").get();
+                assertEquals(Role.VENDOR, user.role());
                 List<NotificationRecord> notifications = onboardingRepository.findNotificationsByUserId(user.userId());
                 assertEquals(1, notifications.size());
                 assertTrue(notifications.get(0).title().contains("Approved"));
+                assertTrue(notifications.get(0).message().contains("Create API key"),
+                                "the vendor must be told how to get a key: " + notifications.get(0).message());
         }
 
         @Test
-        void testAdminApproveTriggersAutomaticReplay() {
-                var replayMock = org.mockito.Mockito.mock(com.ulpf.replay.service.ReplayBackfillService.class);
-                onboardingService.setReplayBackfillService(replayMock);
-
+        void testMySourcesShowsWhenTheActiveKeyWasCreated() {
                 MockMultipartFile sampleFile = new MockMultipartFile(
                                 "sampleLogFile", "sample.log", "text/plain", "log data".getBytes());
-
                 var result = onboardingService.submitRequest(
                                 "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
-
                 onboardingService.processAdminDecision(result.requestId(), "APPROVED");
 
-                org.mockito.Mockito.verify(replayMock, org.mockito.Mockito.times(1))
-                                .triggerReplayAsync(org.mockito.ArgumentMatchers.eq(result.sourceId()), org.mockito.ArgumentMatchers.isNull());
+                assertEquals(null, onboardingService.getUserSources("vendor_alice").get(0).apiKeyCreatedAt(),
+                                "an approved source starts without a key");
+
+                apiKeyService.issueKey("vendor_alice", result.sourceId(), false);
+
+                var source = onboardingService.getUserSources("vendor_alice").get(0);
+                assertEquals(result.sourceId(), source.sourceId());
+                assertNotNull(source.apiKeyCreatedAt());
         }
 
         @Test
@@ -159,6 +157,8 @@ class OnboardingServiceTest {
                                 "vendor_alice", "Alice Corp", "Firewall Alpha", "FIREWALL", sampleFile, null);
 
                 onboardingService.processAdminDecision(initResult.requestId(), "APPROVED");
+                String keyHash = OnboardingService.hashSha256(
+                                apiKeyService.issueKey("vendor_alice", initResult.sourceId(), false).apiKey());
 
                 // Submit update request for existing source
                 MockMultipartFile newSampleFile = new MockMultipartFile(
@@ -169,13 +169,14 @@ class OnboardingServiceTest {
 
                 assertNotNull(updateResult.requestId());
                 assertEquals(initResult.sourceId(), updateResult.sourceId());
-                org.junit.jupiter.api.Assertions.assertNull(updateResult.rawApiKey(), "API key must remain null (unchanged) for SCHEMA_UPDATE");
                 assertEquals("SUBMITTED", updateResult.status());
 
                 // Verify request record in DB has canonical type SCHEMA_UPDATE
                 OnboardingRequestRecord req = onboardingRepository.findRequestById(updateResult.requestId()).get();
                 assertEquals("SCHEMA_UPDATE", req.requestType());
                 assertEquals(initResult.sourceId(), req.sourceId());
+                assertTrue(credentialRepository.findActiveByKeyHash(keyHash).isPresent(),
+                                "a schema update must leave the active key working");
         }
 
         @Test
