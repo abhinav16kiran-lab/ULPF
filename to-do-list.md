@@ -17,6 +17,8 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 1. Item 7 (Prometheus + Grafana), this week. Its metrics show where ingestion is slow. From 2026-11-11, other team members own item 7.
 2. Item 13 (profile and speed up `POST /v1/events`), with the item 7 metrics.
 
+**Changed 2026-11-13 (team lead):** item 13 no longer waits for item 7. Item 13 adds the metrics it needs itself (Actuator and `/actuator/metrics`, no Prometheus), and item 7 builds on them. The target is the absolute North Star above, which is about 12x the last recorded benchmark. Item 13 measures a new baseline first, because the old benchmark had flaws (see item 13).
+
 ## High Priority: Data Plane & Replay Pipeline
 
 ### 1. Raw-to-Dynamic Backfill / Replay Worker [COMPLETED]
@@ -102,6 +104,7 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 
 ### 7. Production Observability: Strip Legacy UI Grafana & Integrate Real Prometheus + Grafana Stack [PARTIALLY COMPLETED]
 - **Owner**: other team members, from 2026-11-11.
+- **Changed 2026-11-13 (team lead)**: item 13 delivers part of the core-engine instrumentation first: Actuator, the actuator security chain, `/actuator/metrics`, the queue gauges and the ClickHouse flush, batch and error meters. This item keeps the Prometheus registry and everything about Prometheus and Grafana. Details: row 32 of the plan.
 - **Out of scope**: alerting. This item delivers dashboards only; metric-based alerts are tracked in item 12.
 - **Priority**: first, this week (2026-11-07). Its metrics are the measurement tool for item 13.
 - **Prerequisite**: item 11 (admin accounts) is done (2026-11-07). Grafana access is granted to admins only. Each admin gets their own Grafana login, and a revoke or a password reset ends their Grafana sessions (plan A2).
@@ -232,12 +235,14 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 
 ### 13. Ingestion Throughput: Profile and Speed Up `POST /v1/events` (North Star) [NEW 2026-11-07]
 - **Priority**: highest after item 7. See the North Star section at the top.
-- **Depends on**: item 7 metrics (events per second, queue depth, flush time, batch size, insert errors).
+- **Depends on**: nothing since 2026-11-13. Item 13 delivers the shared instrumentation itself (Actuator, the actuator security chain, `/actuator/metrics`, queue gauges, flush, batch and error meters), and item 7 builds the Prometheus and Grafana side on it. See row 32 of `docs/plans/2026-10-28-prometheus-grafana-observability.md`.
+- **Research (2026-11-13)**: `docs/research/2026-11-13-profiling-ingestion.md` (toolset: k6, async-profiler, JFR, `pidstat` and the ClickHouse `system.*` tables; method; host facts). The old benchmark used a closed-model Python generator through nginx without keep-alive, so its 995 events/s is not a reliable baseline.
+- **Runtime decision (team lead, 2026-11-13)**: measure rootless Podman networking against Docker. If Podman shows a large disadvantage that Docker does not have, ULPF moves fully to Docker.
 - **Problem**: the last benchmark gave 995.4 events per second (about 86 million per day). The target is at least 1 billion per day: 11,600 events per second at P99 (1-second windows) and a peak of 12,000 events per second. See the North Star section. ClickHouse alone can take far more, so the bottleneck is probably in ULPF, not in the database. This is not measured yet.
 - **Scope**: the ingestion path only. This includes the HTTP request, the API key check, format autodetect, the in-memory queue, the raw batch insert, `MappingTransformer`, the canonical insert and the Merkle hashing. The mapping engine that proposes mappings at onboarding is out of scope (item 10).
 - **Requirement**:
   1. **Baseline (from `prompt.txt` point 2):** create the same tables in a plain ClickHouse. Send random logs to them at the highest rate one generator can reach, and record events per second. Then send the same logs through ULPF to the same tables. Record both numbers and the flow of each. Use the same hardware for both, and record the hardware.
-  2. **Profile:** use the item 7 metrics and Java Flight Recorder (built into the JDK, so no new dependency) to find where the time goes.
+  2. **Profile:** use this item's own Actuator metrics, Java Flight Recorder (built into the JDK) and async-profiler to find where the time goes.
   3. **Fix one bottleneck at a time.** Measure after each change, and record the before and after numbers.
   4. Keep the benchmark script and its payload mix in the repo, so anyone can run the same test again.
 - **Design Considerations**:
