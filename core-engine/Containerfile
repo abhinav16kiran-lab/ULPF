@@ -13,8 +13,10 @@ COPY src ./src
 # Package application JAR without running unit tests during container image build
 RUN mvn clean package -DskipTests -q
 
-# Stage 2: Runtime stage with lightweight OpenJDK 21 JRE
-FROM docker.io/eclipse-temurin:21-jre-alpine
+# Stage 2: Runtime stage with the OpenJDK 21 JRE on Ubuntu (glibc).
+# Not the Alpine image: the ONNX Runtime native library used by mapping layer 4 is built for glibc and needs
+# libstdc++, which Alpine (musl) does not provide. See docs/plans/2026-11-15-onnx-native-runtime.md.
+FROM docker.io/eclipse-temurin:21-jre
 
 WORKDIR /app
 

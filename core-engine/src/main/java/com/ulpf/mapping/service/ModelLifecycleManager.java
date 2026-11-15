@@ -10,7 +10,17 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.function.Supplier;
 
+/**
+ * Loads the layer-4 embedding model (all-MiniLM-L6-v2) into ONNX Runtime on demand, hands out read leases for
+ * inference, and unloads it after an idle timeout to give the native memory back.
+ *
+ * <p>If the ONNX native library cannot load on this platform (for example a musl-based image without
+ * libstdc++), the JVM throws a {@link LinkageError}. That is an {@code Error}, which the layer fallback in
+ * {@link MappingEngineOrchestrator} does not catch. This class turns it into an {@link IllegalStateException},
+ * remembers it, and does not try again, so layer 4 is unavailable but onboarding still works.
+ */
 @Service
 public class ModelLifecycleManager {
 
@@ -27,10 +37,22 @@ public class ModelLifecycleManager {
     private long lastAccessedTime = 0;
     private final java.util.concurrent.locks.ReentrantReadWriteLock rwLock = new java.util.concurrent.locks.ReentrantReadWriteLock(true);
 
-    public ModelLifecycleManager() {}
+    private final Supplier<OrtEnvironment> environmentSupplier;
+    /** Set once when the native library cannot load: a failed class initialisation cannot be retried. */
+    private volatile String nativeRuntimeFailure;
+
+    public ModelLifecycleManager() {
+        this.environmentSupplier = OrtEnvironment::getEnvironment;
+    }
 
     public ModelLifecycleManager(String modelPath) {
+        this(modelPath, OrtEnvironment::getEnvironment);
+    }
+
+    /** For tests: replaces the ONNX environment lookup, which loads the native library on first use. */
+    ModelLifecycleManager(String modelPath, Supplier<OrtEnvironment> environmentSupplier) {
         this.modelPath = modelPath;
+        this.environmentSupplier = environmentSupplier;
     }
 
     /**
@@ -96,6 +118,9 @@ public class ModelLifecycleManager {
         if (session != null) {
             return;
         }
+        if (nativeRuntimeFailure != null) {
+            throw new IllegalStateException("ONNX native runtime unavailable: " + nativeRuntimeFailure);
+        }
 
         try {
             File modelFile = Path.of(modelPath).toFile();
@@ -106,13 +131,18 @@ public class ModelLifecycleManager {
             log.info("Loading ONNX model into native C++ heap from: {}", modelFile.getAbsolutePath());
             long startTime = System.currentTimeMillis();
 
-            env = OrtEnvironment.getEnvironment();
+            env = environmentSupplier.get();
             OrtSession.SessionOptions options = new OrtSession.SessionOptions();
             session = env.createSession(modelFile.getAbsolutePath(), options);
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("ONNX model successfully loaded into native RAM in {} ms", duration);
 
+        } catch (LinkageError e) {
+            nativeRuntimeFailure = e.toString();
+            log.error("ONNX native runtime unavailable on this platform; mapping layer 4 is turned off until restart", e);
+            unloadModel();
+            throw new IllegalStateException("ONNX native runtime unavailable: " + nativeRuntimeFailure, e);
         } catch (Exception e) {
             log.error("Failed to load ONNX model into native memory", e);
             unloadModel();
