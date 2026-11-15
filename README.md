@@ -231,6 +231,13 @@ curl -X POST http://localhost:8080/v1/events \
     "bytes_sent": 1420
   }'
 ```
+A raw Syslog, CEF or LEEF line goes as plain text, one line per request:
+```bash
+curl -X POST http://localhost:8080/v1/events \
+  -H "X-API-Key: ulpf_live_YOUR_GENERATED_API_KEY" \
+  -H "Content-Type: text/plain" \
+  --data-binary '<134>1 2026-09-12T10:15:00.000Z fw01 firewall 7486 - - action=DENY src=192.168.1.50'
+```
 *Response (`202 Accepted`)*:
 ```json
 {

@@ -66,8 +66,12 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 
 ### 3.3 Data Plane (Zero-Overhead Ingestion)
 * **Protocol Autodetector**: Automatically parses Syslog (RFC 3164/5424), CEF, LEEF, and JSON payloads.
-* **Non-Blocking Micro-Batching**: Enqueues events into a `ConcurrentLinkedQueue` memory buffer. Triggers ClickHouse async inserts (`async_insert=1`) when batch size reaches 500 events or every 1,000 ms.
-* **0% Ingestion Overhead**: Heavy operations (Merkle hashing, ClickHouse columnar merging, AI parsing) run asynchronously out-of-band, preserving sub-millisecond client HTTP response times.
+* **Two body forms, one event each**: `application/json` (an object, or a JSON string holding one raw line), and any other type (or none) for one raw line. `EventController` reads a raw line from the request stream and decodes it with the declared charset, or UTF-8. The content type decides only how the body is read; the autodetector decides the format.
+  * *Why the raw stream, not `@RequestBody`:* for a form type (the `curl -d` default), Spring rebuilds the body from parsed form fields and re-encodes it, which changes the line; and Spring's String converter defaults to ISO-8859-1, which garbles UTF-8. Before 2026-11-15 the endpoint bound every body to `Object`, so every plain-text line got `415` (plan `docs/plans/2026-11-15-plain-text-ingest.md`).
+  * *Why `consumes = "!application/json"` on the text handler and a required JSON body:* the two mappings must not overlap. With an optional JSON body, both matched an empty request, and Spring answered `409` (ambiguous handler).
+  * *Rejected:* a custom message converter from text to `Object`. It would change how every `Object` body in the application is read, to fix one endpoint.
+* **Micro-Batching**: Enqueues events into unbounded `ConcurrentLinkedQueue` buffers (raw and canonical). A flush sends a batch to ClickHouse as an async insert (`async_insert=1`, `wait_for_async_insert=1`) when a queue reaches 500 events, or every 1,000 ms from the scheduler.
+* **Where the cost lands today**: the request thread that fills a queue to 500 runs the flush itself. `flush()` and `flushCanonical()` are `synchronized` on the same object, and the raw flush also builds the Merkle block and writes it to SQLite before it releases the lock (`ClickHouseIngestionRepository`). So other requests can wait for a flush. The AI mapping runs at onboarding, not at ingest. Backlog item 13 measures this path and changes it.
 
 ### 3.4 Cryptographic Merkle Tree Forensic Audit Engine
 * **Tamper-Evident Ledger**: Batches log payloads into cryptographic blocks, computes SHA-256 binary Merkle tree root hashes, and chains block hashes in SQLite (`batch_integrity_blocks`).

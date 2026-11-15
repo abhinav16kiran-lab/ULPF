@@ -245,12 +245,17 @@ Approves or rejects an AI-proposed schema mapping candidate. Approval provisions
 ### 3.4 Runtime Ingestion (Data Plane)
 
 #### `POST /v1/events`
-High-throughput ingestion endpoint for log streaming.
+High-throughput ingestion endpoint for log streaming. One request carries one event.
 
 * **Headers**:
   - `X-API-Key: ulpf_live_9f82a1b73e4c5d6e7f8a9b0c1d2e3f4a`
-  - `Content-Type: application/json` (or plain text for Syslog/CEF)
-* **Request Body**:
+  - `Content-Type`: decides only how the body is read. The format detector decides what the event is (JSON, Syslog, CEF, LEEF or raw text).
+
+    | `Content-Type` | Body |
+    |---|---|
+    | `application/json` | A JSON object, or a JSON string that holds one raw log line |
+    | `text/plain`, `application/octet-stream`, `application/x-www-form-urlencoded` (the `curl -d` default), or none | One raw log line, stored byte for byte. Decoded with the declared `charset`, or UTF-8 if none is declared |
+* **Request Body** (JSON):
   ```json
   {
     "timestamp": "2026-09-12T10:15:00Z",
@@ -260,6 +265,11 @@ High-throughput ingestion endpoint for log streaming.
     "status_code": 200
   }
   ```
+* **Request Body** (raw line, `Content-Type: text/plain`):
+  ```
+  <134>1 2026-09-12T10:15:00.000Z fw01 firewall 7486 - - action=DENY src=192.168.1.50 dst=10.0.0.1
+  ```
+* **Errors**: `401` missing or invalid `X-API-Key` (checked before the body is read); `400` empty or blank body.
 * **Response (202 Accepted)**:
   ```json
   {
