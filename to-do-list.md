@@ -236,15 +236,20 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 ### 13. Ingestion Throughput: Profile and Speed Up `POST /v1/events` (North Star) [NEW 2026-11-07]
 - **Priority**: highest after item 7. See the North Star section at the top.
 - **Depends on**: nothing since 2026-11-13. Item 13 delivers the shared instrumentation itself (Actuator, the actuator security chain, `/actuator/metrics`, queue gauges, flush, batch and error meters), and item 7 builds the Prometheus and Grafana side on it. See row 32 of `docs/plans/2026-10-28-prometheus-grafana-observability.md`.
+- **Measured results (2026-11-15 and 2026-11-16)**: `docs/perf/RESULTS.md`. Phase 0 is done; the Phase 1 proposal waits for the team lead (`docs/plans/2026-11-13-ingestion-throughput.md`, section 9).
+  - Baseline on `8e5b731`: knee 400 events/s (5 of 5 runs), saturation at about 1,065-1,487 events/s with 10-40 s freezes, 0 events lost. ClickHouse alone takes more than 32,000 rows/s on the same host.
+  - Causes, from JFR and a wall-clock profile: a lock convoy on the synchronized flush, which request threads run; O(n) `ConcurrentLinkedQueue.size()` at 64% of CPU; and an O(n) SQLite lookup per integrity block, which makes ingestion slower as the ledger grows (knee 300 on a database with 102,369 blocks).
+  - The new meters have no cost that the agreed rule can detect.
+  - Rootless Podman matches rootless Docker on the same starting state, so the runtime stays Podman unless the team lead decides otherwise.
 - **Research (2026-11-13)**: `docs/research/2026-11-13-profiling-ingestion.md` (toolset: k6, async-profiler, JFR, `pidstat` and the ClickHouse `system.*` tables; method; host facts). The old benchmark used a closed-model Python generator through nginx without keep-alive, so its 995 events/s is not a reliable baseline.
-- **Runtime decision (team lead, 2026-11-13)**: measure rootless Podman networking against Docker. If Podman shows a large disadvantage that Docker does not have, ULPF moves fully to Docker.
-- **Problem**: the last benchmark gave 995.4 events per second (about 86 million per day). The target is at least 1 billion per day: 11,600 events per second at P99 (1-second windows) and a peak of 12,000 events per second. See the North Star section. ClickHouse alone can take far more, so the bottleneck is probably in ULPF, not in the database. This is not measured yet.
+- **Runtime decision (team lead, 2026-11-13)**: measure rootless Podman networking against Docker. If Podman shows a large disadvantage that Docker does not have, ULPF moves fully to Docker. Measured on 2026-11-16: no disadvantage (see the results).
+- **Problem**: the last benchmark gave 995.4 events per second (about 86 million per day). The target is at least 1 billion per day: 11,600 events per second at P99 (1-second windows) and a peak of 12,000 events per second. See the North Star section. ClickHouse alone can take far more, so the bottleneck is in ULPF, not in the database (measured 2026-11-15).
 - **Scope**: the ingestion path only. This includes the HTTP request, the API key check, format autodetect, the in-memory queue, the raw batch insert, `MappingTransformer`, the canonical insert and the Merkle hashing. The mapping engine that proposes mappings at onboarding is out of scope (item 10).
 - **Requirement**:
   1. **Baseline (from `prompt.txt` point 2):** create the same tables in a plain ClickHouse. Send random logs to them at the highest rate one generator can reach, and record events per second. Then send the same logs through ULPF to the same tables. Record both numbers and the flow of each. Use the same hardware for both, and record the hardware.
   2. **Profile:** use this item's own Actuator metrics, Java Flight Recorder (built into the JDK) and async-profiler to find where the time goes.
   3. **Fix one bottleneck at a time.** Measure after each change, and record the before and after numbers.
-  4. Keep the benchmark script and its payload mix in the repo, so anyone can run the same test again.
+  4. Keep the benchmark script and its payload mix, so anyone can run the same test again. Team lead decision (2026-11-15): the kit (`perf/`) stays local and out of git; `docs/perf/RESULTS.md` and `docs/ARCH/ARCHITECTURE.md` §3.11 record the method and the results.
 - **Design Considerations**:
   - Logs come in bursts. Test both targets: 11,600 events per second at P99 for the whole test, and short bursts at 12,000 events per second.
   - No event loss. The raw event must always be preserved (SIH requirement a). A faster path must not drop events under load.
@@ -297,3 +302,26 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - A suspended source rejects ingest at once: evict the credential cache before the update and again after the commit, as `CredentialRepository.revokeActiveForSource` does.
   - The vendor gets a notification. The admin still never sees or creates a key.
 - **Design Considerations**: plan and tests first. Decide if a suspend also stops a running replay of the source.
+
+### 18. CI: Make the Core-Engine Image Build Independent of Maven Central Rate Limits [NEW 2026-11-15]
+- **Problem**: on 2026-11-15 the push run for `00cc791` (run `43730669940`) failed in "Build & Push Container Images (GHCR)". Maven Central answered `429 Too Many Requests` while the image build downloaded `spring-boot-starter-parent:4.1.0`, so no image was published for that commit. The backend tests and the frontend build in the same run passed.
+  - The test job uses `actions/setup-java` with `cache: maven`, so it rarely contacts Maven Central.
+  - The image build (`core-engine/Containerfile`, build stage) has no Maven cache. It downloads every dependency on every run, so a rate limit hits it first.
+  - `RUN mvn dependency:go-offline -B -q || true` hides the first failure, so the error shows only at the next step, `mvn package`.
+- **Requirement**:
+  - Cache the Maven repository in the image build: `RUN --mount=type=cache,target=/root/.m2` in the Containerfile, plus the buildx GitHub Actions cache (`cache-from` / `cache-to: type=gha`) in `.github/workflows/ci-cd.yml`.
+  - Remove `|| true` from the `go-offline` step, so a failure shows where it happens.
+  - Optional: let Maven retry 429 and 503 with a backoff (Maven Resolver retry settings), and check which settings Maven 3.9.9 supports.
+- **Design Considerations**:
+  - `./startup/start.sh` builds the same Containerfile on users' machines. The cache mount needs BuildKit (Docker) or Buildah (Podman). Check that `podman-compose` on Podman 3.4.4 and 4.9 still builds.
+  - The release pipeline is outward-facing, so the change needs a plan and tests first, as for any other change (`AGENTS.md`).
+  - Not urgent: a 429 is usually short-lived, and the next push publishes the images again.
+
+### 19. Compose: the ClickHouse Health Check Fails Under Docker [NEW 2026-11-16]
+- **Problem**: under Docker, `compose up` on `compose.yaml` fails with "dependency failed to start: container ulpf-clickhouse is unhealthy". Found on 2026-11-16 during the Podman-against-Docker runs of item 13 (rootless Docker 29.9.2, Compose v5.6.1). Podman is not affected.
+  - The health check runs `wget --spider http://localhost:8123/ping`.
+  - Docker writes both `127.0.0.1 localhost` and `::1 localhost` into the container's `/etc/hosts`. Podman 3.4.4 writes only `127.0.0.1`.
+  - ClickHouse cannot listen on `::` in the Docker container ("Listen [::]:8123 failed ... Address family for hostname not supported"), so it listens on `0.0.0.0` only.
+  - busybox `wget` tries only `::1`, gets "connection refused", and the check never passes. ClickHouse itself is healthy: `http://127.0.0.1:8123/ping` answers `Ok.`
+- **Requirement**: check `http://127.0.0.1:8123/ping` in the ClickHouse health check of `compose.yaml`. Check the other health checks for the same `localhost` pattern.
+- **Design Considerations**: a one-line fix. Test it with a fresh `compose up` on both Podman and Docker. The local perf kit works around it in `perf/compose/docker.override.yaml` until the fix lands.

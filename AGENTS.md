@@ -44,7 +44,7 @@ Ports: core engine `8080`, frontend `3000` (nginx), ClickHouse `8123` (HTTP) / `
 ```
 vendor → POST /v1/events → autodetect format → in-memory queue → ClickHouse async micro-batch (raw)
                                                       └→ MappingTransformer → events_{vendor}_{source} (+ raw_unmapped overflow)
-                                                      └→ out-of-band Merkle hashing → SQLite batch_integrity_blocks
+                                                      └→ Merkle hashing in the raw flush → SQLite batch_integrity_blocks
 drift / failures → TableIngestionFailureNotificationService / SchemaDriftNotificationService → AlertDispatcher → in-app + signed vendor webhooks
 approved onboarding → replay worker backfills history through the same MappingTransformer
 ```
@@ -113,6 +113,8 @@ Whole platform (repo root):
 Config comes from `.env` (see `.env.example`). `.env`, `*.db`, `core-engine/data/` and `core-engine/storage/` are git-ignored: never commit secrets or runtime data.
 
 CI (`.github/workflows/`) runs backend tests and the frontend build on push/PR; it ignores changes to `*.md` and `docs/**`.
+
+Performance: measured results, with their method and limits, are in `docs/perf/RESULTS.md`. Read them before you measure again. The load-test kit that produced them is local to the team lead's machine (`perf/`, git-ignored); `docs/ARCH/ARCHITECTURE.md` §3.11 describes the method.
 
 ## 6. Documentation
 

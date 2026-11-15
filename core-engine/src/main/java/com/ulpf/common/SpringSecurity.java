@@ -21,6 +21,7 @@ import java.util.List;
  * HTTP security: stateless JWT sessions ({@link JwtFilter}) and the access rules for every endpoint. Public:
  * login, sign-up, event ingestion (API key), health, one-time setup and admin links. {@code /v1/admin/admins/**}
  * is for the super-admin, the rest of {@code /v1/admin/**} and analytics for admins, onboarding for USER and VENDOR.
+ * {@code /actuator/**} has its own chain, {@link ActuatorSecurity}, which runs first.
  */
 @Configuration
 @EnableMethodSecurity
@@ -41,7 +42,7 @@ public class SpringSecurity {
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                .requestMatchers("/v1/login", "/v1/signup", "/v1/events", "/v1/health", "/error", "/actuator/**").permitAll()
+                .requestMatchers("/v1/login", "/v1/signup", "/v1/events", "/v1/health", "/error").permitAll()
                 .requestMatchers("/v1/setup", "/v1/setup/**", "/v1/links/**").permitAll()
                 // Order matters: the first matching rule wins, so the narrower super-admin rule comes first.
                 .requestMatchers("/v1/admin/admins", "/v1/admin/admins/**").hasRole("SUPER_ADMIN")

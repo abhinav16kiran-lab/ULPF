@@ -6,8 +6,8 @@
 ## 1. Core Principles
 
 - **Spring Boot API Boundary**: Spring Boot mediates all HTTP traffic between clients, control plane databases (SQLite), and high-throughput data plane databases (ClickHouse).
-- **Zero Ingestion Overhead**: The primary runtime ingestion endpoint (`POST /v1/events`) uses micro-batching and non-blocking ClickHouse async inserts.
-- **Isolated Control & Data Planes**: Vendor onboarding and administration occur out-of-band on the control plane without degrading ingestion performance.
+- **Micro-Batched Ingestion**: `POST /v1/events` puts each event in an in-memory queue. The engine writes the queue to ClickHouse in batches of up to 500, with async inserts and `wait_for_async_insert=1`, so an insert returns only when ClickHouse has stored the batch. The request thread that fills a batch runs that flush itself. Measured limits: `docs/perf/RESULTS.md`.
+- **Separate Control & Data Planes**: Vendor onboarding and administration use their own endpoints. Both planes use the same SQLite database: ingestion reads the mapping versions and writes the integrity blocks there.
 - **Role-Based Access Control (RBAC)**: Enforces `ADMIN`, `VENDOR`, and `USER` roles via JWT Bearer authentication headers.
 - **Read-Only Analytics Mediation**: Browsers never execute direct queries against ClickHouse; all analytical queries are validated, sanitized, and authorized by Spring Boot.
 
@@ -39,6 +39,8 @@
 | `/v1/admin/onboard/{id}`| `PUT` | `ADMIN` | Approve or reject onboarding request candidate mapping |
 | `/v1/admin/clickhouse/schemas` | `GET` | `ADMIN` | Inspect active ClickHouse database and table schemas |
 | `/v1/events` | `POST` | `VENDOR`/`ADMIN` | Primary plug-and-play high-throughput log event ingestion |
+| `/actuator/health` | `GET` | None | Liveness of the core engine |
+| `/actuator/metrics`, `/actuator/metrics/{name}` | `GET` | Monitor user (HTTP Basic) | Application and JVM meters; denied when no monitor password is set |
 | `/v1/notifications` | `GET` | Authenticated | Fetch notifications for the logged-in user (never contains an API key) |
 | `/v1/notifications/{id}/read` | `PUT` | Authenticated | Mark a notification item as read |
 | `/v1/analytics` | `GET` | `ADMIN` | Read-only ClickHouse metrics aggregation query execution |
@@ -239,6 +241,20 @@ Approves or rejects an AI-proposed schema mapping candidate. Approval provisions
     "status": "APPROVED"
   }
   ```
+
+---
+
+### 3.3a Actuator (metrics and health)
+
+#### `GET /actuator/health`
+Open. Returns `{"status":"UP"}` when the application is up.
+
+#### `GET /actuator/metrics` and `GET /actuator/metrics/{name}`
+- **Auth:** HTTP Basic with the monitor user: `MONITOR_USERNAME` (default `monitor`), and the password from `MONITOR_PASSWORD` or the file `/run/secrets/monitor_password`.
+- **Errors:** wrong or missing credentials get `401`. A ULPF login token does not grant access.
+- **Without a configured password,** these endpoints are always denied.
+- `?tag=key:value` selects one tag value, for example `/actuator/metrics/ulpf.clickhouse.flush.duration?tag=stage:raw`.
+- The ULPF meters are listed in `docs/ARCH/ARCHITECTURE.md` §3.11.
 
 ---
 

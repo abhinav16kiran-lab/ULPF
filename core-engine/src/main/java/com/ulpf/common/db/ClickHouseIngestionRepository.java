@@ -1,5 +1,9 @@
 package com.ulpf.common.db;
 
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +14,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -27,6 +32,9 @@ import java.util.stream.Collectors;
  * High-throughput ClickHouse repository for raw and canonical log event ingestion.
  * Features in-memory queue buffers with batch size flush (500), 1s scheduled timer,
  * lineage backtracking lookup, and @PreDestroy container shutdown flush.
+ * Meters: {@code ulpf.clickhouse.flush.duration} and {@code ulpf.clickhouse.batch.size} (tag {@code stage}), and the
+ * failure counters {@code ulpf.clickhouse.insert.errors}, {@code ulpf.records.degraded}, {@code .dropped} and
+ * {@code .reenqueued} (tag {@code table}). The queue gauges are bound in {@code MetricsConfig}.
  */
 @Repository
 public class ClickHouseIngestionRepository {
@@ -48,8 +56,46 @@ public class ClickHouseIngestionRepository {
     private int batchSize = 500;
 
 
+    // Meters (backlog item 13; names from the Grafana plan's metric table). Timers and summaries have only the
+    // stage tag and explicit buckets, so each exports few series. Per-table tags appear only on the failure counters.
+    private static final Duration[] FLUSH_BUCKETS = {Duration.ofMillis(10), Duration.ofMillis(25), Duration.ofMillis(50),
+            Duration.ofMillis(100), Duration.ofMillis(250), Duration.ofMillis(500), Duration.ofSeconds(1),
+            Duration.ofMillis(2500), Duration.ofSeconds(5), Duration.ofSeconds(10)};
+    private static final double[] BATCH_BUCKETS = {1, 10, 50, 100, 250, 500, 1000, 2500, 5000};
+    private MeterRegistry meterRegistry;
+    private Timer rawFlushTimer;
+    private Timer canonicalFlushTimer;
+    private DistributionSummary rawBatchSize;
+    private DistributionSummary canonicalBatchSize;
+
     public ClickHouseIngestionRepository(@Qualifier("clickhouseJdbcTemplate") JdbcTemplate clickhouseJdbcTemplate) {
         this.clickhouseJdbcTemplate = clickhouseJdbcTemplate;
+        setMeterRegistry(new SimpleMeterRegistry()); // replaced by the application registry when Spring wires one
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMeterRegistry(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+        this.rawFlushTimer = flushTimer("raw");
+        this.canonicalFlushTimer = flushTimer("canonical");
+        this.rawBatchSize = batchSize("raw");
+        this.canonicalBatchSize = batchSize("canonical");
+    }
+
+    private Timer flushTimer(String stage) {
+        return Timer.builder("ulpf.clickhouse.flush.duration")
+                .description("Time of one flush to ClickHouse, including the wait for the insert (and, for raw, the integrity block)")
+                .tag("stage", stage).serviceLevelObjectives(FLUSH_BUCKETS).register(meterRegistry);
+    }
+
+    private DistributionSummary batchSize(String stage) {
+        return DistributionSummary.builder("ulpf.clickhouse.batch.size")
+                .description("Rows in one flush to ClickHouse")
+                .tag("stage", stage).serviceLevelObjectives(BATCH_BUCKETS).register(meterRegistry);
+    }
+
+    private void countRows(String name, String table, int rows) {
+        meterRegistry.counter(name, "table", table).increment(rows);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -218,6 +264,8 @@ public class ClickHouseIngestionRepository {
             return;
         }
 
+        rawBatchSize.record(batch.size());
+        Timer.Sample flushTime = Timer.start(meterRegistry);
         try {
             log.info("Flushing batch of {} raw log events to ClickHouse (ulpf_raw.raw_events)...", batch.size());
             String sql = """
@@ -251,6 +299,7 @@ public class ClickHouseIngestionRepository {
             }
 
         } catch (Exception e) {
+            countRows("ulpf.clickhouse.insert.errors", "raw_events", 1);
             log.warn("Flush exception encountered for batch of {} events: {}", batch.size(), e.getMessage());
             boolean alreadyCommitted = false;
             try {
@@ -278,7 +327,10 @@ public class ClickHouseIngestionRepository {
                 log.error("Failed to flush batch of {} raw log events to ClickHouse! Re-enqueuing batch.", batch.size(), e);
                 // Re-enqueue batch in case of genuine transient network failure
                 bufferQueue.addAll(batch);
+                countRows("ulpf.records.reenqueued", "raw_events", batch.size());
             }
+        } finally {
+            flushTime.stop(rawFlushTimer);
         }
     }
 
@@ -300,6 +352,17 @@ public class ClickHouseIngestionRepository {
             return;
         }
 
+        canonicalBatchSize.record(batch.size());
+        Timer.Sample flushTime = Timer.start(meterRegistry);
+        try {
+            writeCanonicalBatch(batch);
+        } finally {
+            flushTime.stop(canonicalFlushTimer);
+        }
+    }
+
+    /** Writes one drained canonical batch, grouped by target table. Runs inside {@link #flushCanonical()}. */
+    private void writeCanonicalBatch(List<CanonicalEventRecord> batch) {
         // Group batch by dynamic targetTable
         java.util.Map<String, List<CanonicalEventRecord>> byTable = new java.util.LinkedHashMap<>();
         java.util.Map<String, Integer> missingMappingCounts = new java.util.HashMap<>();
@@ -682,6 +745,7 @@ public class ClickHouseIngestionRepository {
             executeBatchInsert(tableName, cols, batch);
             return batch.size();
         } catch (Exception batchEx) {
+            countRows("ulpf.clickhouse.insert.errors", tableName, 1);
             log.warn("Batch insert of {} records into ulpf_events.{} failed: {}. Attempting isolation.",
                     batch.size(), tableName, batchEx.getMessage());
 
@@ -720,6 +784,7 @@ public class ClickHouseIngestionRepository {
                     countsBySource.forEach((srcId, count) ->
                             tableFailureNotificationService.notifyInsertFailure(srcId, tableName, count, batchEx.getMessage()));
                 }
+                countRows("ulpf.records.dropped", tableName, batch.size());
                 return 0;
             }
 
@@ -797,6 +862,7 @@ public class ClickHouseIngestionRepository {
         try {
             executeBatchInsert(tableName, cols, List.of(degraded));
             log.info("Successfully inserted degraded record {} into ulpf_events.{}", record.eventId(), tableName);
+            countRows("ulpf.records.degraded", tableName, 1);
             if (tableFailureNotificationService != null && record.sourceId() != null) {
                 tableFailureNotificationService.notifyDegradedRecords(
                         record.sourceId(), tableName, 1, record.eventId(), originalError);
@@ -805,6 +871,7 @@ public class ClickHouseIngestionRepository {
         } catch (Exception degradedEx) {
             log.warn("Degraded insert failed for event {} into ulpf_events.{}: {}. Dropping from analytics.",
                     record.eventId(), tableName, degradedEx.getMessage());
+            countRows("ulpf.records.dropped", tableName, 1);
             if (tableFailureNotificationService != null && record.sourceId() != null) {
                 tableFailureNotificationService.notifyInsertFailure(
                         record.sourceId(), tableName, 1, "Degraded record insert failed: " + degradedEx.getMessage());
