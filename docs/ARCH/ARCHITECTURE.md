@@ -157,8 +157,11 @@ What the feature does is summarised under 3.1. This section records **why** it i
 | :--- | :--- | :--- |
 | **Frontend** | UI SPA | React 18, Vite, Tailwind CSS, Warm Kinetic Design System |
 | **Web Server / Proxy** | Edge Proxy | Nginx Alpine (HTML5 SPA routing + API reverse proxy) |
-| **Backend Engine** | Core API & Logic | Java 21, Spring Boot 3.4, HikariCP, Spring Security, JWT |
+| **Backend Engine** | Core API & Logic | Java 21, Spring Boot 4.1, HikariCP, Spring Security, JWT |
+| **Backend Runtime Image** | Container Base | `eclipse-temurin:21-jre` (Ubuntu, glibc), not Alpine: see the decision below |
 | **Control Database** | Metadata Store | SQLite 3 (`data/control-plane.db`) |
 | **Data Database** | Analytical Storage | ClickHouse 26.3 LTS (`ulpf_raw` & `ulpf_events`) |
 | **AI Model Engine** | Vector Embeddings | ONNX Runtime Java, `all-MiniLM-L6-v2` (Local Zero-RAM Lifecycle) |
 | **Orchestration** | Container Runtime | Podman / Docker Compose (`compose.yaml`, `start.sh`, `start.bat`) |
+
+**Decision (2026-11-15): the core engine runs on the glibc JRE image, not Alpine.** The ONNX Runtime native library that mapping layer 4 uses is built for glibc and needs `libstdc++`. On `eclipse-temurin:21-jre-alpine` (musl) it failed to load with `UnsatisfiedLinkError`, and every onboarding request returned 500. The image is about 124 MB larger (472 MB instead of 348 MB). Rejected: adding `libstdc++` to Alpine, because the library would still need a glibc compatibility layer, which ONNX Runtime does not support. As a second guard, `ModelLifecycleManager` turns a `LinkageError` into an `IllegalStateException` and does not retry, so a platform without the native library loses only layer 4, not onboarding. Rejected: catching `Error` in the layer fallback, because it would also hide `OutOfMemoryError`. Plan: `docs/plans/2026-11-15-onnx-native-runtime.md`.

@@ -3,8 +3,15 @@ package com.ulpf.mapping.service;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -99,5 +106,39 @@ class ModelLifecycleManagerTest {
         }
 
         org.junit.jupiter.api.Assertions.assertEquals(0, lifecycleManager.getActiveLeaseCount(), "All leases should be released");
+    }
+
+    /**
+     * The container bug of 2026-11-15: on a musl image the ONNX native library cannot load, and the JVM throws
+     * UnsatisfiedLinkError, an Error that passed every catch (Exception) and failed the onboarding request.
+     * The manager must turn it into an exception that the layer fallback handles.
+     */
+    @Test
+    void aNativeRuntimeThatCannotLoadBecomesAnIllegalStateException(@TempDir Path dir) throws Exception {
+        Path model = Files.createFile(dir.resolve("model.onnx"));
+        ModelLifecycleManager broken = new ModelLifecycleManager(model.toString(), () -> {
+            throw new UnsatisfiedLinkError("Error loading shared library libstdc++.so.6: No such file or directory");
+        });
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, broken::ensureLoaded);
+
+        assertTrue(e.getMessage().contains("ONNX native runtime unavailable"), e.getMessage());
+        assertFalse(broken.isLoaded());
+    }
+
+    @Test
+    void afterTheNativeRuntimeFailedOnceItIsNotLoadedAgain(@TempDir Path dir) throws Exception {
+        Path model = Files.createFile(dir.resolve("model.onnx"));
+        AtomicInteger attempts = new AtomicInteger();
+        ModelLifecycleManager broken = new ModelLifecycleManager(model.toString(), () -> {
+            attempts.incrementAndGet();
+            throw new UnsatisfiedLinkError("libstdc++.so.6 missing");
+        });
+
+        assertThrows(IllegalStateException.class, broken::ensureLoaded);
+        assertThrows(IllegalStateException.class, broken::ensureLoaded);
+        assertThrows(IllegalStateException.class, broken::acquireSession);
+
+        assertEquals(1, attempts.get(), "a failed native load must not be retried on every field");
     }
 }

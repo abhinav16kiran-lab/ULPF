@@ -274,4 +274,31 @@ class MappingEngineOrchestratorTest {
         assertEquals("TFIDF", results.get(1).getSource());
         assertEquals("TFIDF", results.get(2).getSource());
     }
+
+    /**
+     * End to end through the real layer 4 classes: when the ONNX runtime cannot load, a field that reaches
+     * layer 4 still gets a proposal (no candidate), instead of an Error that fails the whole onboarding request.
+     */
+    @Test
+    void aFieldThatReachesLayer4StillGetsAProposalWhenTheNativeRuntimeCannotLoad(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path model = java.nio.file.Files.createFile(dir.resolve("model.onnx"));
+        ModelLifecycleManager broken = new ModelLifecycleManager(model.toString(), () -> {
+            throw new UnsatisfiedLinkError("Error loading shared library libstdc++.so.6");
+        });
+        EmbeddingMatchingService realLayer4 = new EmbeddingMatchingService(
+            new EmbeddingClient(broken), mock(com.ulpf.mapping.repository.EmbeddingRepository.class), config);
+        MappingEngineOrchestrator withRealLayer4 = new MappingEngineOrchestrator(
+            preprocessor, aliasLookupService, tfidfMatchingService, typoMatchingService, realLayer4,
+            confidenceEvaluator, config);
+        when(tfidfMatchingService.match(any())).thenReturn(List.of(new MappingCandidate("src_ip", 0.40, "TFIDF")));
+        when(typoMatchingService.match(any())).thenReturn(List.of());
+
+        List<MappingProposal> results = withRealLayer4.mapFields(List.of("meaningful"), false);
+
+        assertEquals(1, results.size());
+        assertNull(results.get(0).getCanonicalField());
+        assertEquals("NONE", results.get(0).getSource());
+        assertEquals(0.40, results.get(0).getConfidence());
+    }
 }
