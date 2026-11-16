@@ -36,7 +36,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * The actuator endpoints (backlog item 13, Phase 0): /actuator/health is open, every other actuator endpoint needs
  * the monitor user over HTTP Basic. A ULPF login token does not open them. The main security chain is unchanged.
  */
-@SpringBootTest(properties = "ulpf.monitor.password=monitor-test-pass-123")
+// These tests check the security chain, not the health of the databases. Without this, /actuator/health
+// answers 503 (DOWN) when no ClickHouse runs, as in CI.
+@SpringBootTest(properties = {"ulpf.monitor.password=monitor-test-pass-123", "management.health.db.enabled=false"})
 @ActiveProfiles("test")
 class ActuatorSecurityTest {
 

@@ -33,7 +33,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /** Fail closed: with no monitor password configured, no actuator endpoint except health answers, whatever the credentials. */
-@SpringBootTest(properties = "ulpf.monitor.password=")
+// These tests check the security chain, not the health of the databases. Without this, /actuator/health
+// answers 503 (DOWN) when no ClickHouse runs, as in CI.
+@SpringBootTest(properties = {"ulpf.monitor.password=", "management.health.db.enabled=false"})
 @ActiveProfiles("test")
 class ActuatorSecurityNoPasswordTest {
 
