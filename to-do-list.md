@@ -325,3 +325,12 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - busybox `wget` tries only `::1`, gets "connection refused", and the check never passes. ClickHouse itself is healthy: `http://127.0.0.1:8123/ping` answers `Ok.`
 - **Requirement**: check `http://127.0.0.1:8123/ping` in the ClickHouse health check of `compose.yaml`. Check the other health checks for the same `localhost` pattern.
 - **Design Considerations**: a one-line fix. Test it with a fresh `compose up` on both Podman and Docker. The local perf kit works around it in `perf/compose/docker.override.yaml` until the fix lands.
+
+### 20. Check Where the Canonical Rows of Each Source Are Stored [NEW 2026-11-16, not verified]
+- **Observation**: on the perf test stack, 5 sources of one vendor were onboarded and approved: `perf-json`, `perf-json-drift`, `perf-syslog`, `perf-cef` and `perf-leef`. After a run, ClickHouse had only **one** per-source table, `ulpf_events.events_perf_json`. It held all 362,616 canonical rows of the run, which equals the raw row count of all 5 sources together. The integrity blocks were written for all 5 sources.
+- **Possible meanings** (not checked): the canonical rows of 4 sources are stored in another source's table, or the tables for the other sources were never created and their rows went to a fallback. Either one would be a correctness bug, not only a speed problem.
+- **Where to look**:
+  - `ClickHouseIngestionRepository.flushCanonical` resolves the target table from the source name (`DynamicSchemaProvisioningService.constructTableName`), and checks with `candidateExists` that the table exists.
+  - `DynamicSchemaProvisioningService` creates the tables at approval.
+  - The onboarding script of the local perf kit (`perf/setup/onboard.sh`) shows how the sources were made.
+- **Requirement**: reproduce with 2 sources of different formats, and check the `table` value of each canonical row. Then decide whether this is a bug, write a plan, and fix it test first.

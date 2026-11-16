@@ -281,3 +281,38 @@ Phase 1 changes code for speed. It starts only after the team lead approves it. 
 6. **Logging (a team lead decision, then config only).** The container runs the `dev` profile (`application.yaml`: `spring.profiles.active: dev`; `compose.yaml` sets no profile). `dev` logs `com.ulpf` and `org.springframework.jdbc` at DEBUG: about 10 lines and 1 KB of log per event at 300 events/s. Decide which profile the container runs by default. Measure the cost first, as its own A/B run.
 
 **Measure again after these:** the noise band, the knee, a wall-clock profile at the new knee, and the nginx path.
+
+### 9.1 Handoff: how to start Phase 1 (written 2026-11-16, for the next session)
+
+**State.**
+- Phase 0 is merged (PR #28, `8412f87`).
+- Branch `perf/phase-1-ingestion` was created from that commit. It has no commits yet, and only exists locally.
+- The Phase 1 proposal above is **not approved**. Do not change code until the team lead approves it.
+
+**Open decisions for the team lead.** Ask about these first; do not assume them:
+1. Which Phase 1 changes are approved (items 0-6 above), and in what order.
+2. What a full queue does (item 1). Proposed: a bounded queue, and `503` with `Retry-After`.
+3. Stay on Podman (plan step 6). The measurement says yes, but the team lead has not confirmed it.
+4. Which profile the container runs by default (item 6). Today it is `dev`, with DEBUG logs.
+
+**Then:**
+1. Write the Phase 1 plan as its own file from `docs/plans/TEMPLATE.md` (for example `docs/plans/YYYY-MM-DD-ingestion-phase-1.md`). Give it the files to change, the tests to write first, and the risks for each approved item. Link it from here, and get it approved.
+2. Implement one item at a time, test first (`AGENTS.md` §4). Each item gets its own commit, and its own measurement before the next item starts.
+
+**Code pointers** (checked on `8412f87`):
+- `ClickHouseIngestionRepository`:
+  - `enqueue()` and `enqueueCanonical()` run the flush on the request thread at 500 events;
+  - `flush()` and `flushCanonical()` are `synchronized` on the same object;
+  - `flush()` calls `BatchIntegrityService.processRawBatch()` after the insert, inside the lock;
+  - `recentRawHistory` (5,000 entries) has only one reader: the lineage lookup when ClickHouse is offline.
+- `IntegrityRepository.findLatestBlockHash` runs the O(n) lookup; the index is in `sqlite/schema.sql` (`idx_integrity_source_created`).
+- `EventIngestionService.loadHistoricalVersions` calls `MappingRepository.findAllValidVersionsBySourceId` for every event, without a cache. `MappingRepository.invalidateSource` clears `activeMappingCache` only.
+- `application-dev.yaml` sets `com.ulpf` and `org.springframework.jdbc` to DEBUG. `application.yaml` makes `dev` the active profile.
+
+**How to measure** (the kit is in `perf/`, local to the team lead's machine; read `perf/README.md` first):
+- **Baseline:** the instrumented build, which is `main` at `8412f87`, not `8e5b731`.
+- **Start every run on fresh volumes** (`PERF_PROJECT=<name>` gives a separate compose project), or record the integrity block count. The ledger slows ingestion as it grows.
+- Run 3 times in A/B/A/B order, on the same steps: `--steps 200,300,400,500,750,1000,1500 --hold 120`. As the knee rises, add higher steps.
+- **Disk:** the ClickHouse system logs grow by about 1 GB per hour of load. Truncate them between runs, and keep more than 3 GB free (`perf/watchdog.sh` stops the runs at 3 GB).
+- No builds or tests while a measurement runs.
+- Before each test session, the team lead sets the CPU governor to `performance` (needs root).
