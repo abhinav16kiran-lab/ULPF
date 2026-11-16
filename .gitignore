@@ -42,3 +42,6 @@ agent-scripts/handoff/
 agent-scripts/.out/
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Local performance kit (backlog item 13): kept on the team lead's machine only
+/perf/

@@ -250,6 +250,16 @@ POST /v1/events ──► enqueue(RawEventRecord) ──► [ ConcurrentLinkedQu
 
 ---
 
+#### Meters (backlog item 13)
+* `ulpf.clickhouse.flush.duration` (Timer) and `ulpf.clickhouse.batch.size` (DistributionSummary), tagged `stage=raw|canonical`, with explicit buckets. The raw flush time includes the wait for the ClickHouse insert and the Merkle integrity block.
+* Counters tagged `table`, created on the first failure:
+  * `ulpf.clickhouse.insert.errors`: failed insert statements;
+  * `ulpf.records.reenqueued`: raw rows put back on the queue;
+  * `ulpf.records.degraded`: canonical rows stored with their mapped fields `NULL`;
+  * `ulpf.records.dropped`: canonical rows not stored.
+* The registry comes in by `setMeterRegistry` (`@Autowired`, optional). The constructor uses a `SimpleMeterRegistry`, so the existing tests are unchanged.
+* The queue gauges `ulpf.queue.raw.size` / `.canonical.size` are bound in `common/MetricsConfig`.
+
 ### 3.8 `VendorWebhookRepository`
 
 * **File Location:** `com/ulpf/common/db/VendorWebhookRepository.java`

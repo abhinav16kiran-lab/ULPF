@@ -1,6 +1,9 @@
 spring:
   profiles:
     active: dev
+  config:
+    # Mounted secrets: /run/secrets/monitor_password becomes the property monitor_password (used below).
+    import: optional:configtree:/run/secrets/
   application:
     name: core-engine
   datasource:
@@ -13,8 +16,23 @@ spring:
 
 server:
   port: ${CORE_ENGINE_PORT:8080}
+  tomcat:
+    mbeanregistry:
+      enabled: true   # needed for the Tomcat thread-pool meters (tomcat.threads.*)
+
+# Actuator (backlog item 13). /actuator/health is open; every other endpoint needs the monitor user over HTTP Basic.
+# With no password, those endpoints are denied (fail closed). The Grafana plan adds "prometheus" to this list.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
 
 ulpf:
+  monitor:
+    username: ${MONITOR_USERNAME:monitor}
+    # From the MONITOR_PASSWORD environment variable, or from the secret file /run/secrets/monitor_password.
+    password: ${MONITOR_PASSWORD:${monitor_password:}}
   # One-time setup credentials: asked for on the setup screen before the super-admin is created; never an account.
   # No defaults: blank values disable setup (fail closed). startup/start.sh generates them into .env.
   admin:

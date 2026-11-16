@@ -23,6 +23,12 @@
     </properties>
 
     <dependencies>
+        <!-- Actuator + Micrometer: /actuator/health and /actuator/metrics, behind the monitor user (backlog item 13).
+             The Prometheus registry comes with the Grafana plan (docs/plans/2026-10-28-prometheus-grafana-observability.md). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

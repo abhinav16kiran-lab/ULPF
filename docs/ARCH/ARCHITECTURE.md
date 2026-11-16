@@ -26,11 +26,11 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 │ ULPF SPRING BOOT CORE ENGINE (Port 8080)                                               │
 │                                                                                       │
 │  ┌──────────────────────────────┐        ┌─────────────────────────────────────────┐  │
-│  │ CONTROL PLANE                │        │ DATA PLANE (Zero-Overhead Ingestion)    │  │
+│  │ CONTROL PLANE                │        │ DATA PLANE (Ingestion)                  │  │
 │  │ • Onboarding Workflow        │        │ • Header-Based Protocol Autodetector    │  │
-│  │ • AI Mapping Engine          │        │ • In-Memory Lock-Free Queue Buffer      │  │
+│  │ • AI Mapping Engine          │        │ • In-Memory Queue Buffer                │  │
 │  │ • Replay & Backfill Worker   │        │ • ClickHouse Async Micro-Batching       │  │
-│  │ • Decoupled AlertDispatcher  │        │ • Out-of-Band Merkle Tree Hashing       │  │
+│  │ • Decoupled AlertDispatcher  │        │ • Merkle Hashing (in the raw flush)     │  │
 │  │ • Vendor Webhook Governance  │        │ • Schema Drift & Failure Governance     │  │
 │  └──────────────┬───────────────┘        └────────────────────┬────────────────────┘  │
 └─────────────────┼─────────────────────────────────────────────┼───────────────────────┘
@@ -64,7 +64,7 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 * **Layer 4 (Vector Embeddings)**: Local ONNX `all-MiniLM-L6-v2` 384-dimensional vector cosine similarity.
 * **Human Feedback Learning Loop**: Captures manual admin adjustments to continuously refine candidate confidence scores.
 
-### 3.3 Data Plane (Zero-Overhead Ingestion)
+### 3.3 Data Plane (Ingestion)
 * **Protocol Autodetector**: Automatically parses Syslog (RFC 3164/5424), CEF, LEEF, and JSON payloads.
 * **Two body forms, one event each**: `application/json` (an object, or a JSON string holding one raw line), and any other type (or none) for one raw line. `EventController` reads a raw line from the request stream and decodes it with the declared charset, or UTF-8. The content type decides only how the body is read; the autodetector decides the format.
   * *Why the raw stream, not `@RequestBody`:* for a form type (the `curl -d` default), Spring rebuilds the body from parsed form fields and re-encodes it, which changes the line; and Spring's String converter defaults to ISO-8859-1, which garbles UTF-8. Before 2026-11-15 the endpoint bound every body to `Object`, so every plain-text line got `415` (plan `docs/plans/2026-11-15-plain-text-ingest.md`).
@@ -77,6 +77,8 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 * **Tamper-Evident Ledger**: Batches log payloads into cryptographic blocks, computes SHA-256 binary Merkle tree root hashes, and chains block hashes in SQLite (`batch_integrity_blocks`).
 * **Full-Record Traceability Hashing**: The Merkle tree leaf node for each log record is a deterministic hash of its full immutable identity (`event_id` + `vendor_id` + `source_id` + `lineage_id` + `raw_payload`), guaranteeing that both the content and origin metadata cannot be forged.
 * **Bulk Forensic Auditor**: A high-speed, parallelized server-side audit engine recalculates Merkle roots over raw ClickHouse logs. Upon detecting a corrupted block, it returns exact deterministic traceability parameters (database table bounds) for root cause analysis.
+* **Where it runs**: inside the raw flush, after the ClickHouse insert succeeds and under the same lock (`ClickHouseIngestionRepository.flush()` calls `BatchIntegrityService.processRawBatch`). The flush writes one block per source in the batch.
+* **Known limit (measured 2026-11-16)**: before each block, `IntegrityRepository.findLatestBlockHash` reads the newest block of the source with `ORDER BY block_id DESC LIMIT 1`. The only index is `(source_id, created_at)`, so SQLite reads and sorts every block of the source. On a test database with 21,339 blocks for one source, the query took 12.35 ms, against 0.044 ms with 200 blocks. The cost grows with every block ever written, so ingestion slows down as the ledger grows. The fix (an index on `(source_id, block_id)`) is item 0 of the Phase 1 proposal in `docs/plans/2026-11-13-ingestion-throughput.md`; the numbers are in `docs/perf/RESULTS.md`.
 
 ### 3.5 Dynamic ClickHouse Schema Provisioning
 * **Dynamic Table Engine**: Automatically provisions isolated ClickHouse tables (`events_{vendor}_{source}`) upon onboarding approval.
@@ -154,6 +156,31 @@ What the feature does is summarised under 3.1. This section records **why** it i
 | Only the source owner can create or regenerate a key; admins cannot | A key that an admin has seen is a key two people know. `/v1/onboard/**` admits `USER` and `VENDOR` only, and the service checks ownership | Admin-created keys: see the previous row |
 | Every key creation notifies the vendor, without the key | If someone else used the vendor's account, the vendor sees it | No notification: a stolen session could replace the key silently |
 | `PENDING_APPROVAL` removed from `credentials.status`, with no migration | No code writes it any more. There were no users, so existing dev databases were recreated instead | A table-rebuild migration in `SqliteSchemaMigrator`: code kept forever for nobody |
+
+### 3.11 Metrics and Performance Measurement
+
+**Metrics (`/actuator/metrics`).** Spring Boot Actuator and Micrometer, with no Prometheus export yet (the Grafana plan adds it):
+- **ULPF meters:**
+  - `ulpf.queue.raw.size` and `ulpf.queue.canonical.size`: gauges, bound in `MetricsConfig`.
+  - `ulpf.clickhouse.flush.duration` (timer) and `ulpf.clickhouse.batch.size` (summary), both tagged `stage=raw|canonical`, with explicit buckets.
+  - The failure counters `ulpf.clickhouse.insert.errors`, `ulpf.records.degraded`, `ulpf.records.dropped` and `ulpf.records.reenqueued`, tagged `table`. They are created on the first failure.
+
+  The names, tags and buckets follow the metric table of `docs/plans/2026-10-28-prometheus-grafana-observability.md`.
+- **Built-in meters:** HTTP requests, the JVM, HikariCP, and the Tomcat threads (`server.tomcat.mbeanregistry.enabled`).
+- **Security** (`ActuatorSecurity`, its own `@Order(1)` chain): `/actuator/health` is open. Every other actuator endpoint needs the monitor user over HTTP Basic: `ulpf.monitor.username`, and the password from `MONITOR_PASSWORD` or `/run/secrets/monitor_password`.
+
+**Measured results** are in `docs/perf/RESULTS.md`, with the host, the method and the limits of every number. The research behind the method is in `docs/research/2026-11-13-profiling-ingestion.md`. The tooling (k6, async-profiler, run and report scripts) is a local kit on the team lead's machine (`perf/`, git-ignored).
+
+| Decision | Why | Rejected alternative (and why) |
+| :--- | :--- | :--- |
+| The monitor user lives in the actuator chain's own `ProviderManager`, not in a global `UserDetailsService` bean | A global bean would join the application's authentication, so the monitor password could sign in to the app. A ULPF login token also never opens the actuator, because `JwtFilter` skips `/actuator/**` | One shared chain with an extra role: mixes metric scraping with user logins |
+| Fail closed: with no password, every actuator endpoint except health is denied, and a `WARN` is logged | Metrics show internals (queue depth, table names in counter tags). Nothing must be exposed by a missing setting | A default password: it is public. Open metrics: `/actuator/**` was `permitAll` before 2026-11-16 |
+| The pipeline meters are registered once and kept in fields; per-table tags are only on the failure counters | Nothing is looked up per event. Timers with per-table tags multiply into thousands of series (measured in the Grafana plan) | Tagging the flush timer by table: cardinality |
+| `MeterRegistry` reaches `ClickHouseIngestionRepository` by an `@Autowired` setter, with a `SimpleMeterRegistry` default | The class already takes its optional parts by setters, so the constructor and its tests stay unchanged | A second constructor (the Grafana plan's first idea): a different style in the same class |
+| The load test offers a fixed rate (k6 open model) and judges on server-side counts per second | A closed-model test slows down when the server stalls and hides the stall (coordinated omission). The old 995 events/s figure came from such a test | Counting on the client, or the old Python scripts |
+| The measured cause is fixed before anything else is changed | Phase 0 measured a lock convoy on the synchronized flush and O(n) queue-size calls (`docs/perf/RESULTS.md`), not a guess | Tuning first (heap, threads, network): it moves numbers without removing the cause |
+| Each comparison starts on fresh volumes, or records the number of integrity blocks | The integrity ledger slows ingestion as it grows: the raw flush took 35 ms on fresh volumes and 143 ms with 102,369 blocks, and the knee fell from 400 to 300 (`docs/perf/RESULTS.md`, 2026-11-16) | Reusing one stack for all runs: each run then runs on a larger ledger than the one before, and the order of the runs biases the result |
+| The containers stay on rootless Podman | On the same starting state, Podman 3.4.4 matched rootless Docker within the noise band (measured 2026-11-16; measure again on Podman 4.9, which the Grafana plan requires). The team lead's rule was to switch only on a large Podman disadvantage | Switching to Docker: no measured gain, and Docker needs its own fixes here (the ClickHouse health check, item 19; no `host.containers.internal` in rootless mode) |
 
 ## 4. Technology Stack & Packaging
 
