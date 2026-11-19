@@ -118,7 +118,7 @@ Performance: measured results, with their method and limits, are in `docs/perf/R
 
 ## 6. Documentation
 
-- `docs/ARCH/ARCHITECTURE.md` — system design; `MAPPING_ENGINE.md`, `API_SPECIFICATION.md`, `DISTRIBUTED_TRACING_ARCHITECTURE.md`, `SCALABILITY_AND_CLUSTER_GUIDE.md`
+- `docs/ARCH/ARCHITECTURE.md` — system design; `MAPPING_ENGINE.md`, `INTEGRITY_LEDGER.md` (the Merkle ledger, written from the code), `API_SPECIFICATION.md`, `DISTRIBUTED_TRACING_ARCHITECTURE.md`, `SCALABILITY_AND_CLUSTER_GUIDE.md`
 - `docs/ARCH/FILE_GUIDE.md` — directory map (hand-written; may be stale, trust the filesystem)
 - `docs/db/` — SQLite/ClickHouse schemas, DB package guide
 - `docs/frontend/frontend.md` — frontend architecture

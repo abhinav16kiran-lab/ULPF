@@ -137,17 +137,20 @@ Constraint: unique `(source_id, version)`.
 
 ## `batch_integrity_blocks`
 
-Stores Merkle tree batch block hashes for cryptographic tamper-evidence of raw log streams (NTRO Blockchain requirement).
+One row per Merkle block: a SHA-256 fingerprint of the raw events of one source in one raw flush. How blocks are made and verified, and what they do and do not protect: [`docs/ARCH/INTEGRITY_LEDGER.md`](../ARCH/INTEGRITY_LEDGER.md).
 
 | Column | Type | Purpose |
 |---|---|---|
-| `block_id` | TEXT | Primary key UUID identifier for the batch block |
-| `source_id` | TEXT | Source identifier |
-| `event_count` | INTEGER | Number of raw events compiled into this Merkle block |
-| `merkle_root` | TEXT | Hex-encoded SHA-256 binary Merkle Root over raw event hashes |
-| `previous_block_hash` | TEXT | Hash of previous block root creating an immutable block chain |
-| `block_hash` | TEXT | Combined SHA-256 header hash of current block |
-| `created_at` | TIMESTAMP | Block generation timestamp |
+| `block_id` | INTEGER PRIMARY KEY AUTOINCREMENT | Block number, one counter for all sources |
+| `source_id` | TEXT NOT NULL | Source of every event in the block (no foreign key) |
+| `event_count` | INTEGER NOT NULL | Number of raw events in the block |
+| `first_event_id` | TEXT NOT NULL | `event_id` of the first event after sorting by `received_at`, then `event_id` |
+| `last_event_id` | TEXT NOT NULL | `event_id` of the last event after the same sort |
+| `merkle_root` | TEXT NOT NULL | Hex SHA-256 Merkle root over the events' leaf hashes |
+| `previous_block_hash` | TEXT NOT NULL | `merkle_root` of the previous block of the same source, or 64 zeros for the first one |
+| `created_at` | TIMESTAMP | Block creation time (sqlite-jdbc stores it as epoch milliseconds) |
+
+Index: `idx_integrity_source_created (source_id, created_at)`. No query uses `created_at`; see the known problems in `INTEGRITY_LEDGER.md`.
 
 ## `mapping_embeddings`
 
