@@ -1,5 +1,6 @@
 # Environment / secrets
 .env
+.env.old
 
 # Java / Maven
 core-engine/target/

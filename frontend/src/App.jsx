@@ -6,7 +6,6 @@ import OnboardingPage from "./pages/OnboardingPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
-import IntegrityConsolePage from "./pages/IntegrityConsolePage";
 import SetupPage from "./pages/SetupPage";
 import LinkPage from "./pages/LinkPage";
 import AdminsPage from "./pages/AdminsPage";
@@ -62,14 +61,6 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={["ADMIN"]}>
               <AnalyticsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/integrity"
-          element={
-            <ProtectedRoute allowedRoles={["ADMIN", "USER", "VENDOR"]}>
-              <IntegrityConsolePage />
             </ProtectedRoute>
           }
         />

@@ -5,7 +5,7 @@
 
 ## 1. Core Objective
 
-ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, AI-assisted field mapping, and forensic audit platform. It ingests heterogeneous multi-vendor log streams at high throughput (10,000+ EPS), preserves raw payload lineage, maps raw keys to canonical schemas, and provides cryptographic proof against post-ingestion log tampering.
+ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion and AI-assisted field mapping platform. It ingests heterogeneous multi-vendor log streams at high throughput (10,000+ EPS), preserves raw payload lineage, and maps raw keys to canonical schemas.
 
 ---
 
@@ -30,8 +30,8 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 │  │ • Onboarding Workflow        │        │ • Header-Based Protocol Autodetector    │  │
 │  │ • AI Mapping Engine          │        │ • In-Memory Queue Buffer                │  │
 │  │ • Replay & Backfill Worker   │        │ • ClickHouse Async Micro-Batching       │  │
-│  │ • Decoupled AlertDispatcher  │        │ • Merkle Hashing (in the raw flush)     │  │
-│  │ • Vendor Webhook Governance  │        │ • Schema Drift & Failure Governance     │  │
+│  │ • Decoupled AlertDispatcher  │        │ • Schema Drift & Failure Governance     │  │
+│  │ • Vendor Webhook Governance  │        │                                         │  │
 │  └──────────────┬───────────────┘        └────────────────────┬────────────────────┘  │
 └─────────────────┼─────────────────────────────────────────────┼───────────────────────┘
                   │                                             │
@@ -43,7 +43,6 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
 │ • mapping_versions, onboarding_requests│    │ • ulpf_events.canonical_events          │
 │ • vendor_webhooks & delivery_logs      │    │ • ulpf_events.events_{vendor}_{source}  │
 │ • ingestion_alert_incidents            │    │                                         │
-│ • batch_integrity_blocks (Merkle Roots)│    │                                         │
 └────────────────────────────────────────┘    └─────────────────────────────────────────┘
 ```
 
@@ -71,14 +70,10 @@ ULPF (Universal Log Processing Framework) is an enterprise-grade log ingestion, 
   * *Why `consumes = "!application/json"` on the text handler and a required JSON body:* the two mappings must not overlap. With an optional JSON body, both matched an empty request, and Spring answered `409` (ambiguous handler).
   * *Rejected:* a custom message converter from text to `Object`. It would change how every `Object` body in the application is read, to fix one endpoint.
 * **Micro-Batching**: Enqueues events into unbounded `ConcurrentLinkedQueue` buffers (raw and canonical). A flush sends a batch to ClickHouse as an async insert (`async_insert=1`, `wait_for_async_insert=1`) when a queue reaches 500 events, or every 1,000 ms from the scheduler.
-* **Where the cost lands today**: the request thread that fills a queue to 500 runs the flush itself. `flush()` and `flushCanonical()` are `synchronized` on the same object, and the raw flush also builds the Merkle block and writes it to SQLite before it releases the lock (`ClickHouseIngestionRepository`). So other requests can wait for a flush. The AI mapping runs at onboarding, not at ingest. Backlog item 13 measures this path and changes it.
+* **Where the cost lands today**: the request thread that fills a queue to 500 runs the flush itself. `flush()` and `flushCanonical()` are `synchronized` on the same object (`ClickHouseIngestionRepository`). So other requests can wait for a flush. The AI mapping runs at onboarding, not at ingest. Backlog item 13 measures this path and changes it.
 
-### 3.4 Cryptographic Merkle Tree Forensic Audit Engine
-* **Tamper-Evident Ledger**: Batches log payloads into cryptographic blocks, computes SHA-256 binary Merkle tree root hashes, and chains block hashes in SQLite (`batch_integrity_blocks`).
-* **Full-Record Traceability Hashing**: The Merkle tree leaf node for each log record is a deterministic hash of its full immutable identity (`event_id` + `vendor_id` + `source_id` + `lineage_id` + `raw_payload`), guaranteeing that both the content and origin metadata cannot be forged.
-* **Bulk Forensic Auditor**: A high-speed, parallelized server-side audit engine recalculates Merkle roots over raw ClickHouse logs. Upon detecting a corrupted block, it returns exact deterministic traceability parameters (database table bounds) for root cause analysis.
-* **Where it runs**: inside the raw flush, after the ClickHouse insert succeeds and under the same lock (`ClickHouseIngestionRepository.flush()` calls `BatchIntegrityService.processRawBatch`). The flush writes one block per source in the batch.
-* **Known limit (measured 2026-11-16)**: before each block, `IntegrityRepository.findLatestBlockHash` reads the newest block of the source with `ORDER BY block_id DESC LIMIT 1`. The only index is `(source_id, created_at)`, so SQLite reads and sorts every block of the source. On a test database with 21,339 blocks for one source, the query took 12.35 ms, against 0.044 ms with 200 blocks. The cost grows with every block ever written, so ingestion slows down as the ledger grows. The fix (an index on `(source_id, block_id)`) is item 0 of the Phase 1 proposal in `docs/plans/2026-11-13-ingestion-throughput.md`; the numbers are in `docs/perf/RESULTS.md`.
+### 3.4 Integrity Ledger: removed on 2026-11-19
+Until 2026-11-19, each raw flush wrote a SHA-256 Merkle block per source into SQLite (`batch_integrity_blocks`), and `/v1/integrity/*` verified the blocks against ClickHouse. It was removed: it did not detect edits to SQLite or deleted blocks, it ran inside the raw flush lock and slowed ingestion as it grew, and no requirement asked for it. The reasons, the rejected alternatives and the old design are in [`INTEGRITY_LEDGER.md`](INTEGRITY_LEDGER.md) (status: Removed). Raw data preservation (SIH a) and traceability (SIH d) come from `ulpf_raw.raw_events` and `lineage_id`, not from the ledger.
 
 ### 3.5 Dynamic ClickHouse Schema Provisioning
 * **Dynamic Table Engine**: Automatically provisions isolated ClickHouse tables (`events_{vendor}_{source}`) upon onboarding approval.
@@ -179,7 +174,7 @@ What the feature does is summarised under 3.1. This section records **why** it i
 | `MeterRegistry` reaches `ClickHouseIngestionRepository` by an `@Autowired` setter, with a `SimpleMeterRegistry` default | The class already takes its optional parts by setters, so the constructor and its tests stay unchanged | A second constructor (the Grafana plan's first idea): a different style in the same class |
 | The load test offers a fixed rate (k6 open model) and judges on server-side counts per second | A closed-model test slows down when the server stalls and hides the stall (coordinated omission). The old 995 events/s figure came from such a test | Counting on the client, or the old Python scripts |
 | The measured cause is fixed before anything else is changed | Phase 0 measured a lock convoy on the synchronized flush and O(n) queue-size calls (`docs/perf/RESULTS.md`), not a guess | Tuning first (heap, threads, network): it moves numbers without removing the cause |
-| Each comparison starts on fresh volumes, or records the number of integrity blocks | The integrity ledger slows ingestion as it grows: the raw flush took 35 ms on fresh volumes and 143 ms with 102,369 blocks, and the knee fell from 400 to 300 (`docs/perf/RESULTS.md`, 2026-11-16) | Reusing one stack for all runs: each run then runs on a larger ledger than the one before, and the order of the runs biases the result |
+| Each comparison starts on fresh volumes | The integrity ledger slowed ingestion as it grew: the raw flush took 35 ms on fresh volumes and 143 ms with 102,369 blocks, and the knee fell from 400 to 300 (`docs/perf/RESULTS.md`, 2026-11-16). The ledger was removed on 2026-11-19 (§3.4), so this cause is gone. Fresh volumes still give each run the same starting state. Measure before you drop the rule | Reusing one stack for all runs: each run then runs on a larger ledger than the one before, and the order of the runs biases the result |
 | The containers stay on rootless Podman | On the same starting state, Podman 3.4.4 matched rootless Docker within the noise band (measured 2026-11-16; measure again on Podman 4.9, which the Grafana plan requires). The team lead's rule was to switch only on a large Podman disadvantage | Switching to Docker: no measured gain, and Docker needs its own fixes here (the ClickHouse health check, item 19; no `host.containers.internal` in rootless mode) |
 
 ## 4. Technology Stack & Packaging

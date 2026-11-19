@@ -35,7 +35,6 @@ core-engine/
 │   ├── common/           # DB connection pools, JWT utilities & security filter chain (shouldNotFilter)
 │   ├── controlplane/     # Auth (login/signup), onboarding workflows, vendor webhooks, notifications & governance
 │   ├── dataplane/        # High-throughput event ingestion, protocol autodetector, schema drift & alert dispatcher
-│   ├── integrity/        # Cryptographic Merkle tree forensic audit engine & bulk tamper detection
 │   ├── mapping/          # 4-layer AI schema mapping engine, shared transformer & human feedback loop
 │   └── replay/           # Asynchronous historical log replay, cursor streaming & backfill service
 ├── src/main/resources/
@@ -55,7 +54,7 @@ frontend/
 │   ├── api/              # Axios HTTP client with JWT interceptor & 401 session eviction
 │   ├── assets/           # Logo SVG assets & empty state vector illustrations
 │   ├── components/       # Reusable UI components (Navbar, UlpfLogo, EmptyState)
-│   ├── pages/            # View pages (Login, Signup, Onboard, Admin, Notifications, Integrity, Analytics)
+│   ├── pages/            # View pages (Login, Signup, Onboard, Admin, Notifications, Analytics)
 │   ├── routes/           # ProtectedRoute wrapper enforcing JWT role-based access
 │   ├── App.jsx           # Master React Router navigation & route definitions
 │   └── index.css         # Warm Kinetic design tokens & Tailwind CSS styles

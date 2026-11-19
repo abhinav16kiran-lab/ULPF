@@ -54,9 +54,6 @@ function Navbar() {
                 <span>Admins</span>
               </Link>
             )}
-            <Link to="/integrity" className={navItemClass("/integrity")}>
-              <span>🔐 Integrity Audit</span>
-            </Link>
           </nav>
         </div>
 

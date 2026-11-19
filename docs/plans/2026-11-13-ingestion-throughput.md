@@ -263,21 +263,58 @@ Phase 1 changes code for speed. It starts only after the team lead approves it. 
 
 **Target.** The knee is 400 events/s today. The North Star (11,600 sustained) is 29 times that, and ClickHouse alone takes more than 32,000 rows/s on this host. So the limit is the engine's design, not the hardware. Phase 1 does not promise a number. Each change is measured alone, and we stop when the next limit is ClickHouse or the CPU.
 
-**Method.** One change at a time. Each change gets a failing test first, then 3 runs in A/B/A/B order against the instrumented build (see step 5: the meters stay on both sides). Each run starts on fresh volumes, because the integrity ledger slows ingestion as it grows (`docs/perf/RESULTS.md`, 2026-11-16). A change counts only if the knee moves by more than 1 step, or saturation moves by more than 15%.
+**Method.** One change at a time. Each change gets a failing test first, then 3 runs in A/B/A/B order against the instrumented build (see step 5: the meters stay on both sides). Each run starts on fresh volumes. The first reason, the growing integrity ledger (`docs/perf/RESULTS.md`, 2026-11-16), is gone since 2026-11-19, but fresh volumes still give every run the same starting state. A change counts only if the knee moves by more than 1 step, or saturation moves by more than 15%.
 
 **Changes, in the proposed order** (the cheapest large gain first):
 
-0. **Make the latest-block lookup O(1).** Each raw flush writes one integrity block per source in the batch (up to 5 here). Before each block, `IntegrityRepository.findLatestBlockHash` runs `WHERE source_id = ? ORDER BY block_id DESC LIMIT 1`. The only index is `(source_id, created_at)`, so SQLite reads every block of the source and sorts them (`USE TEMP B-TREE FOR ORDER BY`). Measured on 2026-11-16, on a copy of the test database (102,369 blocks): **12.35 ms per call with 21,339 blocks for the source, 0.044 ms with 200 blocks.** So a raw flush spends about 60 ms in this query today, and the cost grows with every block ever written, also while the system is idle. At the North Star rate, a source gets about 23 blocks per second, so after one day (about 2 million blocks) the query would take more than 1 s, if the cost stays linear.
-   - Proposal: an index on `(source_id, block_id)`. Rejected: an in-memory cache of the latest hash only. It is wrong after a restart or with a second writer, unless it is also loaded from the table; the index is the fix, and a cache can come later if the profile still shows the query.
+> **Update 2026-11-19:** the team lead removed the integrity ledger (`docs/plans/2026-11-19-remove-integrity-ledger.md`). Items 0 and 3 are replaced by that removal and are not done. Phase 1 starts by measuring the gain of the removal against the Phase 0 baseline. Items 1, 2, 4, 5 and 6 are unchanged.
+
+0. **(Replaced on 2026-11-19 by the removal of the ledger.) Make the latest-block lookup O(1).** Each raw flush writes one integrity block per source in the batch (up to 5 here). Before each block, `IntegrityRepository.findLatestBlockHash` runs `WHERE source_id = ? ORDER BY block_id DESC LIMIT 1`. The only index is `(source_id, created_at)`, so SQLite reads every block of the source and sorts them (`USE TEMP B-TREE FOR ORDER BY`). Measured on 2026-11-16, on a copy of the test database (102,369 blocks): **12.35 ms per call with 21,339 blocks for the source, 0.044 ms with 200 blocks.** So a raw flush spends about 60 ms in this query today, and the cost grows with every block ever written, also while the system is idle. At the North Star rate, a source gets about 23 blocks per second, so after one day (about 2 million blocks) the query would take more than 1 s, if the cost stays linear.
+   - Found on 2026-11-19 (`docs/ARCH/INTEGRITY_LEDGER.md`, section 9): the duplicate check `findExistingBlock` also runs for every block and also reads every block of the source. So item 0 must fix both lookups.
+   - Proposal: an index on `(source_id, block_id)`, and one that serves `findExistingBlock`. Rejected: an in-memory cache of the latest hash only. It is wrong after a restart or with a second writer, unless it is also loaded from the table; the index is the fix, and a cache can come later if the profile still shows the query.
    - Test first: `EXPLAIN QUERY PLAN` shows no temp B-tree; the chain is the same as before.
    - Also measure the SQLite journal mode. The database runs in `delete` mode (not WAL), so each block insert is a synced transaction.
 1. **Take the flush off the request threads.** Today a request thread that fills a queue to 500 runs the `synchronized` flush itself, and up to about 200 request threads wait behind it (79% of all thread time, wall-clock profile). Proposal: `enqueue()` only adds to the queue. One flusher thread per stage (raw, canonical) drains it when it holds a batch, or after a fixed time.
    - Decision needed: what happens when the queue is full. Proposal: a bounded queue, and `503` with `Retry-After` when it is full. An unbounded queue grows until the JVM runs out of memory, and a `202` that is then lost breaks the 0-loss rule. Rejected: blocking the request thread until there is room. That brings the convoy back.
    - Tests first: a request returns while a mocked ClickHouse insert blocks; a full queue answers `503`; a failed insert still re-enqueues its batch (the existing loss tests stay green).
 2. **Separate the raw and canonical flushes, and let inserts overlap.** Both methods lock the same object, so a raw flush (124-277 ms) also stops the canonical flush. Most of a raw flush is the `wait_for_async_insert=1` wait (68% of the time inside the lock). That wait is latency, not work. Proposal: 2 to 4 inserts in flight per stage. Rejected: `wait_for_async_insert=0`. Then a `202` no longer means that ClickHouse stored the event.
-3. **Take the integrity work off the insert path.** 30% of the time inside the lock is the SQLite Merkle block. The blocks are chained, so they must stay in order. Proposal: one integrity thread takes each stored batch in order, after the insert succeeds. Test first: the chain is the same as today for the same batches, and a failed insert creates no block.
+3. **(Replaced on 2026-11-19 by the removal of the ledger.) Take the integrity work off the insert path.** 30% of the time inside the lock is the SQLite Merkle block. The blocks are chained, so they must stay in order. Proposal: one integrity thread takes each stored batch in order, after the insert succeeds. Test first: the chain is the same as today for the same batches, and a failed insert creates no block.
 4. **O(1) queue checks.** `ConcurrentLinkedQueue.size()` walks the whole queue and takes 64% of the CPU samples. `enqueue()` calls it on `recentRawHistory` (5,000 entries, so every event walks 5,000 nodes) and on the batch queue. Proposal: an atomic counter for the batch queue, and a fixed ring buffer for the history. The history's only reader is the lineage lookup when ClickHouse is offline.
 5. **Cache the mapping versions per source.** For every event, `EventIngestionService.loadHistoricalVersions` runs `MappingRepository.findAllValidVersionsBySourceId` (a SQLite query, no cache) and parses each version's JSON. The DEBUG log during the 300/s warm-up showed about 400 of these queries per second, so at least 1 per event. Proposal: cache the list next to `activeMappingCache`, and clear it in `invalidateSource` when a mapping version changes. Test first: 2 events cause 1 query; a new active version clears the cache.
 6. **Logging (a team lead decision, then config only).** The container runs the `dev` profile (`application.yaml`: `spring.profiles.active: dev`; `compose.yaml` sets no profile). `dev` logs `com.ulpf` and `org.springframework.jdbc` at DEBUG: about 10 lines and 1 KB of log per event at 300 events/s. Decide which profile the container runs by default. Measure the cost first, as its own A/B run.
 
 **Measure again after these:** the noise band, the knee, a wall-clock profile at the new knee, and the nginx path.
+
+### 9.1 Handoff: how to start Phase 1 (written 2026-11-16, for the next session)
+
+**State.**
+- Phase 0 is merged (PR #28, `8412f87`).
+- Branch `perf/phase-1-ingestion` was created from that commit. It has no commits yet, and only exists locally.
+- The Phase 1 proposal above is **not approved**. Do not change code until the team lead approves it.
+
+**Open decisions for the team lead.** Ask about these first; do not assume them:
+1. Which Phase 1 changes are approved (items 1, 2, 4, 5 and 6 above; 0 and 3 are replaced), and in what order.
+2. What a full queue does (item 1). Proposed: a bounded queue, and `503` with `Retry-After`.
+3. Stay on Podman (plan step 6). The measurement says yes, but the team lead has not confirmed it.
+4. Which profile the container runs by default (item 6). Today it is `dev`, with DEBUG logs.
+
+**Then:**
+1. Write the Phase 1 plan as its own file from `docs/plans/TEMPLATE.md` (for example `docs/plans/YYYY-MM-DD-ingestion-phase-1.md`). Give it the files to change, the tests to write first, and the risks for each approved item. Link it from here, and get it approved.
+2. Implement one item at a time, test first (`AGENTS.md` §4). Each item gets its own commit, and its own measurement before the next item starts.
+
+**Code pointers** (checked on `8412f87`):
+- `ClickHouseIngestionRepository`:
+  - `enqueue()` and `enqueueCanonical()` run the flush on the request thread at 500 events;
+  - `flush()` and `flushCanonical()` are `synchronized` on the same object;
+  - `recentRawHistory` (5,000 entries) has only one reader: the lineage lookup when ClickHouse is offline.
+- The integrity ledger (`BatchIntegrityService`, `IntegrityRepository`) was removed on 2026-11-19. `flush()` no longer does SQLite work.
+- `EventIngestionService.loadHistoricalVersions` calls `MappingRepository.findAllValidVersionsBySourceId` for every event, without a cache. `MappingRepository.invalidateSource` clears `activeMappingCache` only.
+- `application-dev.yaml` sets `com.ulpf` and `org.springframework.jdbc` to DEBUG. `application.yaml` makes `dev` the active profile.
+
+**How to measure** (the kit is in `perf/`, local to the team lead's machine; read `perf/README.md` first):
+- **Baseline:** the instrumented build, which is `main` at `8412f87`, not `8e5b731`. The first comparison is the ledger removal against this baseline.
+- **Start every run on fresh volumes** (`PERF_PROJECT=<name>` gives a separate compose project), so that every run has the same starting state.
+- Run 3 times in A/B/A/B order, on the same steps: `--steps 200,300,400,500,750,1000,1500 --hold 120`. As the knee rises, add higher steps.
+- **Disk:** the ClickHouse system logs grow by about 1 GB per hour of load. Truncate them between runs, and keep more than 3 GB free (`perf/watchdog.sh` stops the runs at 3 GB).
+- No builds or tests while a measurement runs.
+- Before each test session, the team lead sets the CPU governor to `performance` (needs root).

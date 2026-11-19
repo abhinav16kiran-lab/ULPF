@@ -1,14 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import client from "../api/client";
 import Navbar from "../components/Navbar";
 import EmptyState from "../components/EmptyState";
 import "./AdminDashboardPage.css";
 
 // Crisp SVG Icons for Enterprise AI Theme
-const IconShield = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-);
 const IconClock = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
 );
@@ -49,7 +46,6 @@ function AdminDashboardPage() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [integrityBlocks, setIntegrityBlocks] = useState([]);
   const [adminStats, setAdminStats] = useState(null);
 
   // Active selected request
@@ -104,17 +100,13 @@ function AdminDashboardPage() {
     setError(null);
 
     try {
-      const [reqRes, intRes] = await Promise.all([
-        client.get("/v1/admin/onboard"),
-        client.get("/v1/integrity/blocks").catch(() => ({ data: { blocks: [] } }))
-      ]);
+      const reqRes = await client.get("/v1/admin/onboard");
 
       const reqList = reqRes.data.requests || [];
       setRequests(reqList);
       if (reqRes.data.stats) {
         setAdminStats(reqRes.data.stats);
       }
-      setIntegrityBlocks(intRes.data?.blocks || []);
 
       if (reqList.length > 0 && !selectedReqId) {
         setSelectedReqId(reqList[0].requestId);
@@ -274,26 +266,6 @@ function AdminDashboardPage() {
               <span className="admin-badge-dot"></span>
               Admin Console
             </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <Link
-              to="/integrity"
-              style={{
-                backgroundColor: "#0d9488",
-                color: "white",
-                padding: "8px 16px",
-                borderRadius: "9999px",
-                textDecoration: "none",
-                fontSize: "0.8rem",
-                fontWeight: "700",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px"
-              }}
-            >
-              <IconShield /> Tamper Audit ({integrityBlocks.length})
-            </Link>
           </div>
         </div>
 

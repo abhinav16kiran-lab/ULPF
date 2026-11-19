@@ -238,13 +238,13 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 - **Depends on**: nothing since 2026-11-13. Item 13 delivers the shared instrumentation itself (Actuator, the actuator security chain, `/actuator/metrics`, queue gauges, flush, batch and error meters), and item 7 builds the Prometheus and Grafana side on it. See row 32 of `docs/plans/2026-10-28-prometheus-grafana-observability.md`.
 - **Measured results (2026-11-15 and 2026-11-16)**: `docs/perf/RESULTS.md`. Phase 0 is done; the Phase 1 proposal waits for the team lead (`docs/plans/2026-11-13-ingestion-throughput.md`, section 9).
   - Baseline on `8e5b731`: knee 400 events/s (5 of 5 runs), saturation at about 1,065-1,487 events/s with 10-40 s freezes, 0 events lost. ClickHouse alone takes more than 32,000 rows/s on the same host.
-  - Causes, from JFR and a wall-clock profile: a lock convoy on the synchronized flush, which request threads run; O(n) `ConcurrentLinkedQueue.size()` at 64% of CPU; and an O(n) SQLite lookup per integrity block, which makes ingestion slower as the ledger grows (knee 300 on a database with 102,369 blocks).
+  - Causes, from JFR and a wall-clock profile: a lock convoy on the synchronized flush, which request threads run; O(n) `ConcurrentLinkedQueue.size()` at 64% of CPU; and an O(n) SQLite lookup per integrity block, which made ingestion slower as the ledger grew (knee 300 on a database with 102,369 blocks). The integrity ledger was removed on 2026-11-19 (`docs/plans/2026-11-19-remove-integrity-ledger.md`), so this cause is gone. Phase 1 starts by measuring the gain.
   - The new meters have no cost that the agreed rule can detect.
   - Rootless Podman matches rootless Docker on the same starting state, so the runtime stays Podman unless the team lead decides otherwise.
 - **Research (2026-11-13)**: `docs/research/2026-11-13-profiling-ingestion.md` (toolset: k6, async-profiler, JFR, `pidstat` and the ClickHouse `system.*` tables; method; host facts). The old benchmark used a closed-model Python generator through nginx without keep-alive, so its 995 events/s is not a reliable baseline.
 - **Runtime decision (team lead, 2026-11-13)**: measure rootless Podman networking against Docker. If Podman shows a large disadvantage that Docker does not have, ULPF moves fully to Docker. Measured on 2026-11-16: no disadvantage (see the results).
 - **Problem**: the last benchmark gave 995.4 events per second (about 86 million per day). The target is at least 1 billion per day: 11,600 events per second at P99 (1-second windows) and a peak of 12,000 events per second. See the North Star section. ClickHouse alone can take far more, so the bottleneck is in ULPF, not in the database (measured 2026-11-15).
-- **Scope**: the ingestion path only. This includes the HTTP request, the API key check, format autodetect, the in-memory queue, the raw batch insert, `MappingTransformer`, the canonical insert and the Merkle hashing. The mapping engine that proposes mappings at onboarding is out of scope (item 10).
+- **Scope**: the ingestion path only. This includes the HTTP request, the API key check, format autodetect, the in-memory queue, the raw batch insert, `MappingTransformer` and the canonical insert. The mapping engine that proposes mappings at onboarding is out of scope (item 10).
 - **Requirement**:
   1. **Baseline (from `prompt.txt` point 2):** create the same tables in a plain ClickHouse. Send random logs to them at the highest rate one generator can reach, and record events per second. Then send the same logs through ULPF to the same tables. Record both numbers and the flow of each. Use the same hardware for both, and record the hardware.
   2. **Profile:** use this item's own Actuator metrics, Java Flight Recorder (built into the JDK) and async-profiler to find where the time goes.
@@ -260,7 +260,7 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
 
 ### 14. UI and Code Simplicity Review (from `prompt.txt` point 1) [NEW 2026-11-07]
 - **Problem**: the UI must be simple enough for anyone to use: clear, warm and informative. Today some parts look random or "AI-generated", and some controls do nothing. Examples found on 2026-11-07:
-  - Emojis in the navigation, for example "🔐 Integrity Audit".
+  - Emojis in the navigation, for example "🔐 Integrity Audit" (removed with the integrity ledger on 2026-11-19; check the other screens).
   - Login page: the "LDAP / SSO" badge, "Remember me" and "Forgot password?" do nothing.
   - Login page: inline styles for the notices, and copy such as "Takes under 30 seconds · Enterprise ready".
   - Gradients on the primary buttons, while the newer screens use flat teal.
@@ -274,7 +274,7 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - Overlaps item 9 (split `AnalyticsPage.jsx`) and item 8 (mapping code structure).
 - **Dead code found on 2026-11-12** (during item 16; not fixed there, to keep that PR small):
   - `SourceRepository.suspendSource` and `VendorRepository.suspendVendor`, `activateVendor`, `revokeVendor` are called only by tests. No endpoint uses them (see item 17).
-  - `OnboardingService.hashSha256` is used for unrelated hashes (`EventIngestionService`, `AdminLinkService`), and `MerkleTreeCalculator.hashSha256` is a second copy of the same function. One shared helper would do.
+  - `OnboardingService.hashSha256` is used for unrelated hashes (`EventIngestionService`, `AdminLinkService`), so it belongs in a shared helper. The second copy, `MerkleTreeCalculator.hashSha256`, was removed with the integrity ledger on 2026-11-19.
 
 ### 15. Agent Scripts: Session Brief, Change Report and Handoff Notes [ON HOLD 2026-11-12, Adarsh has assumed the ownership]
 - **Problem**: a new agent session starts with no memory of the repo. It misses the state of the work, the second implementation of something, and docs that are wrong. A resumed session has old context and does not see what changed while it was paused.
@@ -325,3 +325,12 @@ Every change must keep these numbers in mind. Order of work agreed on 2026-11-07
   - busybox `wget` tries only `::1`, gets "connection refused", and the check never passes. ClickHouse itself is healthy: `http://127.0.0.1:8123/ping` answers `Ok.`
 - **Requirement**: check `http://127.0.0.1:8123/ping` in the ClickHouse health check of `compose.yaml`. Check the other health checks for the same `localhost` pattern.
 - **Design Considerations**: a one-line fix. Test it with a fresh `compose up` on both Podman and Docker. The local perf kit works around it in `perf/compose/docker.override.yaml` until the fix lands.
+
+### 20. Check Where the Canonical Rows of Each Source Are Stored [NEW 2026-11-16, not verified]
+- **Observation**: on the perf test stack, 5 sources of one vendor were onboarded and approved: `perf-json`, `perf-json-drift`, `perf-syslog`, `perf-cef` and `perf-leef`. After a run, ClickHouse had only **one** per-source table, `ulpf_events.events_perf_json`. It held all 362,616 canonical rows of the run, which equals the raw row count of all 5 sources together. The integrity blocks were written for all 5 sources.
+- **Possible meanings** (not checked): the canonical rows of 4 sources are stored in another source's table, or the tables for the other sources were never created and their rows went to a fallback. Either one would be a correctness bug, not only a speed problem.
+- **Where to look**:
+  - `ClickHouseIngestionRepository.flushCanonical` resolves the target table from the source name (`DynamicSchemaProvisioningService.constructTableName`), and checks with `candidateExists` that the table exists.
+  - `DynamicSchemaProvisioningService` creates the tables at approval.
+  - The onboarding script of the local perf kit (`perf/setup/onboard.sh`) shows how the sources were made.
+- **Requirement**: reproduce with 2 sources of different formats, and check the `table` value of each canonical row. Then decide whether this is a bug, write a plan, and fix it test first.

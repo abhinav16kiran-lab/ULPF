@@ -135,20 +135,6 @@ Constraint: unique `(source_id, version)`.
 | `read` | BOOLEAN | Read state |
 | `created_at` | TIMESTAMP | Creation time |
 
-## `batch_integrity_blocks`
-
-Stores Merkle tree batch block hashes for cryptographic tamper-evidence of raw log streams (NTRO Blockchain requirement).
-
-| Column | Type | Purpose |
-|---|---|---|
-| `block_id` | TEXT | Primary key UUID identifier for the batch block |
-| `source_id` | TEXT | Source identifier |
-| `event_count` | INTEGER | Number of raw events compiled into this Merkle block |
-| `merkle_root` | TEXT | Hex-encoded SHA-256 binary Merkle Root over raw event hashes |
-| `previous_block_hash` | TEXT | Hash of previous block root creating an immutable block chain |
-| `block_hash` | TEXT | Combined SHA-256 header hash of current block |
-| `created_at` | TIMESTAMP | Block generation timestamp |
-
 ## `mapping_embeddings`
 
 Stores embeddings associated with canonical fields for the local semantic mapping layer. The team has agreed that this table is part of the baseline schema from the start; the exact implementation/storage mechanics remain to be finalized.
@@ -250,7 +236,6 @@ users
   │          └── 1:N → sources
   │                       ├── 1:N → credentials
   │                       ├── 1:N → mapping_versions
-  │                       ├── 1:N → batch_integrity_blocks
   │                       └── 1:N → ingestion_alert_incidents
   │
   ├── 1:N → onboarding_requests
