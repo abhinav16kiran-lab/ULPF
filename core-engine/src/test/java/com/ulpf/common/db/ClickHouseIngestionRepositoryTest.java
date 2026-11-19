@@ -80,10 +80,6 @@ class ClickHouseIngestionRepositoryTest {
 
     @Test
     void testFlushRecoversWhenBatchAlreadyCommittedOnTimeout() {
-        com.ulpf.integrity.service.BatchIntegrityService integrityService =
-                Mockito.mock(com.ulpf.integrity.service.BatchIntegrityService.class);
-        ingestionRepository.setBatchIntegrityService(integrityService);
-
         RawEventRecord event = new RawEventRecord(
                 "e-timeout", "lin-1", "v1", "s1", 1, LocalDateTime.now(), "{\"msg\":\"data\"}"
         );
@@ -102,16 +98,10 @@ class ClickHouseIngestionRepositoryTest {
 
         // Queue size should be 0 because it was not re-enqueued
         assertEquals(0, ingestionRepository.getQueueSize());
-        // Integrity block processing should still occur
-        Mockito.verify(integrityService, Mockito.times(1)).processRawBatch(any());
     }
 
     @Test
     void testFlushReEnqueuesWhenGenuinelyFailed() {
-        com.ulpf.integrity.service.BatchIntegrityService integrityService =
-                Mockito.mock(com.ulpf.integrity.service.BatchIntegrityService.class);
-        ingestionRepository.setBatchIntegrityService(integrityService);
-
         RawEventRecord event = new RawEventRecord(
                 "e-fail", "lin-2", "v1", "s1", 1, LocalDateTime.now(), "{\"msg\":\"data\"}"
         );
@@ -130,8 +120,6 @@ class ClickHouseIngestionRepositoryTest {
 
         // Queue size should be 1 because it was re-enqueued for retry
         assertEquals(1, ingestionRepository.getQueueSize());
-        // Integrity block should NOT be processed
-        Mockito.verify(integrityService, Mockito.never()).processRawBatch(any());
     }
 
     @Test

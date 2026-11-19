@@ -442,7 +442,7 @@ function NotificationsPage() {
     if (activeTab === "UNREAD") return !n.read;
     if (activeTab === "SECURITY") {
       const text = (n.title + " " + n.message).toLowerCase();
-      return text.includes("tamper") || text.includes("security") || text.includes("merkle") || text.includes("drift");
+      return text.includes("security") || text.includes("drift");
     }
     if (activeTab === "SYSTEM") {
       const text = (n.title + " " + n.message).toLowerCase();
@@ -454,7 +454,7 @@ function NotificationsPage() {
 
   const getCategoryBadge = (title, message) => {
     const text = (title + " " + message).toLowerCase();
-    if (text.includes("tamper") || text.includes("security") || text.includes("merkle") || text.includes("reject")) {
+    if (text.includes("security") || text.includes("reject")) {
       return {
         label: "SECURITY",
         color: "bg-rose-50 text-rose-700 border-rose-200",

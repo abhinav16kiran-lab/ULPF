@@ -23,7 +23,7 @@
 
 When vendors submit sample log payloads (JSON, Syslog RFC 3164/5424, ArcSight CEF, IBM QRadar LEEF), an AI-powered 4-layer mapping engine automatically analyzes payload structures and proposes semantic mappings into a canonical schema. A human administrator reviews, edits, and approves proposals via the **Admin Dashboard** before an API key is issued. 
 
-Once onboarded, vendor logs flow into high-performance **ClickHouse columnar storage** at live ingestion (`POST /v1/events`) with **0% AI overhead** using high-speed deterministic header format autodetection. Raw logs are preserved losslessly, normalized in real-time, and cryptographically verified using **SHA-256 Merkle Tree batching** for tamper-evidence.
+Once onboarded, vendor logs flow into high-performance **ClickHouse columnar storage** at live ingestion (`POST /v1/events`) with **0% AI overhead** using high-speed deterministic header format autodetection. Raw logs are preserved losslessly and normalized in real-time.
 
 ---
 
@@ -319,16 +319,7 @@ The Analytics Console (`/analytics`) offers a query builder, direct SQL, and lin
 
 ---
 
-## 5. Cryptographic Merkle Tree Batching
-
-Log batches are hashed into SHA-256 binary Merkle Trees (`BatchIntegrityService`):
-- Merkle roots are computed for every batch flush.
-- Batch integrity blocks record `merkle_root`, `previous_block_hash`, and event range.
-- Tamper audits recalculate Merkle roots on demand via `/v1/integrity/verify/{id}` to detect data corruption or unauthorized SQL edits.
-
----
-
-## 6. Asynchronous Historical Replay & Backfill Engine
+## 5. Asynchronous Historical Replay & Backfill Engine
 
 When an existing mapping is updated, historical events residing in `ulpf_raw.raw_events` can be replayed into target dynamic tables (`ulpf_events.events_{vendor}_{source}`) without service interruption:
 - **On-Demand**: An admin starts it with `POST /v1/admin/sources/{sourceId}/replay`. Approval does not start a replay: a source has no events before approval, because its API key does not exist yet.
@@ -338,7 +329,7 @@ When an existing mapping is updated, historical events residing in `ulpf_raw.raw
 
 ---
 
-## 7. Ingestion Failure & Schema Drift Governance
+## 6. Ingestion Failure & Schema Drift Governance
 
 ULPF actively safeguards data integrity and operational visibility during live ingestion:
 - **Zero Raw Data Loss**: If a target dynamic table or column has not yet been provisioned, raw logs are safely preserved in `ulpf_raw.raw_events` while dropped canonical writes trigger operational failure incidents (`ingestion_alert_incidents`).
@@ -350,7 +341,7 @@ ULPF actively safeguards data integrity and operational visibility during live i
 
 ---
 
-## 8. Tenant-Scoped Vendor Webhooks & Outbound Alerting
+## 7. Tenant-Scoped Vendor Webhooks & Outbound Alerting
 
 Vendors can register external webhook endpoints in the self-service portal to receive automated real-time alerts:
 - **Decoupled Architecture**: `AlertDispatcher` handles multi-channel routing asynchronously without slowing down high-throughput ingestion.
@@ -360,7 +351,7 @@ Vendors can register external webhook endpoints in the self-service portal to re
 
 ---
 
-## 9. Technology Stack
+## 8. Technology Stack
 
 | Layer | Technology | Details |
 | :--- | :--- | :--- |
@@ -373,7 +364,7 @@ Vendors can register external webhook endpoints in the self-service portal to re
 
 ---
 
-## 10. Complete REST API Reference
+## 9. Complete REST API Reference
 
 | Method | Endpoint | Auth | Description |
 | :--- | :--- | :--- | :--- |
@@ -398,15 +389,12 @@ Vendors can register external webhook endpoints in the self-service portal to re
 | `POST` | `/v1/analytics/import/file` | Admin Token | Bulk upload legacy log files (`.json`, `.gz`, `.log`, `.csv`) |
 | `GET` | `/v1/analytics/export/parquet` | Admin Token | Batch export ClickHouse logs to Parquet for AI/ML |
 | `GET` | `/v1/analytics/lineage/{id}` | Admin Token | Trace raw input fields for aggregated metric |
-| `GET` | `/v1/integrity/blocks` | Bearer Token | List Merkle batch integrity blocks |
-| `POST` | `/v1/integrity/verify/{id}` | Bearer Token | Execute cryptographic forensic audit for single block |
-| `POST` | `/v1/integrity/verify-all` | Admin Token | Bulk audit all integrity blocks & identify tampered IDs |
 | `POST` | `/v1/events` | `X-API-Key` | Runtime log ingestion (Syslog, CEF, LEEF, JSON) |
 | `GET` | `/v1/health` | None | Health check & service readiness |
 
 ---
 
-## 11. System Performance Benchmarks
+## 10. System Performance Benchmarks
 
 The core ingestion engine (`/v1/events`) was subjected to a continuous load test using auto-ramping concurrency threads to identify the saturation point. 
 
@@ -422,7 +410,7 @@ The core ingestion engine (`/v1/events`) was subjected to a continuous load test
 
 ---
 
-## 12. License & Authors
+## 11. License & Authors
 
 This project is licensed under the custom **Competitor's Right License (CRL-1.0)**.
 It is a source-available project strictly for competition evaluation, and is **not** open-source.  

@@ -135,23 +135,6 @@ Constraint: unique `(source_id, version)`.
 | `read` | BOOLEAN | Read state |
 | `created_at` | TIMESTAMP | Creation time |
 
-## `batch_integrity_blocks`
-
-One row per Merkle block: a SHA-256 fingerprint of the raw events of one source in one raw flush. How blocks are made and verified, and what they do and do not protect: [`docs/ARCH/INTEGRITY_LEDGER.md`](../ARCH/INTEGRITY_LEDGER.md).
-
-| Column | Type | Purpose |
-|---|---|---|
-| `block_id` | INTEGER PRIMARY KEY AUTOINCREMENT | Block number, one counter for all sources |
-| `source_id` | TEXT NOT NULL | Source of every event in the block (no foreign key) |
-| `event_count` | INTEGER NOT NULL | Number of raw events in the block |
-| `first_event_id` | TEXT NOT NULL | `event_id` of the first event after sorting by `received_at`, then `event_id` |
-| `last_event_id` | TEXT NOT NULL | `event_id` of the last event after the same sort |
-| `merkle_root` | TEXT NOT NULL | Hex SHA-256 Merkle root over the events' leaf hashes |
-| `previous_block_hash` | TEXT NOT NULL | `merkle_root` of the previous block of the same source, or 64 zeros for the first one |
-| `created_at` | TIMESTAMP | Block creation time (sqlite-jdbc stores it as epoch milliseconds) |
-
-Index: `idx_integrity_source_created (source_id, created_at)`. No query uses `created_at`; see the known problems in `INTEGRITY_LEDGER.md`.
-
 ## `mapping_embeddings`
 
 Stores embeddings associated with canonical fields for the local semantic mapping layer. The team has agreed that this table is part of the baseline schema from the start; the exact implementation/storage mechanics remain to be finalized.
@@ -253,7 +236,6 @@ users
   │          └── 1:N → sources
   │                       ├── 1:N → credentials
   │                       ├── 1:N → mapping_versions
-  │                       ├── 1:N → batch_integrity_blocks
   │                       └── 1:N → ingestion_alert_incidents
   │
   ├── 1:N → onboarding_requests

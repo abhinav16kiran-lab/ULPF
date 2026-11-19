@@ -173,21 +173,7 @@ INSERT OR IGNORE INTO mapping_aliases (canonical_field, alias_key, source) VALUE
 ('message', 'message', 'seed'),
 ('message', 'msg', 'seed');
 
--- 10. Batch Integrity Blocks table: Merkle-tree batch roots and hash chain blocks for log tamper-evidence.
-CREATE TABLE IF NOT EXISTS batch_integrity_blocks (
-    block_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id TEXT NOT NULL,
-    event_count INTEGER NOT NULL,
-    first_event_id TEXT NOT NULL,
-    last_event_id TEXT NOT NULL,
-    merkle_root TEXT NOT NULL,
-    previous_block_hash TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_integrity_source_created ON batch_integrity_blocks(source_id, created_at);
-
--- 11. Ingestion Alert Incidents table: Tracks operational failures, affected counts, and recovery replay windows.
+-- 10. Ingestion Alert Incidents table: Tracks operational failures, affected counts, and recovery replay windows.
 CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
     incident_id     TEXT PRIMARY KEY,
     source_id       TEXT NOT NULL,
@@ -204,7 +190,7 @@ CREATE TABLE IF NOT EXISTS ingestion_alert_incidents (
 CREATE INDEX IF NOT EXISTS idx_incidents_source_status ON ingestion_alert_incidents(source_id, status);
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON ingestion_alert_incidents(status);
 
--- 12. Vendor Webhook Configurations (1 active endpoint per vendor organization)
+-- 11. Vendor Webhook Configurations (1 active endpoint per vendor organization)
 CREATE TABLE IF NOT EXISTS vendor_webhooks (
     webhook_id          TEXT PRIMARY KEY,
     vendor_id           TEXT NOT NULL UNIQUE,
@@ -222,7 +208,7 @@ CREATE TABLE IF NOT EXISTS vendor_webhooks (
 
 CREATE INDEX IF NOT EXISTS idx_vendor_webhooks_vendor ON vendor_webhooks(vendor_id);
 
--- 13. Webhook Delivery Logs (Audit trail of recent deliveries & test pings)
+-- 12. Webhook Delivery Logs (Audit trail of recent deliveries & test pings)
 CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
     delivery_id         TEXT PRIMARY KEY,
     vendor_id           TEXT,               -- NULL for global admin .env webhook
@@ -237,7 +223,7 @@ CREATE TABLE IF NOT EXISTS webhook_delivery_logs (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_vendor_date ON webhook_delivery_logs(vendor_id, attempted_at);
 
--- 14. Admin Links: single-use links made by the super-admin. INVITE creates a regular admin; RESET sets a new
+-- 13. Admin Links: single-use links made by the super-admin. INVITE creates a regular admin; RESET sets a new
 -- password for one admin (target_user_id). Only the SHA-256 hash of the token is stored. Times are epoch ms (UTC).
 CREATE TABLE IF NOT EXISTS admin_links (
     link_id         TEXT PRIMARY KEY,

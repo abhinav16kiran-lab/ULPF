@@ -1,9 +1,36 @@
 # Integrity Ledger (Merkle blocks over raw events)
 
+- **Status:** Removed on 2026-11-19. This file is a historical record.
 - **Created:** 2026-11-19
 - **Last verified against the code:** 2026-11-19, commit `7f843a5` (the code is the same as `main` at `8412f87`)
 - **How it was verified:** by reading every class of `com.ulpf.integrity`, every caller, the SQLite schema, the ClickHouse table, the frontend pages and the tests. Facts that were also measured or run say so. Facts found only by reading say "found by reading; not reproduced".
-- **Rule for editors:** when you change this feature, update this file in the same change, and update the two dates and the commit above. If the code and this file disagree, the code is right; fix this file.
+- **How to read the old code:** all paths and line numbers below refer to `main` at `8412f87`, the last merged commit with the feature. Example: `git show 8412f87:core-engine/src/main/java/com/ulpf/integrity/service/BatchIntegrityService.java`.
+- **Rule for editors:** the feature has no code, so do not update sections 1 to 11 for later code changes. Add to "Why it was removed" or to the change log only.
+
+> **WARNING:** This feature does not exist in the current code. Sections 1 to 11 describe the system as it was at `8412f87`, not the current system. Do not use them as a guide to the current code.
+
+## Why it was removed
+
+The team lead decided on 2026-11-19 to remove the ledger completely: the `integrity` package, its call in the raw flush, the SQLite table `batch_integrity_blocks`, the `/integrity` page and its links, and its 20 tests. The work log is `docs/plans/2026-11-19-remove-integrity-ledger.md`.
+
+**Reasons**
+1. **It did not protect what it claimed to protect.** The blocks were in SQLite and the events in ClickHouse, in the same stack. A person who can change ClickHouse can usually change SQLite too. Deleted blocks, missing blocks and SQLite edits went unnoticed, because nothing checked the `previous_block_hash` chain (sections 8 and 9).
+2. **It made ingestion slower.** It ran inside the `synchronized` raw flush, with two SQLite lookups per block that read every earlier block of the source. It was about 30% of the time inside the lock, and the knee fell from 400 to 300 events/s as the ledger grew (`docs/perf/RESULTS.md`, Result 2).
+3. **It added code and likely bugs.** By reading the code, verification could report `TAMPERED_DETECTED` for data that nobody changed (section 9, items 5, 6 and 9).
+4. **No requirement needed it.** The SIH problem statement asks to preserve the raw data (a) and to keep traceability between normalized and original events (d). `ulpf_raw.raw_events` and `lineage_id` do this without the ledger.
+
+**Alternatives that were rejected**
+
+| Alternative | Why it was rejected |
+|---|---|
+| Add indexes for the two lookups | Fixes the speed only. Keeps the code, the false-alarm bugs, and a security claim that is not true. |
+| Move the ledger work off the flush path | More code (a second queue or thread). The security claim is still not true. |
+| Make the chain real (verify `previous_block_hash`, add a separator to the leaf) | The blocks and the events stay in the same trust zone. A person with access to both databases rewrites both. More code for no real protection. |
+| Real tamper-evidence: sign the roots with a key outside the stack, or write them to append-only storage outside the stack | The only design that protects against a database administrator. It is a new feature with key management, and no requirement asks for it. If a requirement comes, start from a new plan, not from this code. |
+
+**What stayed.** Two parts of `ClickHouseIngestionRepository.flush()` came from ledger fix commits but protect the raw data, so they stayed: the probe that stops a duplicate insert after a timeout, and the `RawEventRecord` default for a null `receivedAt`.
+
+**Existing databases.** `schema.sql` no longer creates the table, but `CREATE TABLE IF NOT EXISTS` does not drop it from a database that has it. No code reads it. To remove it, run once: `DROP TABLE IF EXISTS batch_integrity_blocks;` (this drops its index too).
 
 ## 1. What it is, in one paragraph
 
@@ -148,3 +175,4 @@ No test covers: the SQLite query plans (problems 1 and 2), events within the sam
 ## 12. Change log of this file
 
 - 2026-11-19: created from the code at `7f843a5`.
+- 2026-11-19: the feature was removed. Added the status, the warning and "Why it was removed". Sections 1 to 11 are unchanged.

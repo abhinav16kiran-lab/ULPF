@@ -42,7 +42,6 @@ public class ClickHouseIngestionRepository {
     private static final Logger log = LoggerFactory.getLogger(ClickHouseIngestionRepository.class);
 
     private final JdbcTemplate clickhouseJdbcTemplate;
-    private com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService;
     private com.ulpf.dataplane.service.TableIngestionFailureNotificationService tableFailureNotificationService;
     private com.ulpf.mapping.service.DynamicSchemaProvisioningService dynamicSchemaProvisioningService;
     private final Queue<RawEventRecord> bufferQueue = new ConcurrentLinkedQueue<>();
@@ -84,7 +83,7 @@ public class ClickHouseIngestionRepository {
 
     private Timer flushTimer(String stage) {
         return Timer.builder("ulpf.clickhouse.flush.duration")
-                .description("Time of one flush to ClickHouse, including the wait for the insert (and, for raw, the integrity block)")
+                .description("Time of one flush to ClickHouse, including the wait for the insert")
                 .tag("stage", stage).serviceLevelObjectives(FLUSH_BUCKETS).register(meterRegistry);
     }
 
@@ -96,11 +95,6 @@ public class ClickHouseIngestionRepository {
 
     private void countRows(String name, String table, int rows) {
         meterRegistry.counter(name, "table", table).increment(rows);
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setBatchIntegrityService(com.ulpf.integrity.service.BatchIntegrityService batchIntegrityService) {
-        this.batchIntegrityService = batchIntegrityService;
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -288,16 +282,6 @@ public class ClickHouseIngestionRepository {
             });
 
             log.info("Successfully flushed {} raw log events to ClickHouse.", batch.size());
-
-            // Generate Merkle Tree tamper-evident integrity block for batch
-            if (batchIntegrityService != null) {
-                try {
-                    batchIntegrityService.processRawBatch(batch);
-                } catch (Exception e) {
-                    log.warn("Failed to process batch integrity block: {}", e.getMessage());
-                }
-            }
-
         } catch (Exception e) {
             countRows("ulpf.clickhouse.insert.errors", "raw_events", 1);
             log.warn("Flush exception encountered for batch of {} events: {}", batch.size(), e.getMessage());
@@ -316,13 +300,6 @@ public class ClickHouseIngestionRepository {
 
             if (alreadyCommitted) {
                 log.info("Batch of {} events was already committed in ClickHouse before timeout. Skipping duplicate insert.", batch.size());
-                if (batchIntegrityService != null) {
-                    try {
-                        batchIntegrityService.processRawBatch(batch);
-                    } catch (Exception ex) {
-                        log.warn("Failed to process batch integrity block on recovery: {}", ex.getMessage());
-                    }
-                }
             } else {
                 log.error("Failed to flush batch of {} raw log events to ClickHouse! Re-enqueuing batch.", batch.size(), e);
                 // Re-enqueue batch in case of genuine transient network failure

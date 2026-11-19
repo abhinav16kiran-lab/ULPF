@@ -7,7 +7,7 @@
 
 - **Spring Boot API Boundary**: Spring Boot mediates all HTTP traffic between clients, control plane databases (SQLite), and high-throughput data plane databases (ClickHouse).
 - **Micro-Batched Ingestion**: `POST /v1/events` puts each event in an in-memory queue. The engine writes the queue to ClickHouse in batches of up to 500, with async inserts and `wait_for_async_insert=1`, so an insert returns only when ClickHouse has stored the batch. The request thread that fills a batch runs that flush itself. Measured limits: `docs/perf/RESULTS.md`.
-- **Separate Control & Data Planes**: Vendor onboarding and administration use their own endpoints. Both planes use the same SQLite database: ingestion reads the mapping versions and writes the integrity blocks there.
+- **Separate Control & Data Planes**: Vendor onboarding and administration use their own endpoints. Both planes use the same SQLite database: ingestion reads the mapping versions there.
 - **Role-Based Access Control (RBAC)**: Enforces `ADMIN`, `VENDOR`, and `USER` roles via JWT Bearer authentication headers.
 - **Read-Only Analytics Mediation**: Browsers never execute direct queries against ClickHouse; all analytical queries are validated, sanitized, and authorized by Spring Boot.
 
@@ -49,9 +49,6 @@
 | `/v1/analytics/schemas` | `GET` | `ADMIN` | Get ClickHouse database catalog tables and dynamic columns |
 | `/v1/analytics/import/file` | `POST` | `ADMIN` | Bulk upload `.json`, `.gz`, `.log`, or `.csv` files into ClickHouse |
 | `/v1/analytics/export/parquet` | `GET` | `ADMIN` | Export ClickHouse logs into Snappy-compressed Apache Parquet |
-| `/v1/integrity/blocks` | `GET` | `ADMIN` or `USER` | List batch integrity blocks (all sources) |
-| `/v1/integrity/verify/{blockId}` | `POST` | `ADMIN` or `USER` | Recompute one block's Merkle root from ClickHouse and compare |
-| `/v1/integrity/verify-all` | `POST` | `ADMIN` or `USER` | Verify the newest 100,000 blocks |
 | `/v1/admin/sources/{sourceId}/replay` | `POST` | `ADMIN` | Trigger asynchronous historical replay & backfill from raw events |
 | `/v1/admin/sources/{sourceId}/replay/status` | `GET` | `ADMIN` | Check real-time progress and status of source replay job |
 | `/v1/admin/sources/{sourceId}/replay` | `DELETE` | `ADMIN` | Request cancellation of currently running replay job |
@@ -374,48 +371,6 @@ Exports log dataset chunks as Snappy-compressed binary Apache Parquet files.
 
 * **Query Parameters**: `table`, `vendorId`, `sourceId`, `from`, `to`, `limit`
 * **Response Headers**: `Content-Type: application/vnd.apache.parquet`
-
----
-
-### 3.6 Forensic Integrity & Audit
-
-All three endpoints need `ADMIN` or `USER` (class-level `@PreAuthorize` on `IntegrityController`), with no filter by source. How verification works and its known problems: [`INTEGRITY_LEDGER.md`](INTEGRITY_LEDGER.md).
-
-#### `GET /v1/integrity/blocks`
-Lists the newest `limit` blocks (default 50, no upper bound), newest first. `sourceId` filters by source; `search` matches `block_id`, `source_id`, `first_event_id` or `last_event_id` exactly and wins over `sourceId`.
-
-#### `POST /v1/integrity/verify/{blockId}`
-Re-verifies a single integrity block against ClickHouse and returns full deterministic traceability data.
-
-* **Response (200 OK)**:
-  ```json
-  {
-    "blockId": 12,
-    "sourceId": "src_fw_1",
-    "firstEventId": "evt_001",
-    "lastEventId": "evt_050",
-    "databaseTable": "ulpf_raw.raw_events",
-    "status": "VALID",
-    "storedMerkleRoot": "abc123def...",
-    "computedMerkleRoot": "abc123def...",
-    "eventCount": 50,
-    "isTampered": false,
-    "message": "Cryptographic Merkle Proof verified successfully! Log payloads match 100%."
-  }
-  ```
-
-#### `POST /v1/integrity/verify-all`
-Verifies the newest 100,000 blocks, in a `parallelStream()`. Older blocks are not checked. A block whose events are not found (`NO_DATA`) counts as tampered.
-
-* **Response (200 OK)**:
-  ```json
-  {
-    "totalBlocksChecked": 134,
-    "validCount": 134,
-    "tamperedCount": 0,
-    "tamperedBlocks": []
-  }
-  ```
 
 ---
 

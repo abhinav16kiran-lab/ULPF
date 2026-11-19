@@ -225,6 +225,7 @@ The knee fell from 400 to 300.
   - Every number in this file depends on how many integrity blocks the database holds. The old Podman volumes gained blocks with every run, so later runs ran slower. This is why the A/B session ran lower than the noise band session. It is also a bias in the A/B cost test: B ran later than A on average, on a larger ledger, so the lower P1 at 500/s for B can come from this alone.
   - **From now on, start each comparison on fresh volumes, or record the number of blocks** (`SELECT count(*) FROM batch_integrity_blocks`).
   - At the North Star rate a source gets about 23 blocks per second, about 2 million per day. In production, this query alone would make ingestion slower every day. The fix is item 0 of the Phase 1 proposal in `docs/plans/2026-11-13-ingestion-throughput.md`.
+- **Update 2026-11-19:** the integrity ledger was removed (`docs/plans/2026-11-19-remove-integrity-ledger.md`). Builds after the removal write no blocks, so the block count no longer affects their runs. The numbers above stay as measured. Runs on builds that still have the ledger (up to `8412f87`) still depend on the block count.
 
 ## 2026-11-16: through nginx (`:3000`) against straight to the engine (`:8080`)
 

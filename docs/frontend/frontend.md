@@ -58,7 +58,6 @@ All application views utilize the tokens established in the team's official **Wa
 | `/admin` | `AdminDashboardPage.jsx` | `ADMIN` | Schema governance, AI mapping review & one-click ClickHouse activation |
 | `/admin/admins` | `AdminsPage.jsx` | Super-admin | Invite admins, reset passwords and revoke admins by single-use links; pending links |
 | `/notifications` | `NotificationsPage.jsx` | Authenticated | User notification feed and unread toggles (never contains an API key) |
-| `/integrity` | `IntegrityConsolePage.jsx` | `ADMIN`, `VENDOR`, `USER` | Integrity ledger console: list, search and verify blocks. The API allows only `ADMIN` and `USER`, so a `VENDOR` gets 403 errors here (see `docs/ARCH/INTEGRITY_LEDGER.md`) |
 | `/analytics` | `AnalyticsPage.jsx` | `ADMIN` | ClickHouse query builder (Builder Mode, Direct SQL, Lineage) |
 
 ---

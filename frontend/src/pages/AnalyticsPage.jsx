@@ -1582,12 +1582,6 @@ function AnalyticsPage() {
                             {execMetrics.durationMs}ms
                           </span>
                         </div>
-                        <div className="py-3 flex items-center justify-between">
-                          <span className="text-slate-500">Integrity Check:</span>
-                          <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-medium border border-emerald-200/60">
-                            VERIFIED (SHA-256)
-                          </span>
-                        </div>
                       </div>
                     )}
                   </div>

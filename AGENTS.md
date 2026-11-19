@@ -15,7 +15,7 @@ Humans: this is also a fair summary of how we work.
 
 ## 2. Project at a glance
 
-ULPF ingests logs from vendors (Syslog, CEF, LEEF, JSON), maps vendor fields onto a canonical schema, stores them in ClickHouse, and keeps a tamper-evident Merkle-tree audit ledger.
+ULPF ingests logs from vendors (Syslog, CEF, LEEF, JSON), maps vendor fields onto a canonical schema, and stores them in ClickHouse.
 
 | Part | Stack | Location |
 |---|---|---|
@@ -35,7 +35,6 @@ Ports: core engine `8080`, frontend `3000` (nginx), ClickHouse `8123` (HTTP) / `
 | `dataplane` | Event ingestion (`POST /v1/events`, `X-API-Key`), protocol autodetect (`format/`), schema-drift and ingestion-failure alerts, `AlertDispatcher` |
 | `mapping` | 4-layer field mapping (alias → TF-IDF → typo/Levenshtein → ONNX embeddings), confidence scoring, human feedback loop, dynamic ClickHouse table provisioning |
 | `replay` | Async historical replay/backfill from `ulpf_raw.raw_events` into per-source tables |
-| `integrity` | Merkle-tree hashing, chained blocks, bulk forensic audit |
 | `analytics` | ClickHouse query execution, table catalog, column discovery |
 | `common` | DB access (`common/db/`, incl. `ClickHouseIngestionRepository`), JWT filter, tracing (MDC), global exception handler |
 
@@ -44,7 +43,6 @@ Ports: core engine `8080`, frontend `3000` (nginx), ClickHouse `8123` (HTTP) / `
 ```
 vendor → POST /v1/events → autodetect format → in-memory queue → ClickHouse async micro-batch (raw)
                                                       └→ MappingTransformer → events_{vendor}_{source} (+ raw_unmapped overflow)
-                                                      └→ Merkle hashing in the raw flush → SQLite batch_integrity_blocks
 drift / failures → TableIngestionFailureNotificationService / SchemaDriftNotificationService → AlertDispatcher → in-app + signed vendor webhooks
 approved onboarding → replay worker backfills history through the same MappingTransformer
 ```
@@ -118,7 +116,7 @@ Performance: measured results, with their method and limits, are in `docs/perf/R
 
 ## 6. Documentation
 
-- `docs/ARCH/ARCHITECTURE.md` — system design; `MAPPING_ENGINE.md`, `INTEGRITY_LEDGER.md` (the Merkle ledger, written from the code), `API_SPECIFICATION.md`, `DISTRIBUTED_TRACING_ARCHITECTURE.md`, `SCALABILITY_AND_CLUSTER_GUIDE.md`
+- `docs/ARCH/ARCHITECTURE.md` — system design; `MAPPING_ENGINE.md`, `INTEGRITY_LEDGER.md` (removed feature, 2026-11-19: why it was removed, and how it worked), `API_SPECIFICATION.md`, `DISTRIBUTED_TRACING_ARCHITECTURE.md`, `SCALABILITY_AND_CLUSTER_GUIDE.md`
 - `docs/ARCH/FILE_GUIDE.md` — directory map (hand-written; may be stale, trust the filesystem)
 - `docs/db/` — SQLite/ClickHouse schemas, DB package guide
 - `docs/frontend/frontend.md` — frontend architecture
@@ -134,7 +132,7 @@ Write docs and plans in the STE-80 style ([`STE80.md`](STE80.md)). The style mus
 - Every main Java class has a Javadoc summary above the class declaration (what it is, how it fits). Keep it accurate when you change the class; write one for new classes.
 - Follow the style of the surrounding code (naming, comment density, idioms). Don't reformat unrelated code.
 - Keep changes scoped to the approved plan. Note unrelated problems you spot instead of fixing them in passing.
-- Security-sensitive areas (JWT filter, API-key handling, webhook SSRF checks and HMAC signing, Merkle integrity) get extra scrutiny and explicit tests for failure and abuse cases.
+- Security-sensitive areas (JWT filter, API-key handling, webhook SSRF checks and HMAC signing) get extra scrutiny and explicit tests for failure and abuse cases.
 - Large files are expensive to read: search first (`grep`), then read the relevant range rather than the whole file.
 - Commits/PRs: only when the user asks. Don't push or open PRs unprompted.
 

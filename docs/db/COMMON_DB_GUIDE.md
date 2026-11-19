@@ -251,7 +251,7 @@ POST /v1/events ──► enqueue(RawEventRecord) ──► [ ConcurrentLinkedQu
 ---
 
 #### Meters (backlog item 13)
-* `ulpf.clickhouse.flush.duration` (Timer) and `ulpf.clickhouse.batch.size` (DistributionSummary), tagged `stage=raw|canonical`, with explicit buckets. The raw flush time includes the wait for the ClickHouse insert and the Merkle integrity block.
+* `ulpf.clickhouse.flush.duration` (Timer) and `ulpf.clickhouse.batch.size` (DistributionSummary), tagged `stage=raw|canonical`, with explicit buckets. The flush time includes the wait for the ClickHouse insert.
 * Counters tagged `table`, created on the first failure:
   * `ulpf.clickhouse.insert.errors`: failed insert statements;
   * `ulpf.records.reenqueued`: raw rows put back on the queue;
