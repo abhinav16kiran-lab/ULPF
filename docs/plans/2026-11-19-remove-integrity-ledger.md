@@ -1,7 +1,7 @@
 # Plan: Remove the integrity ledger
 
 - **Date:** 2026-11-19
-- **Status:** In progress
+- **Status:** Done
 - **Approved by / on:** team lead, 2026-11-19 (new branch; commit the docs first; drop the old table by hand; measure the gain after the removal, as the first step of Phase 1)
 - **File name:** `docs/plans/2026-11-19-remove-integrity-ledger.md`
 
@@ -175,7 +175,7 @@ Prerequisite: the open questions in section 7 are answered.
 - [x] 4. Make the frontend changes. Run `npm test` and `npm run build`. 30 tests, 0 failures. The build passes.
 - [x] 5. Update the docs. Run the `grep` check. Only the expected matches are left (section 4).
 - [x] 6. Run the stack check. Drop the old table on the team lead's volumes. Done on 2026-11-19 (section 8).
-- [ ] 7. Show the result and the diff to the team lead. Commit and push only when asked.
+- [x] 7. Show the result and the diff to the team lead. Commit and push only when asked. The team lead checked the result and asked for the commit, the push and the PR (2026-11-19). The 50 test rows were removed from ClickHouse afterwards.
 
 ## 7. Risks and open questions
 
